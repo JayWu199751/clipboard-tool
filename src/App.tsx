@@ -138,9 +138,11 @@ function App() {
     window.clipboardAPI.onPanelKey((action) => {
       const list = entriesRef.current;
       if (action === 'up') {
-        setSelectedIndex((i) => (list.length === 0 ? 0 : (i - 1 + list.length) % list.length));
+        // 在第一个时按上键不跳转，保持在第一个
+        setSelectedIndex((i) => Math.max(0, i - 1));
       } else if (action === 'down') {
-        setSelectedIndex((i) => (list.length === 0 ? 0 : (i + 1) % list.length));
+        // 在最后一个时按下键不跳转，保持在最后一个
+        setSelectedIndex((i) => Math.min(Math.max(list.length - 1, 0), i + 1));
       } else if (action === 'enter') {
         const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
         if (item) void window.clipboardAPI.copy(item.id);
@@ -316,9 +318,6 @@ function App() {
                 )}
                 <div className="item-meta">
                   <span>{formatTime(entry.createdAt)}</span>
-                  {entry.type === 'text' && (
-                    <span className="item-snippet">{entry.text?.replace(/\s+/g, ' ').slice(0, 60)}</span>
-                  )}
                 </div>
               </div>
               <div className="item-actions">
@@ -384,6 +383,8 @@ function App() {
 }
 
 export default App;
+
+
 
 
 

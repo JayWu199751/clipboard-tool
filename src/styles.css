@@ -1,6 +1,6 @@
 :root {
   --bg: #f4f5f7;
-  --panel: rgba(255, 255, 255, 0.96);
+  --panel: rgba(255, 255, 255, 0.95); /* 透明度改为95%(原0.9->0.95) */
   --border: rgba(0, 0, 0, 0.1);
   --text: #1f2328;
   --text-secondary: #656d76;
@@ -17,7 +17,7 @@
 
 :root[data-theme='dark'] {
   --bg: #14161b;
-  --panel: rgba(28, 30, 36, 0.97);
+  --panel: rgba(28, 30, 36, 0.95); /* 透明度改为95%(原0.9->0.95) */
   --border: rgba(255, 255, 255, 0.1);
   --text: #e6e8eb;
   --text-secondary: #9aa0a8;
@@ -84,7 +84,6 @@ body {
   align-items: center;
   gap: 7px;
 }
-
 
 .brand-title {
   font-size: 13px;
@@ -277,14 +276,6 @@ body {
   color: var(--text-secondary);
 }
 
-.item-snippet {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .item-actions {
   display: flex;
   align-items: flex-start;
@@ -371,7 +362,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 
 
 /* ---------- tooltip ---------- */
@@ -483,7 +473,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.45); /* 增加10%不透明度(原0.35->0.45) */
   border-radius: 12px;
 }
 
@@ -563,3 +553,6 @@ body {
   border-color: var(--accent-border);
   color: var(--accent);
 }
+
+
+
