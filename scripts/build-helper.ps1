@@ -10,8 +10,9 @@ if (-not (Test-Path $csc)) {
 }
 
 $jobs = @(
-  @{ Src = 'elevated-helper.cs'; Out = 'elevated-helper.exe' },
-  @{ Src = 'click-watcher.cs';   Out = 'click-watcher.exe' }
+  @{ Src = 'elevated-helper.cs'; Out = 'elevated-helper.exe'; Target = 'winexe'; Refs = @() },
+  @{ Src = 'click-watcher.cs';   Out = 'click-watcher.exe';   Target = 'winexe'; Refs = @() },
+  @{ Src = 'app-icon-helper.cs'; Out = 'app-icon-helper.exe'; Target = 'exe';    Refs = @('System.Drawing.dll') }
 )
 
 foreach ($job in $jobs) {
@@ -21,10 +22,12 @@ foreach ($job in $jobs) {
     Write-Warning "$($job.Src) not found; skipping."
     continue
   }
-  & $csc /nologo /optimize+ /target:winexe /out:$out $src
+  $args = @('/nologo', '/optimize+', "/target:$($job.Target)", "/out:$out", $src)
+  foreach ($r in $job.Refs) { $args += "/reference:$r" }
+  & $csc @args
   if ($LASTEXITCODE -ne 0) {
     Write-Error "Build $($job.Src) failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE
   }
-  Write-Host "Built $out"
+  Write-Host "Built $out ($($job.Target))"
 }

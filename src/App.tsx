@@ -305,8 +305,14 @@ function App() {
               onClick={() => setSelectedIndex(i)}
               onDoubleClick={() => handleCopy(entry.id)}
             >
-              <div className="item-icon">
-                {entry.type === 'image' ? <ImageIcon /> : <span className="text-badge">T</span>}
+              <div className="item-icon" title={entry.sourceApp ? `${entry.sourceApp.appName} — ${entry.sourceApp.windowTitle || entry.sourceApp.exePath}` : undefined}>
+                {entry.sourceApp?.iconDataUrl ? (
+                  <img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} className="source-app-icon" draggable={false} />
+                ) : entry.type === 'image' ? (
+                  <ImageIcon />
+                ) : (
+                  <span className="text-badge">T</span>
+                )}
               </div>
               <div className="item-body">
                 {entry.type === 'text' ? (

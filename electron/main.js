@@ -42,6 +42,52 @@ function imagesDir() {
   return dir;
 }
 
+// 图标缓存：exePath -> dataUrl，避免重复提取
+const iconCache = new Map();
+
+// 获取 app-icon-helper.exe 路径
+function appIconHelperPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'resources', 'app-icon-helper.exe');
+  }
+  return path.join(app.getAppPath(), 'resources', 'app-icon-helper.exe');
+}
+
+// 异步获取前台应用信息（方案A：轮询时抓取）
+async function getForegroundAppInfo() {
+  const helper = appIconHelperPath();
+  if (!fs.existsSync(helper)) return null;
+  try {
+    const stdout = await new Promise((resolve, reject) => {
+      execFile(helper, { timeout: 1500, windowsHide: true }, (err, stdout, stderr) => {
+        if (err) return reject(err);
+        resolve(stdout);
+      });
+    });
+    // helper 输出单行JSON，可能带换行，取最后一行非空
+    const lines = stdout.trim().split('\n').map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) return null;
+    const info = JSON.parse(lines[lines.length - 1]);
+    if (info.error) return null;
+    let iconDataUrl = null;
+    if (info.iconBase64) {
+      iconDataUrl = `data:image/png;base64,${info.iconBase64}`;
+      if (info.exePath) iconCache.set(info.exePath, iconDataUrl);
+    } else if (info.exePath && iconCache.has(info.exePath)) {
+      iconDataUrl = iconCache.get(info.exePath);
+    }
+    return {
+      exePath: info.exePath || '',
+      appName: info.appName || '',
+      windowTitle: info.windowTitle || '',
+      iconDataUrl,
+    };
+  } catch (e) {
+    // 超时或解析失败，静默降级为无来源
+    return null;
+  }
+}
+
 function historyFile() {
   return path.join(app.getPath('userData'), 'clipboard-history.json');
 }
@@ -51,6 +97,8 @@ function sha1(buf) {
 }
 
 function toRendererEntry(entry) {
+  // 来源应用信息透传给渲染进程（若无则为null，UI会fallback）
+  const sourceApp = entry.sourceApp || null;
   if (entry.type === 'image') {
     let dataUrl = '';
     try {
@@ -59,15 +107,15 @@ function toRendererEntry(entry) {
       }
     } catch (_) { /* ignore */ }
     if (!dataUrl) return null;
-    return { id: entry.id, type: 'image', dataUrl, createdAt: entry.createdAt };
+    return { id: entry.id, type: 'image', dataUrl, createdAt: entry.createdAt, sourceApp };
   }
-  return { id: entry.id, type: 'text', text: entry.text ?? '', createdAt: entry.createdAt };
+  return { id: entry.id, type: 'text', text: entry.text ?? '', createdAt: entry.createdAt, sourceApp };
 }
 
 function persist() {
   try {
-    const data = history.map(({ id, type, text, imagePath, createdAt }) => ({
-      id, type, text, imagePath, createdAt
+    const data = history.map(({ id, type, text, imagePath, createdAt, sourceApp }) => ({
+      id, type, text, imagePath, createdAt, sourceApp
     }));
     fs.writeFileSync(historyFile(), JSON.stringify(data));
   } catch (err) {
@@ -88,6 +136,14 @@ function loadHistory() {
     return e.type === 'text';
   });
   history = history.slice(0, MAX_HISTORY);
+  // 预热图标缓存：从历史中已有的 sourceApp 恢复，避免重复提取
+  try {
+    for (const e of history) {
+      if (e.sourceApp && e.sourceApp.exePath && e.sourceApp.iconDataUrl) {
+        iconCache.set(e.sourceApp.exePath, e.sourceApp.iconDataUrl);
+      }
+    }
+  } catch (_) { /* ignore */ }
 }
 
 // Align dedupe baselines with the current clipboard content, so the first
@@ -122,16 +178,16 @@ function broadcast() {
   }
 }
 
-function addTextEntry(text) {
+function addTextEntry(text, sourceApp) {
   if (!text) return;
   if (history[0] && history[0].type === 'text' && history[0].text === text) return;
-  history.unshift({ id: crypto.randomUUID(), type: 'text', text, createdAt: Date.now() });
+  history.unshift({ id: crypto.randomUUID(), type: 'text', text, createdAt: Date.now(), sourceApp: sourceApp || null });
   trimHistory();
   persist();
   broadcast();
 }
 
-function addImageEntry(image) {
+function addImageEntry(image, sourceApp) {
   const png = image.toPNG();
   if (!png || png.length === 0) return;
   const hash = sha1(png);
@@ -149,26 +205,40 @@ function addImageEntry(image) {
     console.error('Failed to save clipboard image:', err);
     return;
   }
-  history.unshift({ id, type: 'image', imagePath, createdAt: Date.now() });
+  history.unshift({ id, type: 'image', imagePath, createdAt: Date.now(), sourceApp: sourceApp || null });
   lastImageHash = hash;
   trimHistory();
   persist();
   broadcast();
 }
 
-function pollClipboard() {
-  const image = clipboard.readImage();
-  if (!image.isEmpty()) {
-    const png = image.toPNG();
-    const hash = png && png.length ? sha1(png) : '';
-    if (hash && hash !== lastImageHash) addImageEntry(image);
-    lastText = clipboard.readText() || '';
-    return;
+let isPolling = false; // 防止异步重叠
+async function pollClipboard() {
+  if (isPolling) return;
+  isPolling = true;
+  try {
+    const image = clipboard.readImage();
+    if (!image.isEmpty()) {
+      const png = image.toPNG();
+      const hash = png && png.length ? sha1(png) : '';
+      if (hash && hash !== lastImageHash) {
+        // 轮询方案A：检测到新图片时抓取前台应用作为来源
+        const sourceApp = await getForegroundAppInfo();
+        addImageEntry(image, sourceApp);
+      }
+      lastText = clipboard.readText() || '';
+      return;
+    }
+    const text = clipboard.readText();
+    if (text && text !== lastText) {
+      const sourceApp = await getForegroundAppInfo();
+      addTextEntry(text, sourceApp);
+    }
+    lastText = text;
+    lastImageHash = '';
+  } finally {
+    isPolling = false;
   }
-  const text = clipboard.readText();
-  if (text && text !== lastText) addTextEntry(text);
-  lastText = text;
-  lastImageHash = '';
 }
 
 function copyEntry(id) {
