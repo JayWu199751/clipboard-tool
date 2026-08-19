@@ -1,0 +1,71 @@
+{
+  "name": "clipboard-tool",
+  "productName": "ClipboardTool",
+  "version": "1.0.0",
+  "description": "Windows 剪贴板历史工具：文本/图片复制、亮暗主题、Ctrl+Shift+V 呼出面板",
+  "main": "electron/main.js",
+  "author": "clipboard-tool",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c cyan,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "build": "npm run build:helper && vite build",
+    "build:helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-helper.ps1",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win",
+    "pack": "npm run build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.clipboardtool.app",
+    "productName": "ClipboardTool",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "wait-on": "^9.1.0"
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.0": true
+  }
+}
+
+

@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+build/
+*.log
+
+# 开发辅助截图（正式截图在 docs/screenshots/）
+tooltip-shots/
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.local
