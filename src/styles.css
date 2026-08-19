@@ -1,6 +1,6 @@
 :root {
   --bg: #f4f5f7;
-  --panel: rgba(255, 255, 255, 0.92);
+  --panel: rgba(255, 255, 255, 0.96);
   --border: rgba(0, 0, 0, 0.1);
   --text: #1f2328;
   --text-secondary: #656d76;
@@ -17,7 +17,7 @@
 
 :root[data-theme='dark'] {
   --bg: #14161b;
-  --panel: rgba(28, 30, 36, 0.94);
+  --panel: rgba(28, 30, 36, 0.97);
   --border: rgba(255, 255, 255, 0.1);
   --text: #e6e8eb;
   --text-secondary: #9aa0a8;
