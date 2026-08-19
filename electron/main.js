@@ -339,6 +339,14 @@ function updateTrayIcon() {
   if (!icon.isEmpty()) tray.setImage(icon);
 }
 
+// 窗口图标跟随系统主题切换（与托盘图标一致：深色主题用白色，浅色用黑色）
+function updateWindowIcon() {
+  if (!win || win.isDestroyed()) return;
+  const name = nativeTheme.shouldUseDarkColors ? 'tray-icon-light.png' : 'tray-icon.png';
+  const icon = nativeImage.createFromPath(trayIconPath(name));
+  if (!icon.isEmpty()) win.setIcon(icon);
+}
+
 function setOpenAtLogin(enabled) {
   if (app.isPackaged) {
     app.setLoginItemSettings({ openAtLogin: enabled });
@@ -478,7 +486,11 @@ function createTray() {
   tray = new Tray(nativeImage.createFromPath(iconPath));
   tray.setToolTip('剪贴板工具');
   updateTrayIcon();
-  nativeTheme.on('updated', updateTrayIcon);
+  updateWindowIcon();
+  nativeTheme.on('updated', () => {
+    updateTrayIcon();
+    updateWindowIcon();
+  });
   buildTrayMenu();
   tray.setContextMenu(trayMenu);
   tray.on('click', () => showPanel());
