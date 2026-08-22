@@ -168,13 +168,15 @@ function App() {
     });
   }, []);
 
-    // 更换快捷键：主进程进入捕获模式后显示覆盖层
+  // 更换快捷键：主进程进入捕获模式后显示覆盖层
+  useEffect(() => {
     window.clipboardAPI.onShortcutCaptureStart((info) => {
       setShortcutCapture({ current: info.current, status: null });
     });
     window.clipboardAPI.onShortcutCaptureEnd(() => {
       setShortcutCapture(null);
     });
+  }, []);
 
   // 更换快捷键捕获模式：窗口聚焦后在此监听键盘组合键
   useEffect(() => {
