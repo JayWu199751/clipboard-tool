@@ -2,7 +2,7 @@
 
 import type { ClipboardEntry } from './types';
 
-type PanelKeyAction = 'up' | 'down' | 'enter' | 'delete' | 'escape';
+type PanelKeyAction = 'up' | 'down' | 'enter' | 'delete' | 'escape' | 'pin';
 
 interface ShortcutTryResult {
   ok: boolean;
@@ -23,6 +23,7 @@ interface ClipboardAPI {
   onPanelShown(callback: () => void): void;
   copy(id: string): Promise<boolean>;
   remove(id: string): Promise<boolean>;
+  pin(id: string): Promise<boolean>;
   clear(): Promise<boolean>;
 
   getElevatedPaste(): Promise<ElevatedStatus>;

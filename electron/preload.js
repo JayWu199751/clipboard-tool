@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   },
   copy: (id) => ipcRenderer.invoke('clipboard:copy', id),
   remove: (id) => ipcRenderer.invoke('clipboard:remove', id),
+  pin: (id) => ipcRenderer.invoke('clipboard:pin', id),
   clear: () => ipcRenderer.invoke('clipboard:clear'),
 
   getElevatedPaste: () => ipcRenderer.invoke('clipboard:get-elevated-paste'),

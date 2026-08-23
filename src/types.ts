@@ -13,4 +13,6 @@ export interface ClipboardEntry {
   dataUrl?: string;
   createdAt: number;
   sourceApp?: SourceApp | null; // 来源应用，旧数据可能为 null
+  pinned: boolean; // 是否置顶
+  pinnedAt: number; // 置顶时间戳（毫秒），未置顶时为 0
 }

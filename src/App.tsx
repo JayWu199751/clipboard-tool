@@ -84,6 +84,15 @@ function CopyIcon() {
   );
 }
 
+function PinIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" x2="12" y1="17" y2="22" />
+      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+    </svg>
+  );
+}
+
 function ImageIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -149,6 +158,9 @@ function App() {
       } else if (action === 'delete') {
         const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
         if (item) void window.clipboardAPI.remove(item.id);
+      } else if (action === 'pin') {
+        const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+        if (item) void window.clipboardAPI.pin(item.id);
       } else if (action === 'escape') {
         // 捕获快捷键时 Esc 由覆盖层处理，这里忽略
         if (!shortcutCaptureRef.current) void window.clipboardAPI.hide();
@@ -233,6 +245,10 @@ function App() {
 
   const handleRemove = useCallback((id: string) => {
     void window.clipboardAPI.remove(id);
+  }, []);
+
+  const handlePin = useCallback((id: string) => {
+    void window.clipboardAPI.pin(id);
   }, []);
 
   const handleClear = useCallback(() => {
@@ -329,6 +345,9 @@ function App() {
                 </div>
               </div>
               <div className="item-actions">
+                <button type="button" className="icon-btn small" data-tip={entry.pinned ? '取消置顶' : '置顶'} onClick={(e) => { e.stopPropagation(); handlePin(entry.id); }}>
+                  <PinIcon filled={entry.pinned} />
+                </button>
                 <button type="button" className="icon-btn small" data-tip="复制并粘贴" onClick={(e) => { e.stopPropagation(); handleCopy(entry.id); }}>
                   <CopyIcon />
                 </button>
@@ -342,7 +361,7 @@ function App() {
       </div>
 
       <footer className="footer">
-        <span className="hint">↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Esc 关闭</span>
+        <span className="hint">↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · Esc 关闭</span>
         <div className="footer-controls">
           <label
             className="auto-paste"

@@ -107,15 +107,15 @@ function toRendererEntry(entry) {
       }
     } catch (_) { /* ignore */ }
     if (!dataUrl) return null;
-    return { id: entry.id, type: 'image', dataUrl, createdAt: entry.createdAt, sourceApp };
+    return { id: entry.id, type: 'image', dataUrl, createdAt: entry.createdAt, sourceApp, pinned: !!entry.pinned, pinnedAt: entry.pinnedAt || 0 };
   }
-  return { id: entry.id, type: 'text', text: entry.text ?? '', createdAt: entry.createdAt, sourceApp };
+  return { id: entry.id, type: 'text', text: entry.text ?? '', createdAt: entry.createdAt, sourceApp, pinned: !!entry.pinned, pinnedAt: entry.pinnedAt || 0 };
 }
 
 function persist() {
   try {
-    const data = history.map(({ id, type, text, imagePath, createdAt, sourceApp }) => ({
-      id, type, text, imagePath, createdAt, sourceApp
+    const data = history.map(({ id, type, text, imagePath, createdAt, sourceApp, pinned, pinnedAt }) => ({
+      id, type, text, imagePath, createdAt, sourceApp, pinned: !!pinned, pinnedAt: pinnedAt || 0
     }));
     fs.writeFileSync(historyFile(), JSON.stringify(data));
   } catch (err) {
@@ -135,7 +135,13 @@ function loadHistory() {
     if (e.type === 'image') return !!e.imagePath && fs.existsSync(e.imagePath);
     return e.type === 'text';
   });
-  history = history.slice(0, MAX_HISTORY);
+  // 归一化置顶标记（旧版本持久化数据可能没有这两个字段）
+  for (const e of history) {
+    e.pinned = !!e.pinned;
+    e.pinnedAt = e.pinnedAt || 0;
+  }
+  sortHistory();
+  trimHistory();
   // 预热图标缓存：从历史中已有的 sourceApp 恢复，避免重复提取
   try {
     for (const e of history) {
@@ -162,9 +168,32 @@ function syncBaseline() {
 
 // ---------- history operations ----------
 
+// 排序规则：置顶条目固定在最前（按置顶时间新→旧），之后按原数组顺序（即最近使用新→旧）。
+function sortHistory() {
+  const pinned = history.filter((e) => e.pinned).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+  const rest = history.filter((e) => !e.pinned);
+  history = pinned.concat(rest);
+}
+
+function insertNewEntry(entry) {
+  // 新条目插到置顶块之后、普通块最前
+  let pinnedCount = 0;
+  while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
+  history.splice(pinnedCount, 0, entry);
+}
+
 function trimHistory() {
   if (history.length <= MAX_HISTORY) return;
-  const removed = history.splice(MAX_HISTORY);
+  const removed = [];
+  // 置顶条目优先保留：先裁掉尾部未置顶的条目；全部置顶时才裁掉最旧的置顶条目
+  while (history.length > MAX_HISTORY) {
+    let idx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (!history[i].pinned) { idx = i; break; }
+    }
+    if (idx === -1) idx = history.length - 1;
+    removed.push(...history.splice(idx, 1));
+  }
   for (const entry of removed) {
     if (entry.type === 'image' && entry.imagePath) {
       try { fs.unlinkSync(entry.imagePath); } catch (_) { /* ignore */ }
@@ -181,7 +210,7 @@ function broadcast() {
 function addTextEntry(text, sourceApp) {
   if (!text) return;
   if (history[0] && history[0].type === 'text' && history[0].text === text) return;
-  history.unshift({ id: crypto.randomUUID(), type: 'text', text, createdAt: Date.now(), sourceApp: sourceApp || null });
+  insertNewEntry({ id: crypto.randomUUID(), type: 'text', text, createdAt: Date.now(), sourceApp: sourceApp || null, pinned: false, pinnedAt: 0 });
   trimHistory();
   persist();
   broadcast();
@@ -205,7 +234,7 @@ function addImageEntry(image, sourceApp) {
     console.error('Failed to save clipboard image:', err);
     return;
   }
-  history.unshift({ id, type: 'image', imagePath, createdAt: Date.now(), sourceApp: sourceApp || null });
+  insertNewEntry({ id, type: 'image', imagePath, createdAt: Date.now(), sourceApp: sourceApp || null, pinned: false, pinnedAt: 0 });
   lastImageHash = hash;
   trimHistory();
   persist();
@@ -253,7 +282,16 @@ function copyEntry(id) {
     return false;
   }
   history.splice(idx, 1);
-  history.unshift(entry);
+  if (entry.pinned) {
+    // 置顶条目复制后仍置顶，并刷新置顶时间，排到置顶块最前
+    entry.pinnedAt = Date.now();
+    history.unshift(entry);
+  } else {
+    // 普通条目复制后插到置顶块之后、普通块最前
+    let pinnedCount = 0;
+    while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
+    history.splice(pinnedCount, 0, entry);
+  }
   persist();
   broadcast();
   return true;
@@ -687,6 +725,7 @@ const NAV_SHORTCUTS = [
   ['Enter', 'enter'],
   ['Esc', 'escape'],
   ['Delete', 'delete'],
+  ['Z', 'pin'],
 ];
 
 function registerNavShortcuts() {
@@ -798,6 +837,26 @@ function registerIpc() {
     const [removed] = history.splice(idx, 1);
     if (removed.type === 'image' && removed.imagePath) {
       try { fs.unlinkSync(removed.imagePath); } catch (_) { /* ignore */ }
+    }
+    persist();
+    broadcast();
+    return true;
+  });
+  ipcMain.handle('clipboard:pin', (_e, id) => {
+    const idx = history.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    const [entry] = history.splice(idx, 1);
+    if (entry.pinned) {
+      // 取消置顶：回到普通块最前
+      entry.pinned = false;
+      let pinnedCount = 0;
+      while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
+      history.splice(pinnedCount, 0, entry);
+    } else {
+      // 置顶：标记并移动到置顶块最前
+      entry.pinned = true;
+      entry.pinnedAt = Date.now();
+      history.unshift(entry);
     }
     persist();
     broadcast();
