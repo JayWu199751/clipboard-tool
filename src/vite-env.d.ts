@@ -9,13 +9,6 @@ interface ShortcutTryResult {
   formatted: string;
 }
 
-interface ElevatedStatus {
-  enabled: boolean;
-  running: boolean;
-  canceled?: boolean;
-  waiting?: boolean;
-}
-
 interface ClipboardAPI {
   getHistory(): Promise<ClipboardEntry[]>;
   onUpdated(callback: (entries: ClipboardEntry[]) => void): void;
@@ -26,9 +19,6 @@ interface ClipboardAPI {
   pin(id: string): Promise<boolean>;
   clear(): Promise<boolean>;
 
-  getElevatedPaste(): Promise<ElevatedStatus>;
-  setElevatedPaste(value: boolean): Promise<ElevatedStatus>;
-  onElevatedStatus(callback: (status: ElevatedStatus) => void): void;
   onShortcutCaptureStart(callback: (info: { current: string }) => void): void;
   onShortcutCaptureEnd(callback: () => void): void;
   tryShortcut(accel: string): Promise<ShortcutTryResult>;
@@ -43,7 +33,6 @@ declare global {
 }
 
 export {};
-
 
 
 

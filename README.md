@@ -17,11 +17,9 @@
 - 🖱️ 系统托盘：左键/双击显示面板；右键菜单支持**开机启动**（✅/❌ 显示状态）、**更换全局快捷键**（实时显示当前组合）、退出
 - 🔄 **可自定义全局快捷键**：托盘菜单点击“更换快捷键”，在面板内直接按下新组合即可生效并持久化
 - 🚪 **点击面板外任意位置自动关闭面板**（全局低级鼠标钩子实现）
-- 🔐 **提权粘贴**：以管理员权限运行小助手，可自动粘贴进管理员权限的程序（首次启用需 UAC 授权）
+- 🔐 **常驻管理员权限**：整个应用以管理员权限运行，管理员窗口里的面板快捷键与自动粘贴同样生效；安装的快捷方式经计划任务静默拉起，不弹 UAC
 
 ![暗色主题](docs/screenshots/dark-theme.png)
-
-![提权粘贴提示](docs/screenshots/elevated-paste.png)
 
 ## 🛠️ 技术栈
 
@@ -48,7 +46,8 @@ clipboard-tool/
 │   ├── styles.css       # 亮/暗主题样式（CSS 变量）
 │   ├── main.tsx
 │   └── types.ts
-├── resources/           # 应用图标、托盘图标、提权助手/鼠标钩子源码
+├── resources/           # 应用图标、托盘图标、鼠标钩子/静默启动器源码
+├── installer.nsh       # NSIS 自定义脚本（快捷方式→静默启动器、卸载清理计划任务）
 ├── scripts/
 │   └── build-helper.ps1 # 构建辅助程序
 ├── docs/
@@ -95,7 +94,6 @@ npm run dist
 | 点击面板外 | 关闭面板（全局鼠标钩子检测） |
 | 鼠标悬停 / 双击 | 选中 / 复制并粘贴 |
 | 右上角按钮 | 循环切换主题（亮色 → 暗色 → 跟随系统）、清空历史 |
-| 底部开关 | 启用 / 禁用“提权粘贴”（首次启用会弹 UAC 授权） |
 | 托盘图标 | 左键/双击显示面板；右键菜单：开机启动、**更换快捷键**、退出 |
 | 托盘 → 更换快捷键 | 面板内弹出设置卡片，直接按下新组合键（如 `Ctrl + Alt + X`）即生效 |
 
@@ -105,11 +103,12 @@ npm run dist
 
 - 历史索引（含置顶标记）：`%APPDATA%\ClipboardTool\clipboard-history.json`
 - 图片文件：`%APPDATA%\ClipboardTool\images\*.png`
-- 设置（主题、提权粘贴、自定义快捷键）：`%APPDATA%\ClipboardTool\settings.json`
+- 设置（主题、自定义快捷键、开机启动意图）：`%APPDATA%\ClipboardTool\settings.json`
 
 ## 📌 注意事项
 
-- `Enter` 复制后总是自动粘贴：默认通过 PowerShell `SendKeys` 模拟 `Ctrl+V`。若目标程序以**管理员权限**运行，请打开面板底部的“提权粘贴”：它会启动一个以管理员权限运行的 `elevated-helper.exe`（首次弹 UAC），通过命名管道把粘贴指令交给它用 `SendInput` 发送，从而穿透权限隔离。
+- `Enter` 复制后总是自动粘贴：通过 PowerShell `SendKeys` 模拟 `Ctrl+V`。应用整体以**管理员权限**运行（`requestedExecutionLevel: requireAdministrator`），因此即使目标程序也是管理员权限，快捷键与粘贴同样生效，无需任何开关。
+- **无 UAC 打扰**：安装创建的桌面/开始菜单快捷方式指向 `task-launcher.exe`，经计划任务 `ClipboardToolElevated`（最高权限）静默拉起主程序，不弹 UAC；开机启动同样走该任务的 `onlogon` 触发器。唯一例外：直接双击 `ClipboardTool.exe` 本体会弹一次 UAC（保证永远提权）。
 - 若 `Ctrl+Shift+V` 或面板的 `↑/↓/Enter/Esc/Del/Z` 与其它软件的全局快捷键冲突，注册会失败并在控制台提示，此时按键会照常进入原程序。
 - 更换快捷键时，新组合必须包含 `Ctrl` / `Alt` / `Win` 之一作为修饰键；`Esc` 可随时取消。
 - 面板关闭时程序仍在后台运行（托盘图标常驻），用于持续监听剪贴板和响应全局快捷键。

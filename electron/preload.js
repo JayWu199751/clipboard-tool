@@ -20,12 +20,6 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   pin: (id) => ipcRenderer.invoke('clipboard:pin', id),
   clear: () => ipcRenderer.invoke('clipboard:clear'),
 
-  getElevatedPaste: () => ipcRenderer.invoke('clipboard:get-elevated-paste'),
-  setElevatedPaste: (value) => ipcRenderer.invoke('clipboard:set-elevated-paste', value),
-  onElevatedStatus: (callback) => {
-    ipcRenderer.removeAllListeners('elevated:status');
-    ipcRenderer.on('elevated:status', (_event, status) => callback(status));
-  },
   // 更换快捷键
   onShortcutCaptureStart: (callback) => {
     ipcRenderer.removeAllListeners('shortcut:capture-start');
@@ -39,7 +33,6 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   cancelShortcut: () => ipcRenderer.invoke('shortcut:cancel'),
     hide: () => ipcRenderer.invoke('window:hide'),
 });
-
 
 
 

@@ -107,8 +107,6 @@ function App() {
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [elevated, setElevated] = useState<{ enabled: boolean; running: boolean }>({ enabled: false, running: false });
-  const [notice, setNotice] = useState('');
   // 更换快捷键捕获状态（覆盖层）
   const [shortcutCapture, setShortcutCapture] = useState<{
     current: string;
@@ -116,7 +114,6 @@ function App() {
   } | null>(null);
   const shortcutCaptureRef = useRef(shortcutCapture);
   shortcutCaptureRef.current = shortcutCapture;
-  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
   // Refs keep the global-shortcut callback free of stale closures.
@@ -140,7 +137,6 @@ function App() {
 
   useEffect(() => {
     void window.clipboardAPI.getHistory().then(setEntries);
-    void window.clipboardAPI.getElevatedPaste().then(setElevated);
     window.clipboardAPI.onUpdated(setEntries);
 
     // 主进程在面板显示期间全局拦截 ↑/↓/Enter/Esc，这里只更新 UI / 触发复制。
@@ -167,11 +163,6 @@ function App() {
       }
     });
 
-    // UAC 响应慢时，助手连上后主进程会推送状态，自动勾选并提示。
-    window.clipboardAPI.onElevatedStatus((status) => {
-      setElevated(status);
-      showNotice('提权粘贴已启用（助手已连接）');
-    });
 
     // 每次呼出面板只重置选中项，不重新拉列表：
     // 历史由主进程 600ms 轮询实时推送，这里再 getHistory 会导致整列表重绘闪烁。
@@ -259,21 +250,6 @@ function App() {
     setTheme((t) => (t === 'light' ? 'dark' : t === 'dark' ? 'system' : 'light'));
   }, []);
 
-  const showNotice = useCallback((msg: string) => {
-    setNotice(msg);
-    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
-    noticeTimerRef.current = setTimeout(() => setNotice(''), 4000);
-  }, []);
-
-  const handleToggleElevated = useCallback(async () => {
-    const next = !elevated.enabled;
-    const res = await window.clipboardAPI.setElevatedPaste(next);
-    setElevated(res);
-    if (next && res.enabled) showNotice('提权粘贴已启用（助手已运行，可粘贴到管理员程序）');
-    else if (next && res.canceled) showNotice('提权助手启动失败：UAC 授权被取消');
-    else if (next && res.waiting) showNotice('等待 UAC 授权…同意后会自动启用');
-    else if (!next) showNotice('提权粘贴已关闭');
-  }, [elevated.enabled, showNotice]);
 
   return (
     <div className="app">
@@ -362,16 +338,7 @@ function App() {
 
       <footer className="footer">
         <span className="hint">↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · Esc 关闭</span>
-        <div className="footer-controls">
-          <label
-            className="auto-paste"
-            data-tip="以管理员权限运行助手，可粘贴进管理员程序（首次启用会弹 UAC 授权）" data-tip-multiline
-          >
-            <input type="checkbox" checked={elevated.enabled} onChange={handleToggleElevated} />
-            <span>提权粘贴</span>
-          </label>
-        </div>
-        {notice && <span className="notice">{notice}</span>}
+
       </footer>
 
       {shortcutCapture && (
@@ -410,10 +377,6 @@ function App() {
 }
 
 export default App;
-
-
-
-
 
 
 

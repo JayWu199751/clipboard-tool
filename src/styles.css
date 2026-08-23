@@ -349,34 +349,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.auto-paste {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.auto-paste input {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.footer-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.notice {
-  flex-basis: 100%;
-  color: var(--accent);
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 
 /* ---------- tooltip ---------- */
 
@@ -567,6 +539,5 @@ body {
   border-color: var(--accent-border);
   color: var(--accent);
 }
-
 
 

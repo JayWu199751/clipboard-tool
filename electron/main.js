@@ -6,7 +6,6 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
-const net = require('net');
 
 const MAX_HISTORY = 200;
 const POLL_INTERVAL = 600;
@@ -21,13 +20,10 @@ let panelVisible = false; // 面板是否处于呼出状态（离屏隐藏时不
 let history = [];
 let lastText = '';
 let lastImageHash = '';
-let settings = { autoPaste: true, elevatedPaste: false, helperToken: '', shortcut: 'Control+Shift+V' };
+let settings = { autoPaste: true, autoStart: false, shortcut: 'Control+Shift+V' };
 let isQuitting = false;
 let pollTimer = null;
 let pasteTimer = null;
-let helperSocket = null;
-let helperServer = null;
-let helperWaitTimer = null;
 let tray = null;
 let trayMenu = null;
 let clickWatcher = null;
@@ -306,12 +302,12 @@ function settingsFile() {
 function loadSettings() {
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-    settings = { ...settings, ...parsed };
+    // 只吸收已知键：旧版本遗留的 helperToken 等废弃字段不进入内存、不再写回
+    for (const key of ['autoPaste', 'autoStart', 'shortcut']) {
+      if (typeof parsed[key] !== 'undefined') settings[key] = parsed[key];
+    }
   } catch (_) { /* first run */ }
-  if (!settings.helperToken) {
-    settings.helperToken = crypto.randomBytes(16).toString('hex');
-    saveSettings();
-  }
+  if (typeof settings.autoStart !== 'boolean') settings.autoStart = false;
 }
 
 function saveSettings() {
@@ -322,114 +318,58 @@ function saveSettings() {
   }
 }
 
-// ---------- elevated paste helper ----------
-// 提权助手以管理员权限运行，通过命名管道接收粘贴指令，
-// 用 SendInput 发送 Ctrl+V，从而可以粘贴进管理员权限的目标程序。
+// ---------- 静默提权启动（计划任务） ----------
+// 应用清单 requireAdministrator：每次启动都是高完整性进程，
+// UIPI 不再拦截面板键（globalShortcut）与 SendKeys 粘贴，管理员目标窗口照常工作。
+// 正常入口（安装创建的快捷方式）经 task-launcher.exe + 计划任务 ClipboardToolElevated
+// （/rl highest）静默拉起：任务以管理员令牌直接创建进程，不弹 UAC。
+// 开机启动 = 该任务的 onlogon 触发器；开关重建任务（带/不带触发器，任务本体保留，
+// 供快捷方式静默拉起），用户意图持久化在 settings.autoStart。
 
-const HELPER_PIPE = '\\\\.\\pipe\\ClipboardToolElevatedHelper';
+const ELEVATED_TASK_NAME = 'ClipboardToolElevated';
 
-function helperExePath() {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'resources', 'elevated-helper.exe');
-  }
-  return path.join(app.getAppPath(), 'resources', 'elevated-helper.exe');
-}
-
-// 管道方向：主进程（普通权限）是服务端，提权助手（管理员权限）作为客户端连进来。
-// 高完整性进程连接低完整性进程的管道是被允许的，反向则会被拒绝。
-function startHelperPipeServer() {
-  helperServer = net.createServer((socket) => {
-    if (helperSocket && helperSocket !== socket) helperSocket.destroy();
-    helperSocket = socket;
-    console.log('提权助手已连接');
-    socket.on('close', () => {
-      if (helperSocket === socket) helperSocket = null;
-    });
-    socket.on('error', () => {});
-  });
-  helperServer.on('error', (err) => {
-    console.error('Helper pipe server error:', err.message);
-  });
-  helperServer.listen(HELPER_PIPE);
-}
-
-function helperRunning() {
-  return !!helperSocket && !helperSocket.destroyed;
-}
-
-function startHelperElevated() {
+// 用 PowerShell Register-ScheduledTask 注册/重建任务：
+// schtasks /create 强制要求 /sc 触发器，无法表达"仅作静默拉起通道（无触发器）"，
+// Register-ScheduledTask 支持无触发器注册；-Force 覆盖重建。
+// 本进程以管理员运行（requireAdministrator），注册不会弹 UAC。
+function psRegisterTask(withLogonTrigger) {
+  const action =
+    "$action = New-ScheduledTaskAction -Execute '" + process.execPath.replace(/'/g, "''") + "'; " +
+    "$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest; " +
+    "Register-ScheduledTask -TaskName '" + ELEVATED_TASK_NAME + "' -Action $action -Principal $principal" +
+    (withLogonTrigger ? " -Trigger (New-ScheduledTaskTrigger -AtLogOn)" : "") +
+    " -Force | Out-Null";
   return new Promise((resolve) => {
-    const exe = helperExePath();
-    if (!fs.existsSync(exe)) {
-      console.error('Elevated helper not found:', exe);
-      resolve({ started: false, canceled: false });
-      return;
-    }
-    const script =
-      "Start-Process -FilePath '" + exe.replace(/'/g, "''") +
-      "' -ArgumentList '--token','" + settings.helperToken +
-      "' -Verb RunAs -WindowStyle Hidden";
-    execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true }, (err) => {
-      if (err) {
-        // UAC 被取消或启动失败
-        console.error('Failed to start elevated helper:', err.message);
-        resolve({ started: false, canceled: true });
-        return;
-      }
-      // UAC 已确认，等待助手连上管道（用户可能点得慢，多等一会）
-      let tries = 0;
-      const poll = () => {
-        tries += 1;
-        if (helperRunning()) {
-          resolve({ started: true, canceled: false });
-          return;
-        }
-        if (tries >= 120) {
-          resolve({ started: false, canceled: false });
-          return;
-        }
-        setTimeout(poll, 500);
-      };
-      setTimeout(poll, 300);
-    });
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', action], { windowsHide: true }, (err) => resolve(err ? false : true));
   });
 }
 
-// 启动后一直没连上（例如 UAC 响应很慢）：后台继续等，连上后自动启用并通知界面。
-function waitForHelperThenEnable() {
-  if (helperWaitTimer) return;
-  let tries = 0;
-  helperWaitTimer = setInterval(() => {
-    tries += 1;
-    if (helperRunning()) {
-      clearInterval(helperWaitTimer);
-      helperWaitTimer = null;
-      settings.elevatedPaste = true;
-      saveSettings();
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('elevated:status', { enabled: true, running: true });
-      }
-      return;
-    }
-    if (tries >= 180) {
-      clearInterval(helperWaitTimer);
-      helperWaitTimer = null;
-    }
-  }, 1000);
+// 确保任务存在（无触发器版本，仅作静默拉起通道）；自身提权时调用。失败只记日志。
+async function ensureElevatedTask() {
+  if (isDev) return; // 开发模式跑 electron.exe，无提权清单，不需要任务
+  const ok = await psRegisterTask(false);
+  if (!ok) console.error('创建计划任务失败：快捷方式将退回直接启动（会弹 UAC）');
 }
 
-function sendHelperCommand(command) {
-  return new Promise((resolve, reject) => {
-    if (!helperRunning()) {
-      reject(new Error('elevated helper not connected'));
-      return;
-    }
-    helperSocket.write(`${command} ${settings.helperToken}\n`, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+// 开机启动开关：true = 任务带 onlogon 触发器；false = 重建为无触发器任务（静默拉起通道保留）
+async function setAutoStart(enabled) {
+  if (isDev) {
+    // 开发模式退回登录项方式
+    app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: [app.getAppPath()] });
+    settings.autoStart = enabled;
+    saveSettings();
+    buildTrayMenu();
+    if (tray) tray.setContextMenu(trayMenu);
+    return;
+  }
+  const ok = await psRegisterTask(enabled);
+  settings.autoStart = !!ok && enabled;
+  saveSettings();
+  buildTrayMenu();
+  if (tray) tray.setContextMenu(trayMenu);
+  console.log('开机启动状态:', settings.autoStart ? '✅' : '❌');
 }
+
 // ---------- system tray ----------
 
 function trayIconPath(name = 'tray-icon.png') {
@@ -453,21 +393,6 @@ function updateWindowIcon() {
   const name = nativeTheme.shouldUseDarkColors ? 'tray-icon-light.png' : 'tray-icon.png';
   const icon = nativeImage.createFromPath(trayIconPath(name));
   if (!icon.isEmpty()) win.setIcon(icon);
-}
-
-function setOpenAtLogin(enabled) {
-  if (app.isPackaged) {
-    app.setLoginItemSettings({ openAtLogin: enabled });
-  } else {
-    // 开发模式：开机启动 electron.exe 并带上项目目录参数
-    app.setLoginItemSettings({
-      openAtLogin: enabled,
-      path: process.execPath,
-      args: [app.getAppPath()],
-    });
-  }
-  buildTrayMenu();
-  if (tray) tray.setContextMenu(trayMenu);
 }
 
 // ---------- 全局快捷键 ----------
@@ -561,24 +486,16 @@ function cancelShortcutCapture() {
 
 
 function buildTrayMenu() {
-  // 开发模式用 `electron .` 启动，注册表里存的是绝对路径参数，
-  // 必须用相同的 path+args 去查，否则 openAtLogin 会一直是 false。
-  let openAtLogin = false;
-  if (app.isPackaged) {
-    openAtLogin = app.getLoginItemSettings().openAtLogin;
-  } else {
-    openAtLogin = app.getLoginItemSettings({ path: process.execPath, args: [app.getAppPath()] }).openAtLogin;
-  }
-  console.log('开机启动状态:', openAtLogin ? '✅' : '❌');
+  console.log('开机启动状态:', settings.autoStart ? '✅' : '❌');
   trayMenu = Menu.buildFromTemplate([
     { label: '显示剪贴板面板', click: () => showPanel() },
     { label: `更换快捷键(当前: ${formatShortcut(settings.shortcut)})`, click: () => startShortcutCapture() },
     { type: 'separator' },
     {
-      label: '开机启动 ' + (openAtLogin ? '✅' : '❌'),
+      label: '开机启动 ' + (settings.autoStart ? '✅' : '❌'),
       type: 'checkbox',
-      checked: openAtLogin,
-      click: (item) => setOpenAtLogin(item.checked),
+      checked: settings.autoStart,
+      click: (item) => { void setAutoStart(item.checked); },
     },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
@@ -779,7 +696,7 @@ function togglePanel() {
 // ---------- paste back to the previously focused app ----------
 
 function localPaste() {
-  // 普通粘贴：SendKeys 模拟 Ctrl+V（无法进入管理员权限程序）。
+  // SendKeys 模拟 Ctrl+V；应用整体提权运行，可穿透管理员目标窗口。
   const script =
     "Add-Type -AssemblyName System.Windows.Forms; " +
     "[System.Windows.Forms.SendKeys]::SendWait('^v')";
@@ -798,24 +715,8 @@ function schedulePaste() {
   pasteTimer = setTimeout(() => {
     pasteTimer = null;
     // 等面板隐藏、焦点回到原输入框后再粘贴。
-    if (settings.elevatedPaste) {
-      sendHelperCommand('paste')
-        .catch(() =>
-          startHelperElevated().then((res) => {
-            if (!res.started) {
-              console.error('提权助手不可用，回退到普通 SendKeys 粘贴');
-              localPaste();
-              return;
-            }
-            return sendHelperCommand('paste').catch((err) => {
-              console.error('提权粘贴失败:', err.message);
-              localPaste();
-            });
-          })
-        );
-    } else {
-      localPaste();
-    }
+    // 应用整体提权运行，SendKeys 可穿透管理员目标窗口。
+    localPaste();
   }, 180);
 }
 
@@ -874,36 +775,6 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('clipboard:get-elevated-paste', () => ({
-    enabled: settings.elevatedPaste,
-    running: helperRunning(),
-  }));
-  ipcMain.handle('clipboard:set-elevated-paste', async (_e, value) => {
-    if (value) {
-      if (helperRunning()) {
-        settings.elevatedPaste = true;
-        saveSettings();
-        return { enabled: true, running: true, canceled: false, waiting: false };
-      }
-      const res = await startHelperElevated();
-      if (res.started) {
-        settings.elevatedPaste = true;
-        saveSettings();
-        return { enabled: true, running: true, canceled: false, waiting: false };
-      }
-      if (res.canceled) {
-        settings.elevatedPaste = false;
-        saveSettings();
-        return { enabled: false, running: false, canceled: true, waiting: false };
-      }
-      // 启动后暂时没连上（UAC 响应慢）：后台继续等，连上后自动启用。
-      waitForHelperThenEnable();
-      return { enabled: false, running: false, canceled: false, waiting: true };
-    }
-    settings.elevatedPaste = false;
-    saveSettings();
-    return { enabled: false, running: helperRunning(), canceled: false, waiting: false };
-  });
   // 更换快捷键：渲染进程按下组合键后请求注册
   ipcMain.handle('shortcut:try', (_e, accel) => {
     if (typeof accel !== 'string' || !shortcutCapturing) {
@@ -950,13 +821,13 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
-    startHelperPipeServer();
     registerIpc();
     createWindow();
     createTray();
     startClickWatcher();
     loadHistory();
     loadSettings();
+    ensureElevatedTask();
     syncBaseline();
     broadcast();
 
@@ -970,11 +841,6 @@ if (!gotSingleInstanceLock) {
     clearInterval(pollTimer);
     clearTimeout(pasteTimer);
     globalShortcut.unregisterAll();
-    if (helperRunning()) {
-      helperSocket.write(`quit ${settings.helperToken}\n`, () => {
-        try { helperSocket.end(); } catch (_) { /* ignore */ }
-      });
-    }
   });
 
   app.on('will-quit', () => {
@@ -984,9 +850,6 @@ if (!gotSingleInstanceLock) {
       clickWatcher = null;
     }
     if (tray) { tray.destroy(); tray = null; }
-    if (helperServer) {
-      try { helperServer.close(); } catch (_) { /* ignore */ }
-    }
   });
 
   app.on('window-all-closed', () => {
@@ -994,15 +857,3 @@ if (!gotSingleInstanceLock) {
     // is only hidden, never really closed unless the app quits.
   });
 }
-
-
-
-
-
-
-
-
-
-
-
-
