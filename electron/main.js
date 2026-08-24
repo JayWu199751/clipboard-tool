@@ -11,7 +11,7 @@ const MAX_HISTORY = 200;
 const POLL_INTERVAL = 600;
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 560;
-const SHADOW_MARGIN = 20; // 透明边距，给 CSS 投影留空间
+const SHADOW_MARGIN = 20; // 已废弃：改不透明窗口 + 系统阴影后不再需要预留透明边距（保留常量避免误用）
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -565,11 +565,11 @@ function handleGlobalClick(x, y) {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: PANEL_WIDTH + SHADOW_MARGIN * 2,
-    height: PANEL_HEIGHT + SHADOW_MARGIN * 2,
+    width: PANEL_WIDTH,
+    height: PANEL_HEIGHT,
     show: false,
     frame: false,
-    transparent: true,
+    transparent: false, // 修复：透明窗口(WS_EX_LAYERED)下真实鼠标点击无法进入渲染进程；改不透明窗口后点击恢复
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -577,8 +577,8 @@ function createWindow() {
     skipTaskbar: true,
     focusable: false, // 不可激活：呼出面板时输入框焦点保持不变
     alwaysOnTop: true,
-    hasShadow: false,
-    roundedCorners: false, // 关闭系统原生阴影/圆角，避免透明圆角外出现阴影块
+    hasShadow: true, // 系统原生阴影（透明窗口时被迫关闭，不透明窗口可用）
+    roundedCorners: true, // Windows 11 系统圆角
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

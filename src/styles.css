@@ -41,11 +41,12 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: transparent;
   overflow: hidden;
 }
 
+/* 不透明窗口：窗口背景=面板色，与 DWM 圆角/阴影衔接 */
 body {
+  background: var(--panel);
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
@@ -55,12 +56,11 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: calc(100% - 40px);
-  margin: 20px;
+  height: 100%;
+  margin: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: var(--shadow);
   color: var(--text);
   overflow: hidden;
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -75,7 +75,6 @@ body {
   justify-content: space-between;
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
   flex-shrink: 0;
 }
 
@@ -116,6 +115,12 @@ body {
 .icon-btn:hover:not(:disabled) {
   background: var(--item-hover);
   color: var(--text);
+}
+
+.icon-btn:active:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  transform: scale(0.9); /* 点击即时反馈 */
 }
 
 .icon-btn:disabled {
