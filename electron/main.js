@@ -29,6 +29,8 @@ let trayMenu = null;
 let clickWatcher = null;
 let shortcutCapturing = false; // 是否正在等待用户按下新快捷键
 let shortcutOldAccel = null; // 捕获前的旧快捷键（取消时恢复）
+let searchActive = false; // 面板是否处于搜索模式（搜索框可输入）
+let searchComposing = false; // 搜索模式下中文输入法组合中：暂停面板导航键，全部让给输入框
 
 // ---------- persistence helpers ----------
 
@@ -446,6 +448,8 @@ function codeToKey(code) {
 function startShortcutCapture() {
   if (shortcutCapturing) return; // 已在捕获中
   if (!win || win.isDestroyed()) return;
+  // 若正处于搜索模式，先退回浏览模式，避免两个输入态叠加
+  if (searchActive) exitSearchMode();
   const oldAccel = settings.shortcut || DEFAULT_SHORTCUT;
   shortcutCapturing = true;
   shortcutOldAccel = oldAccel;
@@ -475,9 +479,10 @@ function cancelShortcutCapture() {
     try { globalShortcut.register(shortcutOldAccel, togglePanel); } catch (_) { /* ignore */ }
   }
   shortcutOldAccel = null;
-  // 恢复窗口不抢焦点
+  // 恢复窗口不抢焦点，把焦点还回原程序
   if (win && !win.isDestroyed()) {
     try { win.setFocusable(false); } catch (_) { /* ignore */ }
+    releasePanelFocus();
     win.webContents.send('shortcut:capture-end');
   }
   // 面板仍显示时恢复导航快捷键
@@ -635,20 +640,35 @@ function positionPanel() {
   if (cx !== nx || cy !== ny) win.setPosition(nx, ny);
 }
 
-// 面板显示期间，全局拦截 ↑/↓/Enter/Esc，只作用于剪贴板面板，不进入输入框。
+// 面板显示期间，全局拦截 ↑/↓/Enter/Esc/Space/Z/Del，只作用于剪贴板面板，不进入输入框。
+// 第三项 = 是否在搜索模式下依然拦截：搜索模式里 Space/Z/Del 让位给搜索输入框
+// （Space 需要在输入框内打出空格，Z/Del 需要用作文本编辑），↑↓/Enter/Esc 保持面板语义。
 const NAV_SHORTCUTS = [
-  ['Up', 'up'],
-  ['Down', 'down'],
-  ['Enter', 'enter'],
-  ['Esc', 'escape'],
-  ['Delete', 'delete'],
-  ['Z', 'pin'],
+  ['Up', 'up', true],
+  ['Down', 'down', true],
+  ['Enter', 'enter', true],
+  ['Esc', 'escape', true],
+  ['Delete', 'delete', false],
+  ['Z', 'pin', false],
+  ['Space', 'search', false],
 ];
 
 function registerNavShortcuts() {
-  for (const [accelerator, action] of NAV_SHORTCUTS) {
+  for (const [accelerator, action, enabledInSearch] of NAV_SHORTCUTS) {
+    // 搜索模式下被让位的键不注册；IME 组合期间所有导航键暂停，交给输入法
+    if ((!enabledInSearch && searchActive) || (searchActive && searchComposing)) continue;
     try {
-      const ok = globalShortcut.register(accelerator, () => sendPanelKey(action));
+      const ok = globalShortcut.register(accelerator, () => {
+        if (action === 'search') {
+          enterSearchMode();
+          return;
+        }
+        if (action === 'escape' && searchActive) {
+          exitSearchMode();
+          return;
+        }
+        sendPanelKey(action);
+      });
       if (!ok) console.error(`注册导航快捷键 ${accelerator} 失败（可能被其他程序占用）`);
     } catch (err) {
       console.error(`注册导航快捷键 ${accelerator} 失败:`, err.message);
@@ -668,10 +688,58 @@ function sendPanelKey(action) {
   }
 }
 
+// 把焦点还给原程序（仅当面板当前持有焦点时，避免影响其他前台窗口）
+function releasePanelFocus() {
+  if (win && !win.isDestroyed() && win.isFocused()) {
+    try { win.blur(); } catch (_) { /* ignore */ }
+  }
+}
+
+// 进入搜索模式：临时把面板窗口变为可聚焦并聚焦搜索输入框（支持正常输入/中文输入法），
+// 同时切换导航快捷键集合（Space/Z/Del 让位给输入框）。
+function enterSearchMode() {
+  if (!win || win.isDestroyed() || !panelVisible || searchActive) return;
+  searchActive = true;
+  unregisterNavShortcuts();
+  registerNavShortcuts();
+  try { win.setFocusable(true); } catch (_) { /* ignore */ }
+  win.focus();
+  if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-enter');
+}
+
+// 退出搜索模式：归还焦点给原程序，恢复浏览模式的导航快捷键集合。
+function exitSearchMode() {
+  if (!win || win.isDestroyed()) { searchActive = false; searchComposing = false; return; }
+  if (!searchActive) return;
+  searchActive = false;
+  searchComposing = false;
+  if (panelVisible) {
+    unregisterNavShortcuts();
+    registerNavShortcuts();
+  }
+  try { win.setFocusable(false); } catch (_) { /* ignore */ }
+  releasePanelFocus();
+  if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-exit');
+}
+
+// 中文输入法组合期间：暂停搜索模式的导航键，让 ↑↓/Enter 等全部进入输入框
+function setSearchComposing(composing) {
+  if (searchComposing === !!composing) return;
+  searchComposing = !!composing;
+  if (searchActive && panelVisible) {
+    unregisterNavShortcuts();
+    registerNavShortcuts();
+  }
+}
+
 function showPanel() {
   if (!win || win.isDestroyed()) return;
   positionPanel();
   panelVisible = true;
+  // 每次呼出都重置搜索模式（渲染层在 panel:shown 里清空查询词）
+  searchActive = false;
+  searchComposing = false;
+  try { win.setFocusable(false); } catch (_) { /* ignore */ }
   registerNavShortcuts();
   if (!win.isDestroyed()) win.webContents.send('panel:shown');
   // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
@@ -682,7 +750,12 @@ function hidePanel() {
   // 捕获快捷键过程中隐藏面板：先结束捕获（恢复旧快捷键）
   if (shortcutCapturing) cancelShortcutCapture();
   panelVisible = false;
+  searchActive = false;
+  searchComposing = false;
   unregisterNavShortcuts();
+  // 若正处于搜索模式，把焦点还给原程序
+  try { win.setFocusable(false); } catch (_) { /* ignore */ }
+  releasePanelFocus();
   // 移到屏幕外而不是 hide()：避免透明窗口 show/hide 造成的闪烁
   win.setPosition(-10000, 0);
 }
@@ -808,7 +881,17 @@ function registerIpc() {
     if (shortcutCapturing) cancelShortcutCapture();
     return true;
   });
-    ipcMain.handle('window:hide', () => hidePanel());
+  // 搜索：渲染层点击常驻搜索框时进入搜索模式（与按空格等效）
+  ipcMain.handle('search:activate', () => {
+    enterSearchMode();
+    return true;
+  });
+  // 搜索：中文输入法组合中暂停面板导航键（↑↓/Enter 让给 IME 候选），组合结束恢复
+  ipcMain.handle('search:set-composing', (_e, composing) => {
+    setSearchComposing(!!composing);
+    return true;
+  });
+  ipcMain.handle('window:hide', () => hidePanel());
 }
 
 // ---------- app lifecycle ----------

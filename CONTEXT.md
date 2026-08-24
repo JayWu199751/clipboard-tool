@@ -20,11 +20,12 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 | 常驻提权 | 应用始终以高完整性运行（exe 清单 requireAdministrator）；UIPI 不拦截其热键与输入注入，管理员目标窗口照常工作 |
 | 静默启动通道（计划任务） | `ClipboardToolElevated`（/rl highest）：快捷方式经 task-launcher.exe 运行时直接以管理员令牌创建进程，不弹 UAC；开机启动 = 其 onlogon 触发器 |
 | 开机启动意图（autoStart） | settings.json 持久化的用户意图；运行时事实（任务触发器是否存在）每次由开关操作重建 |
-| 面板键捕获通道 | 面板显示期间拦截 ↑↓/Enter/Esc/Del/Z 的机制：主进程 globalShortcut（RegisterHotKey），提权后对所有完整性窗口生效 |
+| 面板键捕获通道 | 面板显示期间拦截 ↑↓/Enter/Esc/Del/Z/空格 的机制：主进程 globalShortcut（RegisterHotKey），提权后对所有完整性窗口生效 |
+| 搜索模式（searchActive） | 面板的输入态：常驻搜索框由灰色禁用变为可编辑，窗口临时可聚焦以支持文字输入（含中文 IME）；Space/Z/Del 让位给输入框，↑↓/Enter/Esc 保持面板语义 |
 
 ## 架构脉络
 
-- `electron/main.js`：剪贴板轮询、去重、历史持久化、全局快捷键（呼出 + 面板导航 `↑/↓/Enter/Esc/Del/Z`）、自动粘贴、托盘、计划任务管理（静默提权启动/开机启动）。
+- `electron/main.js`：剪贴板轮询、去重、历史持久化、全局快捷键（呼出 + 面板导航 `↑/↓/Enter/Esc/Del/Z/空格` + 搜索模式切换）、自动粘贴、托盘、计划任务管理（静默提权启动/开机启动）。
 - `electron/preload.js`：`contextBridge` 暴露 `window.clipboardAPI`（getHistory / onUpdated / copy / remove / pin / clear / 快捷键）。
 - `src/App.tsx`：面板 UI、主题、键盘逻辑（主进程面板键经 `panel:key` 转发）、快捷更换覆盖层。
 - 数据流向：主进程维护唯一真相，`broadcast()` 推 `clipboard:updated` 给渲染层；渲染层不直接改数组。
@@ -43,6 +44,15 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 8. **视觉状态**：置顶图标与复制/删除同风格（15×15、stroke 2、round、currentColor）；置顶时图标实心填充，未置顶为描边。tooltip 随状态显示「置顶 / 取消置顶」。
 9. **图标布局**：置顶按钮放在复制图标左侧；`.item-actions` 统一 `gap: 2px`，保证「置顶↔复制」与「复制↔删除」距离相等。
 10. **持久化**：`pinned` / `pinnedAt` 随历史 JSON 持久化；旧数据加载时归一化（缺省为 `false` / `0`）。
+
+## 关键决策（搜索功能，grill-with-docs 已确认）
+
+1. **搜索范围**：匹配文本条目的 `text` + 来源应用 `appName` / `windowTitle` / `exePath`（图片可经来源应用搜到）。
+2. **输入方式**：按空格进入搜索时窗口临时 `setFocusable(true)` + focus 聚焦输入框，正常输入（含中文输入法）；退出搜索时 `setFocusable(false)` + blur 归还焦点；中文 IME 组合期间暂停全部导航键。
+3. **按键语义**：浏览模式空格=进入搜索；搜索模式空格=输入空格（主进程注销 Space 拦截）；Esc 两层（搜索→浏览→关面板）；搜索模式下 Z/Del 让位给输入框，↑↓/Enter 仍操作面板（针对筛选结果）。
+4. **结果排序**：保持原始顺序（置顶块 + 最近使用），不做匹配度排序；每次查询变化选中项重置到第一个匹配项。
+5. **匹配规则**：大小写不敏感；空格分词多词 AND；文本条目命中片段用 `<mark class="highlight">` 高亮（accent 底色）。
+6. **显示与生命周期**：搜索框常驻顶栏下方、未激活灰色禁用态（点击整条也可进入搜索）；每次面板呼出和退出搜索清空查询；空查询显示完整历史列表。
 
 ## 访谈决策（grill-with-docs，2026-08-23 已确认）
 
@@ -66,6 +76,7 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 
 ## 变更日志
 
+- **搜索功能**（2026-08-25，grill-with-docs 定稿）：主进程 `Space` 面板键 + `searchActive`/`searchComposing` 状态机（按搜索模式切换注册的快捷键集合：Space/Z/Del 让位、IME 组合暂停导航）；preload 新增 `activateSearch` / `setSearchComposing`；渲染层常驻搜索框（灰色禁用态↔激活态）、text+来源应用过滤（空格分词 AND、大小写不敏感）、`<mark>` 命中高亮、空查询/无匹配空状态、动态底部提示；README/CONTEXT 同步。
 - **常驻提权改造**（2026-08-23，grill-with-docs 定稿）：`requireAdministrator` 清单 + 计划任务静默启动；退役提权助手（elevated-helper/管道/SendInput/开关 UI/`elevatedPaste`/`helperToken`）；开机启动改由计划任务 onlogon 触发器管理（意图存 `autoStart`）；新增 `task-launcher.cs` / `installer.nsh` / `ensureElevatedTask` / `setAutoStart`；README 与本文档同步。
   - **实施细节**：任务注册用 PowerShell `Register-ScheduledTask`（schtasks `/create` 强制要求 `/sc`；COM `RegisterTaskDefinition` 本机稳定报 (38,4)）——无触发器版本仅作静默拉起通道，开机启动=带 `AtLogOn` 触发器重建；启动器传参用 `-EncodedCommand` 免引号转义；任务 Run 用 COM 晚绑定（`Run((object)null)` 防参数计数错）。
   - **已实证**：打包产物 exe 清单含 `requireAdministrator`；端到端 `task-launcher.exe → 创建任务(exit=0) → 任务 Running → 主程序提权启动` 全部通过（本机提权 shell 下验证）。待用户桌面验证：非提权 explorer 经任务静默拉起无 UAC；提权后裸键热键对管理员前台生效（失效则回退助手键盘钩子方案）。

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ClipboardEntry } from './types';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -41,6 +41,38 @@ function formatTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 把命中片段用 <mark> 包起来高亮（大小写不敏感、空格分词 AND 匹配）
+function highlightText(text: string, query: string): ReactNode {
+  const q = query.trim().toLowerCase();
+  if (!q) return text;
+  const terms = q.split(/\s+/).filter(Boolean);
+  let parts: { text: string; hit: boolean }[] = [{ text, hit: false }];
+  for (const term of terms) {
+    const next: { text: string; hit: boolean }[] = [];
+    for (const part of parts) {
+      if (part.hit) {
+        next.push(part);
+        continue;
+      }
+      let lower = part.text.toLowerCase();
+      let rest = part.text;
+      let found = lower.indexOf(term);
+      while (found !== -1) {
+        if (found > 0) next.push({ text: rest.slice(0, found), hit: false });
+        next.push({ text: rest.slice(found, found + term.length), hit: true });
+        rest = rest.slice(found + term.length);
+        lower = lower.slice(found + term.length);
+        found = lower.indexOf(term);
+      }
+      if (rest) next.push({ text: rest, hit: false });
+    }
+    parts = next;
+  }
+  return parts.map((part, i) =>
+    part.hit ? <mark key={i} className="highlight">{part.text}</mark> : part.text
+  );
+}
+
 function SunIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -63,6 +95,15 @@ function AutoIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
       <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" opacity="0.35" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.35-4.35" />
     </svg>
   );
 }
@@ -117,11 +158,32 @@ function App() {
 
   const listRef = useRef<HTMLDivElement>(null);
   // Refs keep the global-shortcut callback free of stale closures.
-  const entriesRef = useRef(entries);
-  entriesRef.current = entries;
   const selectedIndexRef = useRef(selectedIndex);
   selectedIndexRef.current = selectedIndex;
 
+  const [searchActive, setSearchActive] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchActiveRef = useRef(searchActive);
+  searchActiveRef.current = searchActive;
+  const filteredEntriesRef = useRef<ClipboardEntry[]>([]);
+
+  // 搜索过滤：大小写不敏感，空格分词后多词 AND；来源应用（名称/窗口标题/exe 路径）也参与匹配。
+  const filteredEntries = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return entries;
+    const terms = q.split(/\s+/).filter(Boolean);
+    return entries.filter((entry) => {
+      const haystack = [
+        entry.type === 'text' ? entry.text ?? '' : '',
+        entry.sourceApp?.appName ?? '',
+        entry.sourceApp?.windowTitle ?? '',
+        entry.sourceApp?.exePath ?? '',
+      ].join(' ').toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    });
+  }, [entries, query]);
+  filteredEntriesRef.current = filteredEntries;
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolveTheme(theme);
@@ -141,7 +203,7 @@ function App() {
 
     // 主进程在面板显示期间全局拦截 ↑/↓/Enter/Esc，这里只更新 UI / 触发复制。
     window.clipboardAPI.onPanelKey((action) => {
-      const list = entriesRef.current;
+      const list = filteredEntriesRef.current;
       if (action === 'up') {
         // 在第一个时按上键不跳转，保持在第一个
         setSelectedIndex((i) => Math.max(0, i - 1));
@@ -152,22 +214,37 @@ function App() {
         const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
         if (item) void window.clipboardAPI.copy(item.id);
       } else if (action === 'delete') {
+        // 搜索模式下 Del 让位给搜索输入框（编辑文字），不删除条目
+        if (searchActiveRef.current) return;
         const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
         if (item) void window.clipboardAPI.remove(item.id);
       } else if (action === 'pin') {
+        // 搜索模式下 Z 让位给搜索输入框（打字），不置顶
+        if (searchActiveRef.current) return;
         const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
         if (item) void window.clipboardAPI.pin(item.id);
       } else if (action === 'escape') {
-        // 捕获快捷键时 Esc 由覆盖层处理，这里忽略
+        // 捕获快捷键时 Esc 由覆盖层处理，这里忽略；搜索模式下 Esc 由主进程先退出搜索
         if (!shortcutCaptureRef.current) void window.clipboardAPI.hide();
+      } else if (action === 'search-enter') {
+        setSearchActive(true);
+        setQuery('');
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+      } else if (action === 'search-exit') {
+        setSearchActive(false);
+        setQuery('');
+        searchInputRef.current?.blur();
       }
     });
 
 
-    // 每次呼出面板只重置选中项，不重新拉列表：
+    // 每次呼出面板重置选中项 & 搜索态，不重新拉列表：
     // 历史由主进程 600ms 轮询实时推送，这里再 getHistory 会导致整列表重绘闪烁。
     window.clipboardAPI.onPanelShown(() => {
       setSelectedIndex(0);
+      setSearchActive(false);
+      setQuery('');
+      searchInputRef.current?.blur();
     });
   }, []);
 
@@ -218,17 +295,22 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [shortcutCapture]);
 
-  // 列表变化时保持选中项在有效范围内。
+  // 列表/搜索结果变化时保持选中项在有效范围内（搜索时针对过滤后的结果）。
   useEffect(() => {
-    setSelectedIndex((i) => Math.max(0, Math.min(i, Math.max(entries.length - 1, 0))));
-  }, [entries.length]);
+    setSelectedIndex((i) => Math.max(0, Math.min(i, Math.max(filteredEntries.length - 1, 0))));
+  }, [filteredEntries.length]);
+
+  // 搜索模式下每次查询变化，选中项重置到第一个匹配项。
+  useEffect(() => {
+    if (searchActiveRef.current) setSelectedIndex(0);
+  }, [query]);
 
   // 保持选中项可见。
   useEffect(() => {
     listRef.current
       ?.querySelector('[data-selected="true"]')
       ?.scrollIntoView({ block: 'nearest' });
-  }, [selectedIndex, entries]);
+  }, [selectedIndex, filteredEntries]);
 
   const handleCopy = useCallback((id: string) => {
     void window.clipboardAPI.copy(id);
@@ -249,7 +331,6 @@ function App() {
   const handleToggleTheme = useCallback(() => {
     setTheme((t) => (t === 'light' ? 'dark' : t === 'dark' ? 'system' : 'light'));
   }, []);
-
 
   return (
     <div className="app">
@@ -283,14 +364,45 @@ function App() {
         </div>
       </header>
 
+      <div
+        className={`search-wrap${searchActive ? ' active' : ' disabled'}`}
+        data-tip={searchActive ? undefined : '按 空格 搜索'}
+        data-tip-pos="below"
+        onClick={() => { if (!searchActive) void window.clipboardAPI.activateSearch(); }}
+      >
+        <SearchIcon />
+        <input
+          ref={searchInputRef}
+          className="search"
+          type="text"
+          placeholder={searchActive ? '搜索文字或来源应用…' : ''}
+          value={query}
+          readOnly={!searchActive}
+          onChange={(e) => setQuery(e.target.value)}
+          onCompositionStart={() => void window.clipboardAPI.setSearchComposing(true)}
+          onCompositionEnd={() => void window.clipboardAPI.setSearchComposing(false)}
+          spellCheck={false}
+          aria-label="搜索历史"
+        />
+        {searchActive && query.length > 0 && (
+          <button type="button" className="clear-query" data-tip="清空" onClick={() => setQuery('')}>
+            ×
+          </button>
+        )}
+      </div>
+
       <div className="list" ref={listRef}>
-        {entries.length === 0 ? (
+        {filteredEntries.length === 0 ? (
           <div className="empty">
-            <div className="empty-icon">📋</div>
-            <p>还没有剪贴板内容，去复制一些文字或图片吧</p>
+            <div className="empty-icon">{entries.length === 0 ? '📋' : '🔍'}</div>
+            <p>
+              {entries.length === 0
+                ? '还没有剪贴板内容，去复制一些文字或图片吧'
+                : `没有找到匹配 “${query.trim()}” 的结果`}
+            </p>
           </div>
         ) : (
-          entries.map((entry, i) => (
+          filteredEntries.map((entry, i) => (
             <div
               key={entry.id}
               className={`item${i === selectedIndex ? ' selected' : ''}`}
@@ -310,7 +422,7 @@ function App() {
               </div>
               <div className="item-body">
                 {entry.type === 'text' ? (
-                  <p className="item-text">{entry.text}</p>
+                  <p className="item-text">{searchActive ? highlightText(entry.text ?? '', query) : entry.text}</p>
                 ) : (
                   <div className="item-image">
                     <img src={entry.dataUrl} alt="剪贴板图片" draggable={false} />
@@ -337,7 +449,11 @@ function App() {
       </div>
 
       <footer className="footer">
-        <span className="hint">↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · Esc 关闭</span>
+        <span className="hint">
+          {searchActive
+            ? 'Esc 退出搜索 · ↑↓ 选择 · Enter 复制粘贴'
+            : '空格 搜索 · ↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · Esc 关闭'}
+        </span>
 
       </footer>
 

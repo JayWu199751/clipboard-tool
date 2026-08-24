@@ -2,7 +2,7 @@
 
 import type { ClipboardEntry } from './types';
 
-type PanelKeyAction = 'up' | 'down' | 'enter' | 'delete' | 'escape' | 'pin';
+type PanelKeyAction = 'up' | 'down' | 'enter' | 'delete' | 'escape' | 'pin' | 'search-enter' | 'search-exit';
 
 interface ShortcutTryResult {
   ok: boolean;
@@ -23,7 +23,9 @@ interface ClipboardAPI {
   onShortcutCaptureEnd(callback: () => void): void;
   tryShortcut(accel: string): Promise<ShortcutTryResult>;
   cancelShortcut(): Promise<void>;
-    hide(): Promise<void>;
+  hide(): Promise<void>;
+  activateSearch(): Promise<void>;
+  setSearchComposing(composing: boolean): Promise<void>;
 }
 
 declare global {

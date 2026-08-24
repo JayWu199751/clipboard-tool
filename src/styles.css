@@ -159,6 +159,24 @@ body {
   border-color: var(--accent);
 }
 
+/* 未激活：灰色禁用态；点击整条也可进入搜索 */
+.search-wrap.disabled {
+  opacity: 0.62;
+  cursor: pointer;
+}
+
+.search-wrap.disabled:hover {
+  border-color: var(--border);
+}
+
+.search-wrap.active {
+  border-color: var(--accent);
+}
+
+.search:read-only {
+  cursor: default;
+}
+
 .search {
   flex: 1;
   min-width: 0;
@@ -284,6 +302,13 @@ body {
   max-height: 88px;
   border-radius: 8px;
   border: 1px solid var(--border);
+}
+
+.item-text mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 1px;
 }
 
 .item-meta {
