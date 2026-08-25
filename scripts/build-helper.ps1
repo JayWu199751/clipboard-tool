@@ -12,6 +12,7 @@ if (-not (Test-Path $csc)) {
 $jobs = @(
   @{ Src = 'click-watcher.cs';   Out = 'click-watcher.exe';   Target = 'winexe'; Refs = @() },
   @{ Src = 'app-icon-helper.cs'; Out = 'app-icon-helper.exe'; Target = 'exe';    Refs = @('System.Drawing.dll') },
+  @{ Src = 'focus-paste-helper.cs'; Out = 'focus-paste-helper.exe'; Target = 'winexe'; Refs = @('System.Web.Extensions.dll') },
   @{ Src = 'task-launcher.cs';   Out = 'task-launcher.exe';   Target = 'winexe'; Refs = @() }
 )
 

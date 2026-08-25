@@ -44,7 +44,7 @@ body,
   overflow: hidden;
 }
 
-/* 不透明窗口：窗口背景=面板色，与 DWM 圆角/阴影衔接 */
+/* 不透明窗口：窗口背景=面板色，与 DWM 圆角/阴影衔接；CSS 外层圆角 8px 对齐系统圆角 */
 body {
   background: var(--panel);
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
@@ -60,7 +60,7 @@ body {
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px; /* 与系统圆角对齐，消除双层圆角与锯齿 */
   color: var(--text);
   overflow: hidden;
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -314,16 +314,60 @@ body {
 .item-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   margin-top: 4px;
   font-size: 11px;
   color: var(--text-secondary);
 }
 
+.item-time {
+  flex-shrink: 0;
+}
+
+.meta-separator {
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+.item-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-note mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.note-input {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.note-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
 .item-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(2, 22px);
+  grid-template-rows: repeat(2, 22px);
+  gap: 4px 6px;
+  align-content: start;
   opacity: 0;
   transition: opacity 0.12s ease;
 }
@@ -379,6 +423,15 @@ body {
   text-overflow: ellipsis;
 }
 
+.footer-error {
+  width: 100%;
+  color: var(--danger);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 
 /* ---------- tooltip ---------- */
 
@@ -389,6 +442,7 @@ body {
 [data-tip]::after {
   content: attr(data-tip);
   position: absolute;
+  display: none;
   left: 50%;
   bottom: calc(100% + 9px);
   transform: translateX(-50%) translateY(2px);
@@ -412,6 +466,7 @@ body {
 [data-tip]::before {
   content: '';
   position: absolute;
+  display: none;
   left: 50%;
   bottom: calc(100% + 4px);
   width: 7px;
@@ -429,6 +484,7 @@ body {
 
 [data-tip]:hover::after,
 [data-tip]:hover::before {
+  display: block;
   opacity: 1;
   visibility: visible;
 }
@@ -480,6 +536,23 @@ body {
   transform: rotate(45deg);
 }
 
+/* 列表右侧按钮的提示向左展开，避免撑出横向滚动区域 */
+.item-actions [data-tip]::after {
+  left: auto;
+  right: 0;
+  transform: translateY(2px);
+}
+
+.item-actions [data-tip]::before {
+  left: auto;
+  right: 9px;
+  transform: rotate(45deg);
+}
+
+.item-actions [data-tip]:hover::after {
+  transform: translateY(0);
+}
+
 /* ---------- 更换快捷键覆盖层 ---------- */
 
 .shortcut-overlay {
@@ -490,7 +563,7 @@ body {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.45); /* 增加10%不透明度(原0.35->0.45) */
-  border-radius: 12px;
+  border-radius: 8px; /* 与 .app 圆角对齐 */
 }
 
 .shortcut-card {

@@ -7,19 +7,26 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
     ipcRenderer.on('clipboard:updated', (_event, entries) => callback(entries));
   },
   // 面板显示期间由主进程全局拦截的按键动作：up / down / enter / escape / delete / pin /
-  // search-enter / search-exit（后两个用于同步搜索模式的进入与退出）
+  // search-enter / search-exit / note-edit-enter / note-edit-exit
   onPanelKey: (callback) => {
     ipcRenderer.removeAllListeners('panel:key');
-    ipcRenderer.on('panel:key', (_event, action) => callback(action));
+    ipcRenderer.on('panel:key', (_event, action, noteEntryId) => callback(action, noteEntryId));
   },
   onPanelShown: (callback) => {
     ipcRenderer.removeAllListeners('panel:shown');
     ipcRenderer.on('panel:shown', () => callback());
   },
+  onFocusError: (callback) => {
+    ipcRenderer.removeAllListeners('panel:focus-error');
+    ipcRenderer.on('panel:focus-error', (_event, error) => callback(error));
+  },
   copy: (id) => ipcRenderer.invoke('clipboard:copy', id),
   remove: (id) => ipcRenderer.invoke('clipboard:remove', id),
   pin: (id) => ipcRenderer.invoke('clipboard:pin', id),
   clear: () => ipcRenderer.invoke('clipboard:clear'),
+  setNote: (id, note) => ipcRenderer.invoke('note:set', id, note),
+  beginNoteEdit: (id) => ipcRenderer.invoke('note:begin-edit', id),
+  endNoteEdit: () => ipcRenderer.invoke('note:end-edit'),
 
   // 更换快捷键
   onShortcutCaptureStart: (callback) => {

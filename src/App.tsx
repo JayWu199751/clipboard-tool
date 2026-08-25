@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { ClipboardEntry } from './types';
 
 type Theme = 'light' | 'dark' | 'system';
+type FocusError = { stage: string; reason: string; message: string };
 
 const THEME_KEY = 'clipboard-tool:theme';
+const MAX_NOTE_LENGTH = 200;
 const darkModeMedia = window.matchMedia('(prefers-color-scheme: dark)');
 
 function getInitialTheme(): Theme {
@@ -125,6 +127,18 @@ function CopyIcon() {
   );
 }
 
+function NoteIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path
+        d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"
+        fill={filled ? 'currentColor' : 'none'}
+      />
+    </svg>
+  );
+}
+
 function PinIcon({ filled = false }: { filled?: boolean }) {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -162,13 +176,20 @@ function App() {
   selectedIndexRef.current = selectedIndex;
 
   const [searchActive, setSearchActive] = useState(false);
+  const [focusError, setFocusError] = useState<FocusError | null>(null);
   const [query, setQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchActiveRef = useRef(searchActive);
   searchActiveRef.current = searchActive;
   const filteredEntriesRef = useRef<ClipboardEntry[]>([]);
 
-  // 搜索过滤：大小写不敏感，空格分词后多词 AND；来源应用（名称/窗口标题/exe 路径）也参与匹配。
+  const [noteEdit, setNoteEdit] = useState<{ id: string; draft: string } | null>(null);
+  const noteEditRef = useRef<{ id: string; draft: string } | null>(null);
+  const noteInputRef = useRef<HTMLInputElement>(null);
+  const noteSavePendingRef = useRef(false);
+  const cancelNoteBlurRef = useRef(false);
+
+  // 搜索过滤：大小写不敏感，空格分词后多词 AND；正文、备注和来源应用都参与匹配。
   const filteredEntries = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return entries;
@@ -176,6 +197,7 @@ function App() {
     return entries.filter((entry) => {
       const haystack = [
         entry.type === 'text' ? entry.text ?? '' : '',
+        entry.note ?? '',
         entry.sourceApp?.appName ?? '',
         entry.sourceApp?.windowTitle ?? '',
         entry.sourceApp?.exePath ?? '',
@@ -184,6 +206,78 @@ function App() {
     });
   }, [entries, query]);
   filteredEntriesRef.current = filteredEntries;
+
+  const openNoteEditor = useCallback((targetId: string | null) => {
+    const list = filteredEntriesRef.current;
+    const target = targetId
+      ? list.find((entry) => entry.id === targetId)
+      : list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+    if (!target) return;
+    const next = { id: target.id, draft: target.note ?? '' };
+    noteEditRef.current = next;
+    setNoteEdit(next);
+    requestAnimationFrame(() => {
+      noteInputRef.current?.focus();
+      noteInputRef.current?.select();
+    });
+  }, []);
+
+  const saveNoteDraft = useCallback((id: string, draft: string) => {
+    noteSavePendingRef.current = true;
+    return window.clipboardAPI.setNote(id, draft)
+      .catch(() => false)
+      .finally(() => {
+        noteSavePendingRef.current = false;
+      });
+  }, []);
+
+  const finishNoteEditing = useCallback((cancel = false) => {
+    const edit = noteEditRef.current;
+    if (!edit || noteSavePendingRef.current) return;
+    noteEditRef.current = null;
+    setNoteEdit(null);
+    if (cancel) {
+      cancelNoteBlurRef.current = true;
+      window.setTimeout(() => {
+        cancelNoteBlurRef.current = false;
+      }, 0);
+      void window.clipboardAPI.endNoteEdit();
+      return;
+    }
+    void saveNoteDraft(edit.id, edit.draft).then(() => window.clipboardAPI.endNoteEdit());
+  }, [saveNoteDraft]);
+
+  const handleNoteEditExit = useCallback(() => {
+    const edit = noteEditRef.current;
+    if (edit && !noteSavePendingRef.current) {
+      noteEditRef.current = null;
+      setNoteEdit(null);
+      void saveNoteDraft(edit.id, edit.draft);
+    } else {
+      noteEditRef.current = null;
+      setNoteEdit(null);
+    }
+    cancelNoteBlurRef.current = false;
+  }, [saveNoteDraft]);
+
+  const handleBeginNoteEdit = useCallback((index: number, id: string) => {
+    setSelectedIndex(index);
+    const current = noteEditRef.current;
+    if (!current) {
+      void window.clipboardAPI.beginNoteEdit(id);
+      return;
+    }
+    if (current.id === id) {
+      finishNoteEditing(false);
+      return;
+    }
+    noteEditRef.current = null;
+    setNoteEdit(null);
+    void saveNoteDraft(current.id, current.draft).then(async () => {
+      await window.clipboardAPI.endNoteEdit();
+      await window.clipboardAPI.beginNoteEdit(id);
+    });
+  }, [finishNoteEditing, saveNoteDraft]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolveTheme(theme);
@@ -202,7 +296,7 @@ function App() {
     window.clipboardAPI.onUpdated(setEntries);
 
     // 主进程在面板显示期间全局拦截 ↑/↓/Enter/Esc，这里只更新 UI / 触发复制。
-    window.clipboardAPI.onPanelKey((action) => {
+    window.clipboardAPI.onPanelKey((action, noteEntryId) => {
       const list = filteredEntriesRef.current;
       if (action === 'up') {
         // 在第一个时按上键不跳转，保持在第一个
@@ -234,6 +328,10 @@ function App() {
         setSearchActive(false);
         setQuery('');
         searchInputRef.current?.blur();
+      } else if (action === 'note-edit-enter') {
+        openNoteEditor(noteEntryId ?? null);
+      } else if (action === 'note-edit-exit') {
+        handleNoteEditExit();
       }
     });
 
@@ -244,9 +342,15 @@ function App() {
       setSelectedIndex(0);
       setSearchActive(false);
       setQuery('');
+      setFocusError(null);
+      noteEditRef.current = null;
+      setNoteEdit(null);
+      noteSavePendingRef.current = false;
+      cancelNoteBlurRef.current = false;
       searchInputRef.current?.blur();
     });
-  }, []);
+    window.clipboardAPI.onFocusError(setFocusError);
+  }, [handleNoteEditExit, openNoteEditor]);
 
   // 更换快捷键：主进程进入捕获模式后显示覆盖层
   useEffect(() => {
@@ -375,7 +479,7 @@ function App() {
           ref={searchInputRef}
           className="search"
           type="text"
-          placeholder={searchActive ? '搜索文字或来源应用…' : ''}
+          placeholder={searchActive ? '搜索文字、备注或来源应用…' : ''}
           value={query}
           readOnly={!searchActive}
           onChange={(e) => setQuery(e.target.value)}
@@ -429,12 +533,54 @@ function App() {
                   </div>
                 )}
                 <div className="item-meta">
-                  <span>{formatTime(entry.createdAt)}</span>
+                  <span className="item-time">{formatTime(entry.createdAt)}</span>
+                  {noteEdit?.id === entry.id && (
+                    <>
+                      <span className="meta-separator">·</span>
+                      <input
+                        ref={noteInputRef}
+                        className="note-input"
+                        type="text"
+                        value={noteEdit.draft}
+                        maxLength={MAX_NOTE_LENGTH}
+                        spellCheck={false}
+                        aria-label="备注"
+                        onChange={(event) => {
+                          const next = { ...noteEdit, draft: event.target.value };
+                          noteEditRef.current = next;
+                          setNoteEdit(next);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            finishNoteEditing(false);
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault();
+                            finishNoteEditing(true);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (!cancelNoteBlurRef.current) finishNoteEditing(false);
+                        }}
+                      />
+                    </>
+                  )}
+                  {noteEdit?.id !== entry.id && entry.note && (
+                    <>
+                      <span className="meta-separator">·</span>
+                      <span className="item-note" title={entry.note}>
+                        {searchActive ? highlightText(entry.note, query) : entry.note}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="item-actions">
                 <button type="button" className="icon-btn small" data-tip={entry.pinned ? '取消置顶' : '置顶'} onClick={(e) => { e.stopPropagation(); handlePin(entry.id); }}>
                   <PinIcon filled={entry.pinned} />
+                </button>
+                <button type="button" className="icon-btn small" data-tip={entry.note ? '编辑备注' : '添加备注'} onClick={(e) => { e.stopPropagation(); handleBeginNoteEdit(i, entry.id); }}>
+                  <NoteIcon filled={Boolean(entry.note)} />
                 </button>
                 <button type="button" className="icon-btn small" data-tip="复制并粘贴" onClick={(e) => { e.stopPropagation(); handleCopy(entry.id); }}>
                   <CopyIcon />
@@ -449,11 +595,17 @@ function App() {
       </div>
 
       <footer className="footer">
-        <span className="hint">
-          {searchActive
-            ? 'Esc 退出搜索 · ↑↓ 选择 · Enter 复制粘贴'
-            : '空格 搜索 · ↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · Esc 关闭'}
-        </span>
+        {focusError ? (
+          <span className="footer-error" role="status">{focusError.message}</span>
+        ) : (
+          <span className="hint">
+            {noteEdit
+              ? 'Enter 保存备注 · Esc 取消'
+              : searchActive
+              ? 'Esc 退出搜索 · ↑↓ 选择 · Enter 复制粘贴'
+              : '空格 搜索 · ↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · B 备注 · Esc 关闭'}
+          </span>
+        )}
 
       </footer>
 
