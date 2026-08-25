@@ -7,7 +7,7 @@ const Module = require('module');
 const projectRoot = path.resolve(__dirname, '..');
 const testUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboardtool-autostart-'));
 const settingsFile = path.join(testUserData, 'settings.json');
-fs.writeFileSync(settingsFile, JSON.stringify({ autoPaste: true, autoStart: true, shortcut: 'Control+Shift+V' }));
+fs.writeFileSync(settingsFile, JSON.stringify({ autoStart: true, shortcut: 'Control+Shift+V' }));
 
 const execCalls = [];
 const menuTemplates = [];

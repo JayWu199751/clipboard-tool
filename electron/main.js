@@ -12,7 +12,6 @@ const MAX_NOTE_LENGTH = 200;
 const POLL_INTERVAL = 600;
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 560;
-const SHADOW_MARGIN = 20; // 已废弃：改不透明窗口 + 系统阴影后不再需要预留透明边距（保留常量避免误用）
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -23,7 +22,7 @@ let lastText = '';
 let lastImageHash = '';
 // 图片内容哈希缓存：entry.id -> sha1，用于全历史按内容判定同一条目（图片文件创建后不会变化）
 const imageHashCache = new Map();
-let settings = { autoPaste: true, autoStart: false, shortcut: 'Control+Shift+V' };
+let settings = { autoStart: false, shortcut: 'Control+Shift+V' };
 let isQuitting = false;
 let pollTimer = null;
 let tray = null;
@@ -455,8 +454,8 @@ function settingsFile() {
 function loadSettings() {
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-    // 只吸收已知键：旧版本遗留的 helperToken 等废弃字段不进入内存、不再写回
-    for (const key of ['autoPaste', 'autoStart', 'shortcut']) {
+    // 只吸收已知键：旧版本遗留的 autoPaste / helperToken 等废弃字段不进入内存、不再写回
+    for (const key of ['autoStart', 'shortcut']) {
       if (typeof parsed[key] !== 'undefined') settings[key] = parsed[key];
     }
   } catch (_) { /* first run */ }

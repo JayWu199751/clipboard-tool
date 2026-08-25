@@ -8,7 +8,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const testUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboardtool-focus-paste-'));
 const settingsFile = path.join(testUserData, 'settings.json');
 const historyFile = path.join(testUserData, 'clipboard-history.json');
-fs.writeFileSync(settingsFile, JSON.stringify({ autoPaste: true, autoStart: false, shortcut: 'Control+Shift+V' }));
+fs.writeFileSync(settingsFile, JSON.stringify({ autoStart: false, shortcut: 'Control+Shift+V' }));
 fs.writeFileSync(historyFile, JSON.stringify([
   {
     id: 'item-1',

@@ -103,25 +103,11 @@ static class FocusPasteHelper
         public IntPtr dwExtraInfo;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    struct MOUSEINPUT
-    {
-        public int dx;
-        public int dy;
-        public uint mouseData;
-        public uint dwFlags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-
     [StructLayout(LayoutKind.Explicit)]
     struct InputUnion
     {
         [FieldOffset(0)]
         public KEYBDINPUT ki;
-
-        [FieldOffset(0)]
-        public MOUSEINPUT mi;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -344,8 +330,6 @@ static class FocusPasteHelper
 
         bool restored = false;
         string reason = "";
-        string strategy = "";
-        bool allowed = false;
         for (int attempt = 0; attempt < 2; attempt++)
         {
             if (RestoreTarget(target))
@@ -362,8 +346,6 @@ static class FocusPasteHelper
             result["ok"] = false;
             result["stage"] = "restore";
             result["reason"] = reason;
-            result["strategy"] = strategy;
-            result["allowed"] = allowed;
             return result;
         }
 
@@ -376,18 +358,6 @@ static class FocusPasteHelper
         }
 
         result["ok"] = true;
-        result["strategy"] = strategy;
-        result["allowed"] = allowed;
-        return result;
-    }
-
-    static Dictionary<string, object> PasteCurrent(string id)
-    {
-        Dictionary<string, object> result = new Dictionary<string, object>();
-        result["id"] = id;
-        result["cmd"] = "paste-current";
-        result["ok"] = PasteClipboard();
-        if (!(bool)result["ok"]) result["reason"] = "paste_send_failed";
         return result;
     }
 
@@ -414,8 +384,6 @@ static class FocusPasteHelper
                 result = Restore(id, GetObject(command, "target"), false);
             else if (cmd == "paste")
                 result = Restore(id, GetObject(command, "target"), true);
-            else if (cmd == "paste-current")
-                result = PasteCurrent(id);
             else
             {
                 result = new Dictionary<string, object>();

@@ -65,7 +65,7 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 2. **临时聚焦**：搜索、备注编辑和快捷键捕获让面板短暂获得焦点；退出这些状态时统一通过原生助手恢复 `focusTarget`，不再依赖 PowerShell `SendKeys` 或假设焦点从未变化。
 3. **粘贴语义**：普通浏览模式（Enter / 双击 / 复制按钮）与搜索模式统一由 `clipboard:copy` 调用助手同时执行“恢复原窗口/焦点 + `Ctrl+V`”；助手成功才隐藏面板，失败则保留面板并发送错误事件，绝不向错误窗口注入内容。
 4. **权限模型**：助手直接继承主程序的管理员令牌，不单独提权；聚焦和输入注入对普通及管理员窗口使用同一套逻辑。
-5. **协议与生命周期**：助手常驻并通过 stdin/stdout JSON 处理 `snapshot` / `restore` / `paste` / `paste-current`；主进程维护请求队列与超时，应用退出时清理。
+5. **协议与生命周期**：助手常驻并通过 stdin/stdout JSON 处理 `snapshot` / `restore` / `paste`；主进程维护请求队列与超时，应用退出时清理。
 
 ## 关键决策（备注功能，grill-with-docs 已确认）
 
@@ -108,6 +108,7 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 
 ## 变更日志
 
+- **清理旧粘贴残留**（2026-08-25）：移除普通复制旧实现遗留的 `autoPaste` 设置、`SHADOW_MARGIN` 常量、助手 `paste-current` 命令与 `strategy` / `allowed` 空字段；粘贴只保留 `snapshot` / `restore` / `paste` 单一链路。
 - **搜索后回焦粘贴**（2026-08-25）：新增 `focusTarget`、`focus-paste-helper.exe` 和 `clipboard:copy` 的“快照→恢复→注入”流程；普通浏览与搜索模式的粘贴统一走该链路，搜索/备注/快捷键捕获/关闭面板也统一走原生恢复，粘贴失败不隐藏面板；新增 `test:focus-paste` 普通/搜索双路径回归和 `test:autostart` 开机启动回归；README/CONTEXT 同步。
 - **条目身份与去重修复**（2026-08-25，grill-with-docs 定稿）：同内容（文字逐字符/图片 PNG sha1）不再视为不同复制项——去重从"只比最近一条"改为全历史查找；复制已存在内容时把原条目提升到最近使用（置顶条目刷新 `pinnedAt`），备注/来源/创建时间保持不变；不自动清理历史中已有的重复项；图片内容哈希走内存缓存。README/CONTEXT 同步。
 - **备注功能**（2026-08-25，grill-with-docs 定稿）：主进程新增 `note` 字段与旧数据归一化、`note:set` IPC、`B` 面板键、`note-edit-enter/exit` 状态机；preload 新增 `setNote` / `beginNoteEdit` / `endNoteEdit`；渲染层新增备注展示、内联输入、备注图标与 2×2 操作区，备注参与搜索和高亮；README/CONTEXT 同步。
