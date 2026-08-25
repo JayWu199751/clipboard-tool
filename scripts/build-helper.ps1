@@ -9,6 +9,21 @@ if (-not (Test-Path $csc)) {
   exit 0
 }
 
+function Assert-FocusPasteInputSize {
+  param([string]$Path)
+  $assembly = [System.Reflection.Assembly]::LoadFrom($Path)
+  $inputType = $assembly.GetType('FocusPasteHelper+INPUT')
+  if (-not $inputType) {
+    throw 'FocusPasteHelper+INPUT type not found.'
+  }
+  $size = [System.Runtime.InteropServices.Marshal]::SizeOf([Activator]::CreateInstance($inputType))
+  $expected = if ([IntPtr]::Size -eq 8) { 40 } else { 28 }
+  if ($size -ne $expected) {
+    throw "focus-paste-helper INPUT size is $size bytes, expected $expected bytes (MOUSEINPUT union member must not be removed)."
+  }
+  Write-Host "focus-paste-helper INPUT size OK ($size bytes)"
+}
+
 $jobs = @(
   @{ Src = 'click-watcher.cs';   Out = 'click-watcher.exe';   Target = 'winexe'; Refs = @() },
   @{ Src = 'app-icon-helper.cs'; Out = 'app-icon-helper.exe'; Target = 'exe';    Refs = @('System.Drawing.dll') },
@@ -31,4 +46,7 @@ foreach ($job in $jobs) {
     exit $LASTEXITCODE
   }
   Write-Host "Built $out ($($job.Target))"
+  if ($job.Src -eq 'focus-paste-helper.cs') {
+    Assert-FocusPasteInputSize -Path $out
+  }
 }

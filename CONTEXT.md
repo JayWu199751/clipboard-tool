@@ -108,6 +108,7 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 
 ## 变更日志
 
+- **修复焦点粘贴回归**（2026-08-25）：恢复 `focus-paste-helper` 中 `INPUT` 联合体的 `MOUSEINPUT` 结构；它是 Win32 `SendInput` 结构定义的一部分，删除后 64 位下 `INPUT` 从 40 字节缩为 32 字节，`SendInput` 报 `ERROR_INVALID_PARAMETER(87)`，表现为“复制已写入剪贴板，但无法粘贴回原输入框”。构建脚本新增 `INPUT` 尺寸断言防止再次误删。
 - **清理旧粘贴残留**（2026-08-25）：移除普通复制旧实现遗留的 `autoPaste` 设置、`SHADOW_MARGIN` 常量、助手 `paste-current` 命令与 `strategy` / `allowed` 空字段；粘贴只保留 `snapshot` / `restore` / `paste` 单一链路。
 - **搜索后回焦粘贴**（2026-08-25）：新增 `focusTarget`、`focus-paste-helper.exe` 和 `clipboard:copy` 的“快照→恢复→注入”流程；普通浏览与搜索模式的粘贴统一走该链路，搜索/备注/快捷键捕获/关闭面板也统一走原生恢复，粘贴失败不隐藏面板；新增 `test:focus-paste` 普通/搜索双路径回归和 `test:autostart` 开机启动回归；README/CONTEXT 同步。
 - **条目身份与去重修复**（2026-08-25，grill-with-docs 定稿）：同内容（文字逐字符/图片 PNG sha1）不再视为不同复制项——去重从"只比最近一条"改为全历史查找；复制已存在内容时把原条目提升到最近使用（置顶条目刷新 `pinnedAt`），备注/来源/创建时间保持不变；不自动清理历史中已有的重复项；图片内容哈希走内存缓存。README/CONTEXT 同步。

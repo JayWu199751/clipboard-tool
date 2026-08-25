@@ -103,11 +103,25 @@ static class FocusPasteHelper
         public IntPtr dwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
     [StructLayout(LayoutKind.Explicit)]
     struct InputUnion
     {
         [FieldOffset(0)]
         public KEYBDINPUT ki;
+
+        [FieldOffset(0)]
+        public MOUSEINPUT mi;
     }
 
     [StructLayout(LayoutKind.Sequential)]
