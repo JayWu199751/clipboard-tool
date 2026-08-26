@@ -121,6 +121,7 @@ if (typeof window !== "undefined" && !(window as any).clipboardAPI) {
     tryShortcut: async () => ({ok: false, formatted: ""}),
     cancelShortcut: async () => {},
     hide: async () => {},
+    setIgnoreMouse: async () => {},
     activateSearch: async () => {},
     setSearchComposing: async () => {},
   };
@@ -382,6 +383,66 @@ function App() {
   useEffect(() => {
     if (searchActiveRef.current) setSelectedIndex(0);
   }, [query]);
+
+  // 透明窗口点击穿透：16px 透明边 + 12px 圆角外应穿透到下层窗口
+  useEffect(() => {
+    const desktop = document.querySelector('.desktop') as HTMLElement | null;
+    const appWindow = document.querySelector('.app-window') as HTMLElement | null;
+    if (!desktop || !appWindow) return;
+    let lastIgnore: boolean | null = null;
+    const R = 12; // --radius-window
+    const update = (e: MouseEvent) => {
+      const rect = appWindow.getBoundingClientRect();
+      const x = e.clientX;
+      const y = e.clientY;
+      let shouldIgnore = x < rect.left || x > rect.right || y < rect.top || y > rect.bottom;
+      if (!shouldIgnore) {
+        const inTopLeft = x < rect.left + R && y < rect.top + R;
+        const inTopRight = x > rect.right - R && y < rect.top + R;
+        const inBottomLeft = x < rect.left + R && y > rect.bottom - R;
+        const inBottomRight = x > rect.right - R && y > rect.bottom - R;
+        if (inTopLeft) {
+          const dx = x - (rect.left + R);
+          const dy = y - (rect.top + R);
+          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
+        } else if (inTopRight) {
+          const dx = x - (rect.right - R);
+          const dy = y - (rect.top + R);
+          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
+        } else if (inBottomLeft) {
+          const dx = x - (rect.left + R);
+          const dy = y - (rect.bottom - R);
+          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
+        } else if (inBottomRight) {
+          const dx = x - (rect.right - R);
+          const dy = y - (rect.bottom - R);
+          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
+        }
+      }
+      if (shouldIgnore !== lastIgnore) {
+        lastIgnore = shouldIgnore;
+        // @ts-ignore
+        (window as any).clipboardAPI?.setIgnoreMouse?.(shouldIgnore, true);
+      }
+    };
+    const onLeave = () => {
+      if (lastIgnore !== true) {
+        lastIgnore = true;
+        (window as any).clipboardAPI?.setIgnoreMouse?.(true, true);
+      }
+    };
+    const onEnter = (e: MouseEvent) => update(e);
+    desktop.addEventListener('mousemove', update);
+    desktop.addEventListener('mouseenter', onEnter);
+    desktop.addEventListener('mouseleave', onLeave);
+    // 初始状态设为不忽略，确保面板内可点击
+    (window as any).clipboardAPI?.setIgnoreMouse?.(false, true);
+    return () => {
+      desktop.removeEventListener('mousemove', update);
+      desktop.removeEventListener('mouseenter', onEnter);
+      desktop.removeEventListener('mouseleave', onLeave);
+    };
+  }, []);
 
   // 保持选中项可见。
   useEffect(() => {

@@ -623,8 +623,7 @@ async function startShortcutCapture() {
   await showPanel({ capture: false });
   // 捕获快捷键期间，导航快捷键要全部让位给要按下的组合键。
   unregisterNavShortcuts();
-  // 面板默认不抢焦点，捕获按键前临时改为可聚焦并聚焦
-  try { win.setFocusable(true); } catch (_) { /* ignore */ }
+  // 捕获按键前聚焦面板（基线 focusable:true，直接 focus 即可）
   win.focus();
   if (!win.isDestroyed()) win.webContents.send('shortcut:capture-start', { current: formatShortcut(oldAccel) });
 }
@@ -641,9 +640,8 @@ function cancelShortcutCapture({ restoreFocus = true } = {}) {
     } catch (_) { /* ignore */ }
   }
   shortcutOldAccel = null;
-  // 恢复窗口不抢焦点，把焦点还回原程序
+  // 把焦点还回原程序（基线 focusable:true，直接 blur 即可）
   if (win && !win.isDestroyed()) {
-    try { win.setFocusable(false); } catch (_) { /* ignore */ }
     releasePanelFocus();
     win.webContents.send('shortcut:capture-end');
     if (restoreFocus) void restoreFocusOnly();
@@ -739,7 +737,7 @@ function createWindow() {
     frame: false,
     // 圆角方案：关闭系统圆角，改由 CSS 完全接管。
     // transparent:true 赋予 per-pixel alpha，CSS 的 --radius-window (12px) 才能裁出真实窗口外形（非仅内裁 DWM 形状）。
-    // 副作用：WS_EX_LAYERED + WS_EX_NOACTIVATE 会使 WM_MOUSEACTIVATE 默认返回 MA_NOACTIVATEANDEAT(4) 吃掉点击，下方 hook 修复。
+    // focusable:true 保持可激活以保证点击可交付；呼出时用 showInactive + blur 模拟“不抢焦点”（hook 方案在 Electron 43 仅观察无效）。
     transparent: true,
     backgroundColor: '#00000000',
     backgroundMaterial: undefined,
@@ -748,7 +746,7 @@ function createWindow() {
     minimizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    focusable: false, // 默认不可激活（WS_EX_NOACTIVATE），浏览态不抢焦点；输入态临时 setFocusable(true)
+    focusable: true, // 保持可激活以接收点击，靠 showInactive + blur 模拟不抢焦点
     alwaysOnTop: true,
     hasShadow: false, // 透明窗口无 DWM 阴影，改由 CSS --shadow-window 绘制，贴合 CSS 圆角
     roundedCorners: false, // 关闭系统 8px，用 CSS --radius-window 统一控制
@@ -762,25 +760,18 @@ function createWindow() {
     },
   });
 
-  // —— Windows 点击穿透修复（transparent + focusable:false 必需）——
-  // 原理：WS_EX_LAYERED(透明) + WS_EX_NOACTIVATE(不抢焦点) 使 WM_MOUSEACTIVATE 默认返回
-  // MA_NOACTIVATEANDEAT(4)，导致所有鼠标点击被吃掉无法进入渲染进程。
-  // 修复：hook WM_MOUSEACTIVATE (0x0021)，按当前交互模式条件返回：
-  //   浏览态（searchActive/noteEditing/shortcutCapturing 全 false）：MA_NOACTIVATE(3) — 不激活但派发点击
-  //   输入态（任一为 true）：MA_ACTIVATE(1) — 允许激活，使 input/textarea 能聚焦
-  // 兼容性：同时写 Buffer 并 return 数值，覆盖不同 Electron 版本的读取方式。
-  if (process.platform === 'win32') {
-    try {
-      win.hookWindowMessage(0x0021, (wParam) => {
-        const shouldActivate = searchActive || noteEditing || shortcutCapturing;
-        const result = shouldActivate ? 1 : 3; // 1=MA_ACTIVATE, 3=MA_NOACTIVATE
-        try { wParam.writeInt32LE(result, 0); } catch {}
-        return result;
-      });
-    } catch (err) {
-      console.error('hook WM_MOUSEACTIVATE failed:', err.message);
-    }
-  }
+  // 浏览态自动失焦：focusable:true 下点击会激活窗口，浏览态下立即 blur 将焦点还回原程序，
+  // 输入态（searchActive/noteEditing/shortcutCapturing）则保留焦点以便输入。
+  win.on('focus', () => {
+    if (searchActive || noteEditing || shortcutCapturing) return;
+    // 延迟一帧再 blur，让点击事件先进入渲染进程，避免在 mousedown 前就失焦吃掉点击
+    setTimeout(() => {
+      if (!win || win.isDestroyed() || !panelVisible) return;
+      if (searchActive || noteEditing || shortcutCapturing) return;
+      if (!win.isFocused()) return;
+      try { win.blur(); } catch (_) { /* ignore */ }
+    }, 0);
+  });
 
   win.setMenu(null);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -791,7 +782,7 @@ function createWindow() {
     // 关键：先在屏幕内显示一帧，让 DWM 完成窗口表面/acrylic 材质合成，再移到屏幕外；
     // 否则每次从屏幕外移入都要重新合成，呼出就会闪一下。
     win.setPosition(0, 0);
-    win.showInactive(); // focusable:false，不会抢走输入框焦点
+    win.showInactive(); // focusable:true 下 showInactive 仍不激活，保持原输入框焦点
     setTimeout(() => {
       if (!win || win.isDestroyed()) return;
       win.setPosition(-10000, 0);
@@ -900,7 +891,6 @@ async function beginNoteEdit(targetId = null) {
   noteEditEntryId = targetId || null;
   noteEditing = true;
   unregisterNavShortcuts();
-  try { win.setFocusable(true); } catch (_) { /* ignore */ }
   win.focus();
   if (!win.isDestroyed()) win.webContents.send('panel:key', 'note-edit-enter', noteEditEntryId);
   return true;
@@ -913,7 +903,6 @@ function endNoteEdit({ restoreFocus = true } = {}) {
   noteEditEntryId = null;
   if (win && !win.isDestroyed()) {
     win.webContents.send('panel:key', 'note-edit-exit');
-    try { win.setFocusable(false); } catch (_) { /* ignore */ }
     releasePanelFocus();
     if (restoreFocus) void restoreFocusOnly();
   }
@@ -942,7 +931,6 @@ async function enterSearchMode() {
   searchActive = true;
   unregisterNavShortcuts();
   registerNavShortcuts();
-  try { win.setFocusable(true); } catch (_) { /* ignore */ }
   win.focus();
   if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-enter');
   return true;
@@ -958,7 +946,6 @@ function exitSearchMode({ restoreFocus = true } = {}) {
     unregisterNavShortcuts();
     registerNavShortcuts();
   }
-  try { win.setFocusable(false); } catch (_) { /* ignore */ }
   releasePanelFocus();
   if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-exit');
   if (restoreFocus) void restoreFocusOnly();
@@ -989,7 +976,6 @@ async function showPanel({ capture = false } = {}) {
     // 每次呼出都重置搜索模式（渲染层在 panel:shown 里清空查询词）
     searchActive = false;
     searchComposing = false;
-    try { win.setFocusable(false); } catch (_) { /* ignore */ }
     registerNavShortcuts();
     if (!win.isDestroyed()) win.webContents.send('panel:shown');
     // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
@@ -1013,8 +999,6 @@ function hidePanel({ restoreFocus = true } = {}) {
   noteEditing = false;
   noteEditEntryId = null;
   unregisterNavShortcuts();
-  // 若正处于搜索模式，把焦点还给原程序
-  try { win.setFocusable(false); } catch (_) { /* ignore */ }
   releasePanelFocus();
   const targetToRestore = focusTarget;
   focusTarget = null;
@@ -1177,9 +1161,8 @@ function registerIpc() {
     buildTrayMenu();
     if (tray) tray.setContextMenu(trayMenu);
     console.log('全局快捷键已更换为:', formatted);
-    // 恢复窗口不抢焦点
+    // 恢复焦点给原程序
     if (win && !win.isDestroyed()) {
-      try { win.setFocusable(false); } catch (_) { /* ignore */ }
       releasePanelFocus();
       void restoreFocusOnly();
     }
@@ -1202,6 +1185,11 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('window:hide', () => hidePanel());
+  ipcMain.handle('window:set-ignore-mouse', (_e, ignore, forward) => {
+    if (!win || win.isDestroyed()) return false;
+    try { win.setIgnoreMouseEvents(!!ignore, forward ? { forward: true } : undefined); } catch (_) { /* ignore */ }
+    return true;
+  });
 }
 
 // ---------- app lifecycle ----------

@@ -34,6 +34,7 @@ interface ClipboardAPI {
   tryShortcut(accel: string): Promise<ShortcutTryResult>;
   cancelShortcut(): Promise<void>;
   hide(): Promise<void>;
+  setIgnoreMouse(ignore: boolean, forward?: boolean): Promise<void>;
   activateSearch(): Promise<void>;
   setSearchComposing(composing: boolean): Promise<void>;
 }

@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   tryShortcut: (accel) => ipcRenderer.invoke('shortcut:try', accel),
   cancelShortcut: () => ipcRenderer.invoke('shortcut:cancel'),
   hide: () => ipcRenderer.invoke('window:hide'),
+  setIgnoreMouse: (ignore, forward) => ipcRenderer.invoke('window:set-ignore-mouse', ignore, forward),
   // 搜索：进入搜索模式（按空格由主进程直接触发，点击常驻搜索框走这里）
   activateSearch: () => ipcRenderer.invoke('search:activate'),
   // 搜索：中文输入法组合状态同步（组合期间主进程暂停面板导航键）
