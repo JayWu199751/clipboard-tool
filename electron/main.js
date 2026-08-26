@@ -6,12 +6,13 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
+// transparent 窗口已接管圆角与阴影，无需 DWM acrylic 回退
 
 const MAX_HISTORY = 200;
 const MAX_NOTE_LENGTH = 200;
 const POLL_INTERVAL = 600;
-const PANEL_WIDTH = 400;
-const PANEL_HEIGHT = 560;
+const PANEL_WIDTH = 450;
+const PANEL_HEIGHT = 855;
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -736,16 +737,21 @@ function createWindow() {
     height: PANEL_HEIGHT,
     show: false,
     frame: false,
-    transparent: false, // 修复：透明窗口(WS_EX_LAYERED)下真实鼠标点击无法进入渲染进程；改不透明窗口后点击恢复
+    // 圆角方案：关闭系统圆角，改由 CSS 完全接管。
+    // transparent:true 赋予 per-pixel alpha，CSS 的 --radius-window (12px) 才能裁出真实窗口外形（非仅内裁 DWM 形状）。
+    // 副作用：WS_EX_LAYERED + WS_EX_NOACTIVATE 会使 WM_MOUSEACTIVATE 默认返回 MA_NOACTIVATEANDEAT(4) 吃掉点击，下方 hook 修复。
+    transparent: true,
+    backgroundColor: '#00000000',
+    backgroundMaterial: undefined,
     resizable: false,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    focusable: false, // 不可激活：呼出面板时输入框焦点保持不变
+    focusable: false, // 默认不可激活（WS_EX_NOACTIVATE），浏览态不抢焦点；输入态临时 setFocusable(true)
     alwaysOnTop: true,
-    hasShadow: true, // 系统原生阴影（透明窗口时被迫关闭，不透明窗口可用）
-    roundedCorners: true, // 系统圆角（CSS 外层圆角已对齐到 8px，避免双层圆角叠加）
+    hasShadow: false, // 透明窗口无 DWM 阴影，改由 CSS --shadow-window 绘制，贴合 CSS 圆角
+    roundedCorners: false, // 关闭系统 8px，用 CSS --radius-window 统一控制
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -756,13 +762,33 @@ function createWindow() {
     },
   });
 
+  // —— Windows 点击穿透修复（transparent + focusable:false 必需）——
+  // 原理：WS_EX_LAYERED(透明) + WS_EX_NOACTIVATE(不抢焦点) 使 WM_MOUSEACTIVATE 默认返回
+  // MA_NOACTIVATEANDEAT(4)，导致所有鼠标点击被吃掉无法进入渲染进程。
+  // 修复：hook WM_MOUSEACTIVATE (0x0021)，按当前交互模式条件返回：
+  //   浏览态（searchActive/noteEditing/shortcutCapturing 全 false）：MA_NOACTIVATE(3) — 不激活但派发点击
+  //   输入态（任一为 true）：MA_ACTIVATE(1) — 允许激活，使 input/textarea 能聚焦
+  // 兼容性：同时写 Buffer 并 return 数值，覆盖不同 Electron 版本的读取方式。
+  if (process.platform === 'win32') {
+    try {
+      win.hookWindowMessage(0x0021, (wParam) => {
+        const shouldActivate = searchActive || noteEditing || shortcutCapturing;
+        const result = shouldActivate ? 1 : 3; // 1=MA_ACTIVATE, 3=MA_NOACTIVATE
+        try { wParam.writeInt32LE(result, 0); } catch {}
+        return result;
+      });
+    } catch (err) {
+      console.error('hook WM_MOUSEACTIVATE failed:', err.message);
+    }
+  }
+
   win.setMenu(null);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
 
   win.once('ready-to-show', () => {
-    // 离屏方案：窗口只显示一次，之后“隐藏/呼出”只移动位置，避免透明窗口 show/hide 闪烁。
-    // 关键：先在屏幕内显示一帧，让 DWM 完成透明窗口表面合成，再移到屏幕外；
+    // 离屏方案：窗口只显示一次，之后“隐藏/呼出”只移动位置，避免窗口 show/hide 闪烁（acrylic 材质也需首帧合成）。
+    // 关键：先在屏幕内显示一帧，让 DWM 完成窗口表面/acrylic 材质合成，再移到屏幕外；
     // 否则每次从屏幕外移入都要重新合成，呼出就会闪一下。
     win.setPosition(0, 0);
     win.showInactive(); // focusable:false，不会抢走输入框焦点
@@ -784,7 +810,10 @@ function createWindow() {
   } else {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
+
+  // 透明窗口：无需 DWM acrylic 回退，保持 '#00000000' 让 CSS 材质与圆角完全自洽
 }
+
 
 function positionPanel() {
   if (!win) return;
@@ -1230,3 +1259,6 @@ if (!gotSingleInstanceLock) {
     // is only hidden, never really closed unless the app quits.
   });
 }
+
+
+

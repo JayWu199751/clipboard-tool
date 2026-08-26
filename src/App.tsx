@@ -75,89 +75,56 @@ function highlightText(text: string, query: string): ReactNode {
   );
 }
 
-function SunIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-    </svg>
-  );
-}
 
-function MoonIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
+function IconSearch(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx={11} cy={11} r={7}/><path d="m20 20-3.8-3.8"/></svg>);}
+function IconTrash(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>);}
+function IconCopy(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width={14} height={14} x={8} y={8} rx={2} ry={2}/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>);}
+function IconPin({filled}: {filled?: boolean}){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill={filled?"currentColor":"none"}><path d="M12 17v5" stroke="currentColor"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" stroke="currentColor"/></svg>);}
+function IconNote({filled}: {filled?: boolean}){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-4 3V7a3 3 0 0 1 3-3h10a4 4 0 0 1 4 4Z" stroke="currentColor"/><path d="M8 9h8M8 13h5" stroke="currentColor" fill={filled?"currentColor":"none"}/></svg>);}
+function IconImage(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width={18} height={18} x={3} y={3} rx={2} ry={2}/><circle cx={9} cy={9} r={2}/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>);}
+function IconX(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>);}
+function IconClipboard(){return(<svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6a1 1 0 0 1 1 1v1H8V6a1 1 0 0 1 1-1Z"/><rect x={6} y={8} width={12} height={12} rx={2}/></svg>);}
 
-function AutoIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" opacity="0.35" />
-    </svg>
-  );
-}
+function IconSun(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx={12} cy={12} r={4}/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>);}
+function IconMoon(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>);}
+function IconAuto(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx={12} cy={12} r={9}/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" opacity={0.35}/></svg>);}
+function getSourceTone(appName?: string){const n=(appName||"").toLowerCase();if(n.includes("备忘录")||n.includes("便签")||n.includes("notes"))return"source-notes";if(n.includes("figma"))return"source-figma";if(n.includes("safari")||n.includes("浏览器")||n.includes("browser")||n.includes("chrome")||n.includes("edge"))return"source-safari";if(n.includes("pages"))return"source-pages";if(n.includes("访达")||n.includes("finder")||n.includes("explorer"))return"source-finder";if(n.includes("预览")||n.includes("preview"))return"source-preview";if(n.includes("文本编辑")||n.includes("textedit")||n.includes("notepad"))return"source-textedit";if(n.includes("终端")||n.includes("terminal")||n.includes("powershell")||n.includes("cmd"))return"source-terminal";if(n.includes("截图")||n.includes("screenshot")||n.includes("snip"))return"source-screenshot";if(n.includes("代码")||n.includes("code")||n.includes("vscode")||n.includes("xcode"))return"source-code";return"source-icon";}
 
-function SearchIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="7" />
-      <path d="m21 21-4.35-4.35" />
-    </svg>
-  );
+// MOCK_CLIPBOARD_API for preview (when running outside Electron)
+if (typeof window !== "undefined" && !(window as any).clipboardAPI) {
+  (window as any).clipboardAPI = {
+    getHistory: async () => {
+      // Mock data for preview
+      const now = Date.now();
+      return [
+        { id: "1", type: "text", text: "v2.4.0\n- 支持新的 Fluid Search\n- 提升窗口缩放时的帧率...", createdAt: now - 2*60*1000, sourceApp: { appName: "备忘录", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+        { id: "2", type: "image", dataUrl: "https://picsum.photos/seed/clip1/200/120", createdAt: now - 18*60*1000, sourceApp: { appName: "Figma", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+        { id: "3", type: "text", text: "developer.apple.com\nhttps://developer.apple.com/design/human-interface-guidelines/", createdAt: now - 42*60*1000, sourceApp: { appName: "Safari", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+        { id: "4", type: "text", text: "主题：桌面剪切板轻评审\n结论：保留主操作卡、减少弹窗，用视频情绪承载高信息。", createdAt: now - 60*60*1000, sourceApp: { appName: "备忘录", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+        { id: "5", type: "text", text: "fig Design-Specs.fig", createdAt: now - 2*60*60*1000, sourceApp: { appName: "Figma", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+        { id: "6", type: "image", dataUrl: "https://picsum.photos/seed/clip2/200/120", createdAt: now - 4*60*60*1000, sourceApp: { appName: "预览", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
+      ];
+    },
+    onUpdated: (_cb: any) => {},
+    onPanelKey: (_cb: any) => {},
+    onPanelShown: (_cb: any) => {},
+    onFocusError: (_cb: any) => {},
+    copy: async () => true,
+    remove: async () => true,
+    pin: async () => true,
+    clear: async () => true,
+    setNote: async () => true,
+    beginNoteEdit: async () => true,
+    endNoteEdit: async () => {},
+    onShortcutCaptureStart: () => {},
+    onShortcutCaptureEnd: () => {},
+    tryShortcut: async () => ({ok: false, formatted: ""}),
+    cancelShortcut: async () => {},
+    hide: async () => {},
+    activateSearch: async () => {},
+    setSearchComposing: async () => {},
+  };
 }
-
-function TrashIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="9" y="9" width="13" height="13" rx="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-    </svg>
-  );
-}
-
-function NoteIcon({ filled = false }: { filled?: boolean }) {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 20h9" />
-      <path
-        d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"
-        fill={filled ? 'currentColor' : 'none'}
-      />
-    </svg>
-  );
-}
-
-function PinIcon({ filled = false }: { filled?: boolean }) {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" x2="12" y1="17" y2="22" />
-      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-    </svg>
-  );
-}
-
-function ImageIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="8.5" cy="8.5" r="1.5" />
-      <path d="m21 15-5-5L5 21" />
-    </svg>
-  );
-}
-
 function App() {
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -186,6 +153,7 @@ function App() {
   const [noteEdit, setNoteEdit] = useState<{ id: string; draft: string } | null>(null);
   const noteEditRef = useRef<{ id: string; draft: string } | null>(null);
   const noteInputRef = useRef<HTMLInputElement>(null);
+  const detailNoteRef = useRef<HTMLInputElement>(null);
   const noteSavePendingRef = useRef(false);
   const cancelNoteBlurRef = useRef(false);
 
@@ -216,10 +184,17 @@ function App() {
     const next = { id: target.id, draft: target.note ?? '' };
     noteEditRef.current = next;
     setNoteEdit(next);
-    requestAnimationFrame(() => {
-      noteInputRef.current?.focus();
-      noteInputRef.current?.select();
-    });
+    // 红框在列表 item-meta 位置，优先聚焦列表输入框，详情为兜底
+    const doFocus = () => {
+      const listEl = noteInputRef.current;
+      const detailEl = detailNoteRef.current;
+      // 若列表输入框存在但 detail 也存在，优先让列表获得焦点（符合截图红框）
+      if (listEl) { listEl.focus(); try{ listEl.select(); }catch{} return; }
+      if (detailEl) { detailEl.focus(); try{ detailEl.select(); }catch{} }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(doFocus));
+    setTimeout(doFocus, 60);
+    setTimeout(doFocus, 150);
   }, []);
 
   const saveNoteDraft = useCallback((id: string, draft: string) => {
@@ -278,7 +253,6 @@ function App() {
       await window.clipboardAPI.beginNoteEdit(id);
     });
   }, [finishNoteEditing, saveNoteDraft]);
-
   useEffect(() => {
     document.documentElement.dataset.theme = resolveTheme(theme);
     localStorage.setItem(THEME_KEY, theme);
@@ -416,235 +390,141 @@ function App() {
       ?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex, filteredEntries]);
 
-  const handleCopy = useCallback((id: string) => {
-    void window.clipboardAPI.copy(id);
-  }, []);
+  ;
 
-  const handleRemove = useCallback((id: string) => {
-    void window.clipboardAPI.remove(id);
+    const selectedEntry = filteredEntries[selectedIndex] ?? null;
+  const themeTip = theme === "light" ? "切换到深色模式" : theme === "dark" ? "切换到跟随系统" : "切换到浅色模式";
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [toast, setToast] = useState<{text: string; actionLabel?: string; onAction?: () => void} | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const [scrollState, setScrollState] = useState({ visible: false, top: 0, height: 28 });
+  const showToast = useCallback((text: string, actionLabel?: string, onAction?: () => void) => {
+    setToast({ text, actionLabel, onAction });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
   }, []);
-
-  const handlePin = useCallback((id: string) => {
-    void window.clipboardAPI.pin(id);
-  }, []);
-
-  const handleClear = useCallback(() => {
-    void window.clipboardAPI.clear();
-  }, []);
-
-  const handleToggleTheme = useCallback(() => {
-    setTheme((t) => (t === 'light' ? 'dark' : t === 'dark' ? 'system' : 'light'));
-  }, []);
-
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    let hideTimer: number | null = null;
+    const update = () => {
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      if (scrollHeight <= clientHeight) { setScrollState({ visible: false, top: 0, height: 28 }); return; }
+      const visibleRatio = clientHeight / scrollHeight;
+      const thumbH = Math.max(28, clientHeight * visibleRatio);
+      const maxTop = clientHeight - thumbH;
+      const maxScroll = scrollHeight - clientHeight;
+      const top = maxScroll > 0 ? (scrollTop / maxScroll) * maxTop : 0;
+      setScrollState({ visible: true, top, height: thumbH });
+      if (hideTimer) window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setScrollState((s) => ({ ...s, visible: false })), 900);
+    };
+    const onScroll = () => update();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); if (hideTimer) window.clearTimeout(hideTimer); };
+  }, [filteredEntries.length]);
+  const handleCopy = useCallback((id: string) => { void window.clipboardAPI.copy(id); showToast("已复制并粘贴"); }, [showToast]);
+  const handleRemove = useCallback((id: string) => { void window.clipboardAPI.remove(id); showToast("已删除"); }, [showToast]);
+  const handlePin = useCallback((id: string) => { void window.clipboardAPI.pin(id); }, []);
+  const handleClear = useCallback(() => { void window.clipboardAPI.clear(); showToast("历史已清空"); }, [showToast]);
+  const handleToggleTheme = useCallback(() => { setTheme((t) => (t === "light" ? "dark" : t === "dark" ? "system" : "light")); }, []);
+  const openDetail = useCallback((idx: number) => { setSelectedIndex(idx); setDetailOpen(true); }, []);
   return (
-    <div className="app">
-      <header className="header">
-        <div className="brand">
-          <span className="brand-title">剪贴板</span>
-        </div>
-        <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            data-tip={theme === 'light'
-                ? '切换到深色模式'
-                : theme === 'dark'
-                  ? '切换到跟随系统'
-                  : '切换到浅色模式'}
-            data-tip-pos="below"
-            onClick={handleToggleTheme}
-          >
-            {theme === 'light' ? <MoonIcon /> : theme === 'dark' ? <SunIcon /> : <AutoIcon />}
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            data-tip="清空历史" data-tip-pos="below"
-            disabled={entries.length === 0}
-            onClick={handleClear}
-          >
-            <TrashIcon />
-          </button>
-        </div>
-      </header>
-
-      <div
-        className={`search-wrap${searchActive ? ' active' : ' disabled'}`}
-        data-tip={searchActive ? undefined : '按 空格 搜索'}
-        data-tip-pos="below"
-        onClick={() => { if (!searchActive) void window.clipboardAPI.activateSearch(); }}
-      >
-        <SearchIcon />
-        <input
-          ref={searchInputRef}
-          className="search"
-          type="text"
-          placeholder={searchActive ? '搜索文字、备注或来源应用…' : ''}
-          value={query}
-          readOnly={!searchActive}
-          onChange={(e) => setQuery(e.target.value)}
-          onCompositionStart={() => void window.clipboardAPI.setSearchComposing(true)}
-          onCompositionEnd={() => void window.clipboardAPI.setSearchComposing(false)}
-          spellCheck={false}
-          aria-label="搜索历史"
-        />
-        {searchActive && query.length > 0 && (
-          <button type="button" className="clear-query" data-tip="清空" onClick={() => setQuery('')}>
-            ×
-          </button>
-        )}
-      </div>
-
-      <div className="list" ref={listRef}>
-        {filteredEntries.length === 0 ? (
-          <div className="empty">
-            <div className="empty-icon">{entries.length === 0 ? '📋' : '🔍'}</div>
-            <p>
-              {entries.length === 0
-                ? '还没有剪贴板内容，去复制一些文字或图片吧'
-                : `没有找到匹配 “${query.trim()}” 的结果`}
-            </p>
+    <div className="desktop">
+      <div className="app-window" lang="zh-CN">
+        <header className="titlebar">
+          <div className="titlebar-center"><span>剪切板</span><span>{filteredEntries.length ? `${filteredEntries.length} 项 · ${entries.length} 总数` : `${entries.length} 项`}</span></div>
+          <div className="titlebar-actions">
+            <button type="button" className="icon-button" data-tooltip={themeTip} aria-label={themeTip} onClick={handleToggleTheme}>{theme === "light" ? <IconMoon/> : theme === "dark" ? <IconAuto/> : <IconSun/>}</button>
+            <button type="button" className="icon-button" data-tooltip="清空历史" aria-label="清空历史" disabled={entries.length===0} onClick={handleClear}><IconTrash/></button>
           </div>
-        ) : (
-          filteredEntries.map((entry, i) => (
-            <div
-              key={entry.id}
-              className={`item${i === selectedIndex ? ' selected' : ''}`}
-              data-selected={i === selectedIndex}
-              // 鼠标悬浮不改变选中框（选择框只跟随键盘 ↑↓）
-              onClick={() => setSelectedIndex(i)}
-              onDoubleClick={() => handleCopy(entry.id)}
-            >
-              <div className="item-icon" title={entry.sourceApp ? `${entry.sourceApp.appName} — ${entry.sourceApp.windowTitle || entry.sourceApp.exePath}` : undefined}>
-                {entry.sourceApp?.iconDataUrl ? (
-                  <img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} className="source-app-icon" draggable={false} />
-                ) : entry.type === 'image' ? (
-                  <ImageIcon />
-                ) : (
-                  <span className="text-badge">T</span>
-                )}
+        </header>
+        <div className="app-body">
+          <section className="content">
+            <div className="card-top">
+              <div className="card-search">
+                <label className={`search-field ${searchActive?"":"is-disabled"}`} onClick={()=>{if(!searchActive) void window.clipboardAPI.activateSearch();}}>
+                  <IconSearch/>
+                  <input ref={searchInputRef} type="text" placeholder={searchActive?"搜索文字、备注或来源应用…":"搜索剪切板…"} value={query} readOnly={!searchActive} onChange={(e)=>setQuery(e.target.value)} onCompositionStart={()=>void window.clipboardAPI.setSearchComposing(true)} onCompositionEnd={()=>void window.clipboardAPI.setSearchComposing(false)} spellCheck={false} aria-label="搜索历史"/>
+                  {searchActive && query.length>0 && (<button type="button" className="icon-button" style={{width:22,height:22}} aria-label="清空搜索" onClick={(e)=>{e.preventDefault();e.stopPropagation();setQuery("");searchInputRef.current?.focus();}}><IconX/></button>)}
+                </label>
               </div>
-              <div className="item-body">
-                {entry.type === 'text' ? (
-                  <p className="item-text">{searchActive ? highlightText(entry.text ?? '', query) : entry.text}</p>
-                ) : (
-                  <div className="item-image">
-                    <img src={entry.dataUrl} alt="剪贴板图片" draggable={false} />
-                  </div>
-                )}
-                <div className="item-meta">
-                  <span className="item-time">{formatTime(entry.createdAt)}</span>
-                  {noteEdit?.id === entry.id && (
-                    <>
-                      <span className="meta-separator">·</span>
-                      <input
-                        ref={noteInputRef}
-                        className="note-input"
-                        type="text"
-                        value={noteEdit.draft}
-                        maxLength={MAX_NOTE_LENGTH}
-                        spellCheck={false}
-                        aria-label="备注"
-                        onChange={(event) => {
-                          const next = { ...noteEdit, draft: event.target.value };
-                          noteEditRef.current = next;
-                          setNoteEdit(next);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            finishNoteEditing(false);
-                          } else if (event.key === 'Escape') {
-                            event.preventDefault();
-                            finishNoteEditing(true);
-                          }
-                        }}
-                        onBlur={() => {
-                          if (!cancelNoteBlurRef.current) finishNoteEditing(false);
-                        }}
-                      />
-                    </>
-                  )}
-                  {noteEdit?.id !== entry.id && entry.note && (
-                    <>
-                      <span className="meta-separator">·</span>
-                      <span className="item-note" title={entry.note}>
-                        {searchActive ? highlightText(entry.note, query) : entry.note}
-                      </span>
-                    </>
+            </div>
+            <div className="content-layout">
+              <section className="history-panel" aria-label="剪切记录">
+                <div className="history-heading"><span>{searchActive && query.trim() ? "搜索结果" : "今天"}</span><span>{filteredEntries.length} 项</span></div>
+                <div className="history-list" ref={listRef} role="listbox" aria-label="剪切记录列表">
+                  {filteredEntries.length===0 ? (
+                    <div className="empty-state" role="status">
+                      <div className="empty-icon" aria-hidden="true">{entries.length===0?"📋":"🔍"}</div>
+                      <div className="empty-title">{entries.length===0?"还没有剪切板内容":`没有找到匹配"${query.trim()}"的结果`}</div>
+                      <div className="empty-subtitle">{entries.length===0?"去复制一些文字或图片吧，它们会自动出现在这里":"试试换个关键词或清空搜索条件"}</div>
+                    </div>
+                  ) : (
+                    filteredEntries.map((entry,i)=>{
+                      const isSelected=i===selectedIndex;
+                      const sourceTone=getSourceTone(entry.sourceApp?.appName);
+                      const previewText=(entry.text??"").trim();
+                      return(
+                        <div key={entry.id} role="option" aria-selected={isSelected} data-selected={isSelected?"true":"false"} className={`history-item${isSelected?" is-selected":""}`} onClick={()=>setSelectedIndex(i)} onDoubleClick={()=>handleCopy(entry.id)}>
+                          <div className={`item-icon source-icon ${sourceTone} type-${entry.type}`} title={entry.sourceApp? `${entry.sourceApp.appName} — ${entry.sourceApp.windowTitle || entry.sourceApp.exePath}`:undefined} onClick={(e)=>{e.stopPropagation();openDetail(i);}} role="button" tabIndex={0} aria-label="查看详情">
+                            {entry.sourceApp?.iconDataUrl ? (<img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:10}} draggable={false}/>) : entry.type==="image" ? (<IconImage/>) : (<span style={{fontSize:11,fontWeight:700}}><IconClipboard/></span>)}
+                          </div>
+                          <div className="item-main" onClick={(e)=>{e.stopPropagation();openDetail(i);}}>
+                            {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? highlightText(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:72,height:50,objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
+                            <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt)}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? highlightText(entry.note,query):entry.note}</span></>) : null}</div>
+                          </div>
+                          <div className="item-actions">
+                            <button type="button" className="icon-button" data-tooltip={entry.pinned?"取消置顶":"置顶"} data-action="pin" aria-label={entry.pinned?"取消置顶":"置顶"} onClick={(e)=>{e.stopPropagation();handlePin(entry.id);}}><IconPin filled={entry.pinned}/></button>
+                            <button type="button" className="icon-button" data-tooltip={entry.note?"编辑备注":"添加备注"} data-action="note" aria-label={entry.note?"编辑备注":"添加备注"} onClick={(e)=>{e.stopPropagation();handleBeginNoteEdit(i,entry.id);}}><IconNote filled={Boolean(entry.note)}/></button>
+                            <button type="button" className="icon-button" data-tooltip="复制并粘贴" data-action="copy" aria-label="复制并粘贴" onClick={(e)=>{e.stopPropagation();handleCopy(entry.id);}}><IconCopy/></button>
+                            <button type="button" className="icon-button is-danger" data-tooltip="删除" data-action="trash" aria-label="删除" onClick={(e)=>{e.stopPropagation();handleRemove(entry.id);}}><IconTrash/></button>
+                          </div>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
-              </div>
-              <div className="item-actions">
-                <button type="button" className="icon-btn small" data-tip={entry.pinned ? '取消置顶' : '置顶'} onClick={(e) => { e.stopPropagation(); handlePin(entry.id); }}>
-                  <PinIcon filled={entry.pinned} />
-                </button>
-                <button type="button" className="icon-btn small" data-tip={entry.note ? '编辑备注' : '添加备注'} onClick={(e) => { e.stopPropagation(); handleBeginNoteEdit(i, entry.id); }}>
-                  <NoteIcon filled={Boolean(entry.note)} />
-                </button>
-                <button type="button" className="icon-btn small" data-tip="复制并粘贴" onClick={(e) => { e.stopPropagation(); handleCopy(entry.id); }}>
-                  <CopyIcon />
-                </button>
-                <button type="button" className="icon-btn small danger" data-tip="删除" onClick={(e) => { e.stopPropagation(); handleRemove(entry.id); }}>
-                  <TrashIcon />
-                </button>
-              </div>
+                <div className={`history-scrollbar ${scrollState.visible?"is-visible":""}`} aria-hidden="true"><span className="history-scrollbar-thumb" style={{height:scrollState.height,transform:`translateY(${scrollState.top}px)`}}/></div>
+              </section>
+              <aside className={`detail-panel ${detailOpen?"mobile-open":""}`} aria-label="详情" aria-hidden={!detailOpen}>
+                <header className="detail-header">
+                  <button type="button" className="icon-button detail-back is-visible" aria-label="返回列表" data-tooltip="返回列表" onClick={()=>setDetailOpen(false)}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18 9 12l6-6"/></svg></button>
+                  <h2 style={{margin:0,fontSize:13,fontWeight:700}}>详情</h2>
+                  <span className="type-badge">{selectedEntry ? (selectedEntry.type==="image"?"图片":"文本") : "—"}</span>
+                </header>
+                {selectedEntry ? (
+                  <>
+                    <div className="detail-actions">
+                      <button type="button" className="soft-button" style={{flex:1}} onClick={()=>handleCopy(selectedEntry.id)}><IconCopy/> 复制</button>
+                      <button type="button" className="tool-button" onClick={()=>handlePin(selectedEntry.id)}><IconPin filled={selectedEntry.pinned}/> {selectedEntry.pinned?"取消置顶":"置顶"}</button>
+                      <button type="button" className="tool-button" onClick={()=>handleRemove(selectedEntry.id)}><IconTrash/> 删除</button>
+                    </div>
+                    <div className="detail-scroll">
+                      {selectedEntry.type==="text" ? (<div className="preview-surface"><div className="text-preview">{selectedEntry.text || "（空内容）"}</div></div>) : (<div className="preview-surface" style={{borderRadius:10,overflow:"hidden",border:"1px solid var(--line)",background:"rgba(255,255,255,0.72)"}}><img src={selectedEntry.dataUrl} alt="剪贴板图片" style={{width:"100%",display:"block"}} draggable={false}/></div>)}
+                      {selectedEntry.sourceApp && (<div className="file-detail source-block"><div className="source-label">来源</div><div className="source-row">{selectedEntry.sourceApp.iconDataUrl ? <img src={selectedEntry.sourceApp.iconDataUrl} alt="" className="source-icon-img" draggable={false}/> : <span className="item-icon source-icon source-icon--sm"><IconClipboard/></span>}<div className="source-meta"><div className="source-appname">{selectedEntry.sourceApp.appName}</div><div className="source-subtitle">{selectedEntry.sourceApp.windowTitle || selectedEntry.sourceApp.exePath}</div></div></div></div>)}
+                      <div className="note-section"><div className="note-label">备注</div>{noteEdit?.id===selectedEntry.id ? (<input ref={detailNoteRef as any} className="note-input note-input--detail" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注，回车保存 · Esc 取消" spellCheck={false} onChange={(e)=>{const next={...noteEdit,draft:e.target.value};noteEditRef.current=next;setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault();finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} aria-label="备注输入框" autoFocus />) : (<div onClick={()=>handleBeginNoteEdit(selectedIndex,selectedEntry.id)} className={`note-card ${selectedEntry.note ? "has-note" : ""}`}>{selectedEntry.note || "点击添加备注…"}</div>)}
+                      </div>
+                      <div className="detail-meta">{formatTime(selectedEntry.createdAt)} · {new Date(selectedEntry.createdAt).toLocaleString("zh-CN")}</div>
+                    </div>
+                  </>
+                ) : (<div className="detail-empty"><div className="empty-icon">◎</div><div className="empty-text">未选择条目</div></div>)}
+              </aside>
             </div>
-          ))
-        )}
+          </section>
+        </div>
+        <footer className="shortcut-bar" aria-label="快捷键提示">
+          {focusError ? (<span className="footer-error" role="status">{focusError.message}</span>) : noteEdit ? (<span>回车 保存 · Esc 取消 · {noteEdit ? `${noteEdit.draft.length}/{MAX_NOTE_LENGTH}` : "0/{MAX_NOTE_LENGTH}"}</span>) : searchActive ? (<><span className="shortcut"><kbd>ESC</kbd><span>退出搜索</span></span><span className="shortcut"><kbd>↑↓</kbd><span>选择</span></span><span className="shortcut"><kbd>回车</kbd><span>复制</span></span></>) : (<><span className="shortcut"><kbd>Z</kbd><span>置顶</span></span><span className="shortcut"><kbd>DEL</kbd><span>删除</span></span><span className="shortcut"><kbd>回车</kbd><span>复制</span></span><span className="shortcut"><kbd>B</kbd><span>备注</span></span><span className="shortcut"><kbd>ESC</kbd><span>隐藏界面</span></span><span className="shortcut"><kbd>空格</kbd><span>搜索</span></span></>)}
+        </footer>
       </div>
 
-      <footer className="footer">
-        {focusError ? (
-          <span className="footer-error" role="status">{focusError.message}</span>
-        ) : (
-          <span className="hint">
-            {noteEdit
-              ? 'Enter 保存备注 · Esc 取消'
-              : searchActive
-              ? 'Esc 退出搜索 · ↑↓ 选择 · Enter 复制粘贴'
-              : '空格 搜索 · ↑↓ 选择 · Enter 复制粘贴 · Del 删除 · Z 置顶 · B 备注 · Esc 关闭'}
-          </span>
-        )}
-
-      </footer>
-
-      {shortcutCapture && (
-        <div className="shortcut-overlay">
-          <div className="shortcut-card">
-            <h2 className="shortcut-title">更换快捷键</h2>
-            <p className="shortcut-current">
-              当前：<span className="kbd">{shortcutCapture.current}</span>
-            </p>
-            <p className="shortcut-hint">
-              请按下新的快捷键组合，例如
-              <span className="kbd">Ctrl</span> + <span className="kbd">Shift</span> + <span className="kbd">V</span>
-            </p>
-            {shortcutCapture.status && (
-              <p className={`shortcut-status ${shortcutCapture.status.ok ? 'ok' : 'err'}`}>
-                {shortcutCapture.status.text}
-              </p>
-            )}
-            <div className="shortcut-actions">
-              <button
-                type="button"
-                className="shortcut-cancel"
-                onClick={() => {
-                  void window.clipboardAPI.cancelShortcut();
-                  setShortcutCapture(null);
-                }}
-              >
-                取消（Esc）
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <div className={`toast ${toast?"is-visible":""}`} role="status" aria-live="polite" aria-atomic="true"><span>{toast?.text}</span>{toast?.actionLabel && toast.onAction && (<button type="button" className="toast-action" onClick={()=>{toast.onAction?.();setToast(null); if(toastTimerRef.current) window.clearTimeout(toastTimerRef.current);}}>{toast.actionLabel}</button>)}</div>
+      {shortcutCapture && (<div className="shortcut-overlay" role="dialog" aria-modal="true" aria-label="更换快捷键"><div className="shortcut-card"><h2 className="shortcut-title">更换快捷键</h2><p className="shortcut-current">当前：<span className="kbd">{shortcutCapture.current}</span></p><p className="shortcut-hint">请按下新的快捷键组合，例如 <span className="kbd">Ctrl</span> + <span className="kbd">Shift</span> + <span className="kbd">V</span></p>{shortcutCapture.status && <p className={`shortcut-status ${shortcutCapture.status.ok?"ok":"err"}`}>{shortcutCapture.status.text}</p>}<button type="button" className="tool-button shortcut-cancel" onClick={()=>{void window.clipboardAPI.cancelShortcut(); setShortcutCapture(null);}}>取消（Esc）</button></div></div>)}
     </div>
   );
 }
 
 export default App;
-
-
-
