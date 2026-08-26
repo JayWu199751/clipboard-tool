@@ -3020,3 +3020,230 @@ html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10); }
 html[data-theme="dark"] .app-window {
   box-shadow: none !important;
 }
+/* fix3: 真正的界面紧贴卡片四边框 — 外层窗口与卡片0距离，内层内容贴边无留白 */
+.desktop { padding: 0 !important; display: grid !important; place-items: stretch !important; width: 100% !important; height: 100% !important; overflow: hidden !important; }
+.app-window { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; margin: 0 !important; border-radius: 12px !important; overflow: hidden !important; }
+@media (max-width: 980px) {
+  .desktop { padding: 0 !important; }
+  .app-window { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; margin: 0 !important; }
+}
+@media (max-width: 760px) {
+  .desktop { padding: 0 !important; display: grid !important; place-items: stretch !important; }
+  .app-window { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; border-radius: 12px !important; margin: 0 !important; border: 0.5px solid rgba(255,255,255,0.72) !important; }
+}
+html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10) !important; }
+
+/* fix3b: 修正桌面与卡片高度真正占满视口，消除底部留白 */
+#root { height: 100vh !important; min-height: 100vh !important; display: block !important; }
+html, body { height: 100vh !important; min-height: 100vh !important; }
+.desktop { height: 100vh !important; min-height: 100vh !important; }
+.app-window { height: 100vh !important; min-height: 100vh !important; max-height: 100vh !important; }
+.content { flex: 1 1 auto !important; min-height: 0 !important; }
+.content-layout { flex: 1 1 auto !important; min-height: 0 !important; }
+.history-panel { flex: 1 1 auto !important; min-height: 0 !important; }
+.history-list { flex: 1 1 auto !important; min-height: 0 !important; }
+
+/* fix3-inner: 恢复列表卡片圆角与到边框的间距（12px留白），外层仍0距离贴合卡片四边 */
+.card-top { padding: 12px 16px 12px !important; margin: 0 !important; }
+.card-search { padding: 0 !important; }
+.card-search .search-field { margin: 0 !important; border-radius: 12px !important; border: 1px solid var(--line) !important; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55), 0 2px 8px rgba(45,60,72,0.06) !important; }
+html[data-theme="dark"] .card-search .search-field { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 0 rgba(255,255,255,0.06) !important; }
+.content-layout { padding: 0 12px 12px !important; margin: 0 !important; }
+.history-panel { padding: 0 !important; margin: 0 !important; }
+.history-heading { padding: 6px 4px 8px !important; margin: 0 !important; }
+.history-list { padding: 0 0 4px !important; margin: 0 !important; }
+.history-item { margin: 0 0 8px !important; border-radius: 12px !important; border: 0.5px solid var(--line) !important; border-bottom: 0.5px solid var(--line) !important; }
+.history-item:last-child { margin-bottom: 0 !important; border-bottom: 0.5px solid var(--line) !important; }
+.shortcut-bar { border-radius: 0 0 12px 12px !important; margin: 0 !important; }
+.titlebar { border-radius: 12px 12px 0 0 !important; margin: 0 !important; }
+
+
+
+/* ===== fix4: 最外层父容器尺寸由内容撑开 — 按需求将外层从 100%/100vh 强制拉伸改为由内容决定 ===== */
+/* 覆盖 fix3/fix3b 的 100vh/100% 强制撑满，改由内容撑开，消除真实界面边框与卡片边框的视觉间距 */
+html, body {
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+#root {
+  width: fit-content !important;
+  height: fit-content !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  display: block !important;
+}
+.desktop {
+  width: fit-content !important;
+  height: fit-content !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  display: block !important;
+  place-items: initial !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+.app-window {
+  width: 418px !important;
+  height: fit-content !important;
+  min-height: 0 !important;
+  max-width: 418px !important;
+  max-height: min(823px, 100vh) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+/* 内部容器不再 flex:1 强制撑满，改由内容高度决定 */
+.content {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+.content-layout {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  /* 卡片真正贴边：移除左右 12px 留白，界面边框与卡片边框 0 距离 */
+  padding: 0 !important;
+}
+.history-panel {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+.history-list {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: 520px !important;
+  overflow: auto !important;
+  /* 移除为留白预留的 padding，让首尾卡片贴到容器边 */
+  padding: 0 !important;
+}
+.history-heading {
+  padding: 8px 0 8px !important;
+}
+/* 卡片左右贴边：当内容撑开时，卡片宽度跟随父容器，左右无额外间距 */
+.history-item {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 100% !important;
+}
+/* 响应式覆盖：窄屏同样由内容撑开 */
+@media (max-width: 980px) {
+  .desktop { width: fit-content !important; height: fit-content !important; padding: 0 !important; }
+  .app-window { width: 418px !important; max-width: 418px !important; height: fit-content !important; }
+}
+@media (max-width: 760px) {
+  .desktop { width: fit-content !important; height: fit-content !important; display: block !important; }
+  .app-window { width: 100vw !important; max-width: 418px !important; height: fit-content !important; }
+}
+
+
+
+/* ===== fix5: 真实窗口尺寸下卡片占满剩余空间 — 修正 fix4 导致纵向未填满的问题 ===== */
+/* 原因：fix4 将最外层改为 fit-content 后，内部 flex:0 0 auto + max-height:520 导致 history-list 被限高，窗口固定 418x823 时下方留空 */
+/* 策略：外层恢复 100%/100vh 占满真实窗口（图像尺寸=真实界面），内部 flex:1 撑满，横向 0 间距让卡片贴边但仍 100% 宽度 */
+html, body {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 100vh !important;
+  overflow: hidden !important;
+}
+#root {
+  width: 100% !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  min-height: 100vh !important;
+  display: block !important;
+}
+.desktop {
+  width: 100% !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  min-height: 100vh !important;
+  display: grid !important;
+  place-items: stretch !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+.app-window {
+  width: 100% !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+.content {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  align-self: stretch !important;
+}
+.content-layout {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+  align-self: stretch !important;
+}
+.history-panel {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  align-self: stretch !important;
+}
+.history-list {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: 100% !important;
+  align-self: stretch !important;
+  overflow: auto !important;
+  padding: 0 !important;
+}
+.history-heading {
+  padding: 6px 12px 8px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+.card-top {
+  padding: 12px 12px 12px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+.card-search .search-field {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* 卡片横向占满：左右贴边（0 间距）但宽度 100% 填满父容器 */
+.history-item {
+  margin: 0 0 8px !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  border-radius: 12px !important;
+}
+.history-item:last-child { margin-bottom: 0 !important; }
+@media (max-width: 980px) {
+  .desktop { width: 100% !important; height: 100% !important; padding: 0 !important; }
+  .app-window { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important; }
+}
+@media (max-width: 760px) {
+  .desktop { width: 100% !important; height: 100% !important; display: grid !important; place-items: stretch !important; }
+  .app-window { width: 100% !important; max-width: none !important; height: 100% !important; }
+}
