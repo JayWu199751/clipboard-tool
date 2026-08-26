@@ -120,8 +120,8 @@
       place-items: center;
       width: 100%;
       height: 100%;
-      /* 透明窗口：16px 透明边让 CSS 阴影与圆角完整显示，圆角外 per-pixel alpha 自动穿透 */
-      padding: 16px;
+      /* 0 距离：窗口即卡片，移除 16px 透明边，卡片边框与应用边框重合，圆角外 per-pixel alpha 仍自动穿透 */
+      padding: 0;
       overflow: hidden;
       background: transparent;
     }
@@ -130,10 +130,10 @@
       position: relative;
       display: flex;
       flex-direction: column;
-      width: calc(100% - 32px);
-      height: calc(100% - 32px);
-      max-width: 418px;
-      max-height: 823px;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      max-height: none;
       min-height: 0;
       overflow: hidden;
       border: 0.5px solid rgba(255,255,255,0.72);
@@ -2945,7 +2945,7 @@ html[data-theme="dark"] .content-header h1, html[data-theme="dark"] .detail-head
 .empty-state strong { letter-spacing:-0.01em !important; }
 .preview-surface { border-radius:10px !important; }
 .detail-image { border-radius:10px !important; }
-/* desktop 的 16px 透明边已在主定义完成，此处不再覆盖为 0，避免阴影被裁 */
+/* desktop 已 0  padding，卡片与窗口 0 距离重合 */
 
 
 /* App.tsx 伴生样式 — Apple 排印与 craft 细节 */
@@ -2997,7 +2997,7 @@ html[data-theme="dark"] .note-input { background: rgba(58,58,60,0.72); border-co
 
 
 /* ===== 透明窗口：CSS 圆角已在 .desktop/.app-window 主定义中完成 ===== */
-/* 主定义已包含：desktop padding:16px、app-window calc(100%-32px)+max 418×823、overflow:hidden、var(--radius-window)、var(--shadow-window) */
+/* 主定义已更新：desktop 0  padding、app-window 100% 与窗口重合、0 距离 */
 /* 此处仅保留主题相关的细微覆盖，无 !important，避免轰炸 */
 html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10); }
 /* 透明窗口下已全局 transparent，无需重复声明 */

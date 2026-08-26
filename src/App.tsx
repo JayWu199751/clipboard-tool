@@ -384,7 +384,7 @@ function App() {
     if (searchActiveRef.current) setSelectedIndex(0);
   }, [query]);
 
-  // 透明窗口点击穿透：16px 透明边 + 12px 圆角外应穿透到下层窗口
+  // 透明窗口点击穿透：0 距离（窗口即卡片） + 12px 圆角外应穿透到下层窗口
   useEffect(() => {
     const desktop = document.querySelector('.desktop') as HTMLElement | null;
     const appWindow = document.querySelector('.app-window') as HTMLElement | null;

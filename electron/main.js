@@ -11,8 +11,8 @@ const { execFile, spawn } = require('child_process');
 const MAX_HISTORY = 200;
 const MAX_NOTE_LENGTH = 200;
 const POLL_INTERVAL = 600;
-const PANEL_WIDTH = 450;
-const PANEL_HEIGHT = 855;
+const PANEL_WIDTH = 418;
+const PANEL_HEIGHT = 823;
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
