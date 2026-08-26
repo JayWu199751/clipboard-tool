@@ -662,7 +662,7 @@
     .history-item:hover {
       border-color: var(--line-strong);
       background: var(--surface-hover);
-      box-shadow: 0 4px 14px rgba(46, 60, 72, 0.08);
+      box-shadow: none;
     }
 
     .history-item.is-selected {
@@ -673,7 +673,7 @@
     .history-item.dragging {
       z-index: 10;
       border-color: rgba(0, 122, 255, 0.32);
-      box-shadow: 0 14px 34px rgba(46, 60, 72, 0.18);
+      box-shadow: none;
       pointer-events: none;
     }
 
@@ -2228,7 +2228,7 @@
       padding: 10px 102px 10px 12px;
       border-radius: 13px;
       background: rgba(255, 255, 255, 0.78);
-      box-shadow: 0 1px 2px rgba(44, 60, 72, 0.04), 0 6px 18px rgba(44, 60, 72, 0.05);
+      box-shadow: none;
     }
 
     .history-item.revealed {
@@ -2242,7 +2242,7 @@
     .history-item:hover {
       border-color: var(--line-strong);
       background: rgba(255, 255, 255, 0.94);
-      box-shadow: 0 8px 22px rgba(44, 60, 72, 0.09);
+      box-shadow: none;
     }
 
     .item-icon {
@@ -2742,7 +2742,7 @@ html[data-theme="dark"] .titlebar {
   border-radius: var(--radius-card) !important;
   background: var(--surface) !important;
   border: 0.5px solid var(--line) !important;
-  box-shadow: var(--shadow-card) !important;
+  box-shadow: none !important;
   will-change: transform !important;
   transition: transform var(--spring-snappy), box-shadow var(--spring-snappy), border-color var(--micro), background var(--micro), opacity var(--micro) !important;
   transform-origin: center center !important;
@@ -2750,7 +2750,7 @@ html[data-theme="dark"] .titlebar {
 .history-item:hover {
   background: var(--surface-hover) !important;
   border-color: var(--line-strong) !important;
-  box-shadow: var(--shadow-card-hover) !important;
+  box-shadow: none !important;
   transform: translateY(-1px) !important;
 }
 .history-item:active {
@@ -2760,7 +2760,7 @@ html[data-theme="dark"] .titlebar {
 .history-item.is-selected {
   background: var(--surface-selected) !important;
   border-color: rgba(0,122,255,0.24) !important;
-  box-shadow: 0 0 0 0.5px rgba(0,122,255,0.20) inset, var(--shadow-card) !important;
+  box-shadow: inset 0 0 0 0.5px rgba(0,122,255,0.20) !important;
 }
 .history-item.is-selected:hover { background: var(--surface-selected-hover) !important; }
 html[data-theme="dark"] .history-item { border-color: rgba(255,255,255,0.07) !important; }
@@ -3003,3 +3003,14 @@ html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10); }
 /* 透明窗口下已全局 transparent，无需重复声明 */
 
 
+
+/* fix: 移除卡片外部阴影 — 卡片仅保留边框与背景，去除外部阴影以符合 Apple 极简材质 */
+.history-item,
+.history-item:hover,
+.history-item:active,
+.history-item.dragging {
+  box-shadow: none !important;
+}
+.history-item.is-selected {
+  box-shadow: inset 0 0 0 0.5px rgba(0,122,255,0.20) !important;
+}
