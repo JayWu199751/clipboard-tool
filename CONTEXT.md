@@ -6,6 +6,52 @@
 
 Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪贴板（600ms），把文字/图片历史存入 `%APPDATA%\ClipboardTool\clipboard-history.json`；渲染进程只负责面板 UI 与键盘导航。全局快捷键 `Ctrl+Shift+V` 呼出不可激活（WS_EX_NOACTIVATE）的置顶浮层面板，不抢占输入框焦点。
 
+
+## 设计系统 — Apple (Espana) Cathedral
+
+> Cathedral of white space with whispered headlines. A vast pale hall where massive weight-700 type hangs in the air, tethered only by pastel product colors and a single blue thread.
+
+本项目 UI 采用 Apple (Espana) 产品页语言的桌面化移植：
+
+**Tokens（已落地到 src/styles.css :root）**
+| 语义 | 值 | 用途 |
+|------|-----|------|
+| Primary Ink | #1d1d1f | 主文本、标题、强对比前景 |
+| Mid Gray | #707070 | 次要文本、禁用占位 |
+| Deep Gray | #474747 | 导航、工具按钮默认 |
+| Hairline | #d6d6d6 | 唯一允许的边框（毛细线，分区不用实线） |
+| Canvas | #f5f5f7 | 窗口画布灰带，与 Paper 交替形成节奏 |
+| Paper | #ffffff | 卡片、白底、输入框 |
+| Cool Wash | #e8e8ed | 悬浮洗色、hover 底 |
+| Faded Surface | #fafafc | 抬升面板、导航毛玻璃 |
+| Quiet Dot | #777779 | 分页点、微弱指示 |
+| Electric Blue | #0071e3 | 唯一彩色 CTA 实心胶囊按钮 |
+| Link Blue | #0066cc | 行内链接/高亮 |
+| Ember | #b64400 | 新品/警示点缀 |
+|  pastel finishes | Sky #c8d8e0 / Citrus #dddc8c / Starlight #f0e4d3 / Silver #e3e4e5 / Blush #e8d0d0 / Indigo #596680 / Midnight #2e3642 | 图标与插画的唯一彩色来源（来源应用色板） |
+
+**排版**
+- SF Pro Display 600/700 作标题（tracking -1.44px at 96px, -0.28px at 56px, +0.007em at 28px）
+- SF Pro Text 400 作正文 13px（tracking -0.08px）、微文案 11-12px（tracking -0.04em~0.04em），`font-feature-settings: "numr" 1` 保持数位等宽
+- 行高：Display 1.04–1.07 正本 1.45 形成层次，无需字号跳变
+
+**间距与圆角**
+- 基准 4px，密度 comfortable；卡片 16px（小密度）/ 28px（大卡），按钮 980px/999px 胶囊，输入 12px，窗口 20px
+- Section 间距由 Canvas/Paper 交替完成，不用分割线或阴影
+
+**组件映射（clipboard-tool 落地）**
+- 全局窗：Canvas 半透明毛玻璃（blur 28px saturate 180%），Paper 卡片无边无影，靠画布交替区分
+- 标题栏：44px 导航条，Faded Surface 毛玻璃（blur 20px）
+- 搜索框：Paper 底 + Hairline，聚焦时 Electric Blue 0.14 4px 环
+- 列表卡：Paper 底，默认 transparent 边，悬停 Faded Surface，选中 Electric Blue 6% + 1px 18% 内描边，深色模式对应 #2c2c2e/#3a3a3c
+- 来源图标：按 appName 映射 pastel finish（notes/figma/safari 等），作唯一彩色载体，UI 其余保持单色
+- 底部快捷条：Canvas 毛玻璃 + kbd 白底 Hairline 胶囊，Quiet Dot 标注
+- 按钮：实心胶囊仅 Electric Blue 一处，其余 Ghost 胶囊（transparent + Hairline），Do: 单区最多一枚实心 CTA
+
+**Do / DonDont 执行**
+- Do: 交替 #ffffff/#f5f5f7 形成节奏、28px/16px 圆角、980px 胶囊、17px 级跟踪 -0.022em、numr 数字
+- Dont: 无阴影（仅选中 1px 内描边）、无彩色点缀（除 Electric/Link Blue 与产品图）、标题不小于 12px 感知、不用实线分割、圆角不小于 8px、UI 面无渐变、字重不低于 400/600、链接无底盒、段落不居中
+
 ## 领域词汇
 
 | 术语 | 含义 |
@@ -107,6 +153,8 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 5. **实施期验证**：提权后裸键热键在管理员前台确实生效（若意外失效 → 回退助手键盘钩子方案）；单实例锁不冲突。
 
 ## 变更日志
+
+- **Apple 风格精修（2026-08-27，$apple-style）**：按 Cathedral 规范重做 `src/styles.css` — :root 注入全套 Apple Tokens（Primary Ink #1d1d1f / Hairline #d6d6d6 / Canvas #f5f5f7 / Paper #ffffff / Cool Wash #e8e8ed / Electric Blue #0071e3 唯一 CTA / Link Blue #0066cc 等）、SF Pro Display/Text 字族与 numr、毛玻璃画布（Canvas 半透明 28px blur）+ Paper 无边卡（16px 圆角，悬停 Faded Surface，选中 Electric 6%）、来源图标 pastel 唯一彩色、44px 导航、12px 胶囊搜索（Hairline + Electric 环）、11px 微文案 whispered 标题、无阴影无分割线节奏；深色映射 #1d1d1f/#2c2c2e；`docs/screenshots` 同步新亮/暗/详情截图；校验：`typecheck` 通过、亮/暗/搜索/详情四态截图已验收。
 
 - **修复焦点粘贴回归**（2026-08-25）：恢复 `focus-paste-helper` 中 `INPUT` 联合体的 `MOUSEINPUT` 结构；它是 Win32 `SendInput` 结构定义的一部分，删除后 64 位下 `INPUT` 从 40 字节缩为 32 字节，`SendInput` 报 `ERROR_INVALID_PARAMETER(87)`，表现为“复制已写入剪贴板，但无法粘贴回原输入框”。构建脚本新增 `INPUT` 尺寸断言防止再次误删。
 - **清理旧粘贴残留**（2026-08-25）：移除普通复制旧实现遗留的 `autoPaste` 设置、`SHADOW_MARGIN` 常量、助手 `paste-current` 命令与 `strategy` / `allowed` 空字段；粘贴只保留 `snapshot` / `restore` / `paste` 单一链路。
