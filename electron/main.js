@@ -13,6 +13,16 @@ const MAX_NOTE_LENGTH = 200;
 const POLL_INTERVAL = 600;
 const PANEL_WIDTH = 418;
 const PANEL_HEIGHT = 823;
+// Hide just outside current display to keep DPI same (avoid -10000 cross-display drift)
+function getHidePosition() {
+  try {
+    if (!win || win.isDestroyed()) return [-10000, 0];
+    const b = win.getBounds();
+    const d = screen.getDisplayMatching(b);
+    const a = d.workArea;
+    return [a.x + a.width + 20, a.y];
+  } catch(e){ return [-10000, 0]; }
+}
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -778,14 +788,12 @@ function createWindow() {
 
 
   win.once('ready-to-show', () => {
-    // 离屏方案：窗口只显示一次，之后“隐藏/呼出”只移动位置，避免窗口 show/hide 闪烁（acrylic 材质也需首帧合成）。
-    // 关键：先在屏幕内显示一帧，让 DWM 完成窗口表面/acrylic 材质合成，再移到屏幕外；
-    // 否则每次从屏幕外移入都要重新合成，呼出就会闪一下。
-    win.setPosition(0, 0);
-    win.showInactive(); // focusable:true 下 showInactive 仍不激活，保持原输入框焦点
+    try { win.setContentBounds({ x: 0, y: 0, width: PANEL_WIDTH, height: PANEL_HEIGHT }); } catch(e){ win.setBounds({ x: 0, y: 0, width: PANEL_WIDTH, height: PANEL_HEIGHT }); }
+    win.showInactive();
     setTimeout(() => {
       if (!win || win.isDestroyed()) return;
-      win.setPosition(-10000, 0);
+      const [hx, hy] = getHidePosition();
+      try { win.setBounds({ x: hx, y: hy, width: PANEL_WIDTH, height: PANEL_HEIGHT }); } catch(e){ try{ win.setPosition(hx, hy); }catch(_){} }
     }, 120);
   });
 
@@ -807,17 +815,49 @@ function createWindow() {
 
 
 function positionPanel() {
-  if (!win) return;
-  // 固定在鼠标所在显示器的工作区正中间
-  const cursor = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursor);
-  const area = display.workArea;
-  const [w, h] = win.getSize();
-  const nx = Math.round(area.x + (area.width - w) / 2);
-  const ny = Math.round(area.y + (area.height - h) / 2);
-  // 位置没变就不移动，避免无谓的 DWM 重绘
-  const [cx, cy] = win.getPosition();
-  if (cx !== nx || cy !== ny) win.setPosition(nx, ny);
+  try {
+    if (!win || win.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    if (!cursor || typeof cursor.x !== "number" || typeof cursor.y !== "number" || !Number.isFinite(cursor.x) || !Number.isFinite(cursor.y)) {
+      console.error("positionPanel: invalid cursor", cursor);
+      return;
+    }
+    const display = screen.getDisplayNearestPoint(cursor);
+    if (!display || !display.workArea) {
+      console.error("positionPanel: invalid display", display);
+      return;
+    }
+    const area = display.workArea;
+    // Use fixed panel size to avoid DPI drift when window is off-screen
+    let w = PANEL_WIDTH, h = PANEL_HEIGHT;
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+      console.error("positionPanel: invalid size", w, h);
+      return;
+    }
+    if (!Number.isFinite(area.x) || !Number.isFinite(area.y) || !Number.isFinite(area.width) || !Number.isFinite(area.height)) {
+      console.error("positionPanel: invalid workArea", area);
+      return;
+    }
+    const nx = Math.round(area.x + (area.width - w) / 2);
+    const ny = Math.round(area.y + (area.height - h) / 2);
+    if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
+      console.error("positionPanel: invalid target", nx, ny, { area, w, h });
+      return;
+    }
+    let cx, cy;
+    try { [cx, cy] = win.getPosition(); } catch (e) { cx = null; cy = null; }
+    // Use setBounds with fixed size to prevent DPI drift
+    try {
+      const curBounds = win.getBounds();
+      if (curBounds.x !== nx || curBounds.y !== ny || curBounds.width !== PANEL_WIDTH || curBounds.height !== PANEL_HEIGHT) {
+        win.setBounds({ x: nx, y: ny, width: PANEL_WIDTH, height: PANEL_HEIGHT });
+      }
+    } catch (e) {
+      try { win.setPosition(nx, ny); } catch(_){}
+    }
+  } catch (e) {
+    console.error("positionPanel: unexpected error", e);
+  }
 }
 
 // 面板显示期间，全局拦截 ↑/↓/Enter/Esc/Space/Z/Del/B，只作用于剪贴板面板，不进入输入框。
@@ -986,6 +1026,7 @@ async function showPanel({ capture = false } = {}) {
 }
 
 function hidePanel({ restoreFocus = true } = {}) {
+
   if (!win || win.isDestroyed()) return;
   // 捕获快捷键过程中隐藏面板：先结束捕获（恢复旧快捷键）
   if (shortcutCapturing) cancelShortcutCapture({ restoreFocus: false });
@@ -1003,8 +1044,11 @@ function hidePanel({ restoreFocus = true } = {}) {
   const targetToRestore = focusTarget;
   focusTarget = null;
   if (restoreFocus && targetToRestore) void restoreFocusOnly(targetToRestore);
-  // 移到屏幕外而不是 hide()：避免透明窗口 show/hide 造成的闪烁
-  win.setPosition(-10000, 0);
+  // 移到同显示器屏幕外（保持 DPI 一致）
+  try {
+    const [hx, hy] = getHidePosition();
+    try { win.setContentBounds({ x: hx, y: hy, width: PANEL_WIDTH, height: PANEL_HEIGHT }); } catch(e){ win.setBounds({ x: hx, y: hy, width: PANEL_WIDTH, height: PANEL_HEIGHT }); }
+  } catch(e){ try{ win.setPosition(-10000, 0); }catch(_){} }
 }
 
 function togglePanel() {
