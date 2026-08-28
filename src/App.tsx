@@ -516,7 +516,7 @@ function App() {
             </div>
             <div className="content-layout">
               <section className="history-panel" aria-label="剪切记录">
-                <div className="history-heading"><span>{searchActive && query.trim() ? "搜索结果" : "今天"}</span><span>{filteredEntries.length} 项</span></div>
+                <div className="history-heading"><span>{searchActive && query.trim() ? "搜索结果" : "复制项列表"}</span><span>{filteredEntries.length} 项</span></div>
                 <div className="history-list" ref={listRef} role="listbox" aria-label="剪切记录列表">
                   {filteredEntries.length===0 ? (
                     <div className="empty-state" role="status">
@@ -535,7 +535,7 @@ function App() {
                             {entry.sourceApp?.iconDataUrl ? (<img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:10}} draggable={false}/>) : entry.type==="image" ? (<IconImage/>) : (<span style={{fontSize:11,fontWeight:700}}><IconClipboard/></span>)}
                           </div>
                           <div className="item-main" onClick={(e)=>{e.stopPropagation();openDetail(i);}}>
-                            {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? highlightText(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:72,height:50,objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
+                            {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? highlightText(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
                             <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt)}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? highlightText(entry.note,query):entry.note}</span></>) : null}</div>
                           </div>
                           <div className="item-actions">
