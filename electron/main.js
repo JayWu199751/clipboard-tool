@@ -5,7 +5,10 @@ const {
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
+const { createHistoryStore } = require('./history');
+const { createPanelModes } = require('./panel-modes');
+const { createJsonRpcHelper, spawnLineHelper, readOneShotJson } = require('./native-helper');
 // transparent 窗口已接管圆角与阴影，无需 DWM acrylic 回退
 
 const MAX_HISTORY = 200;
@@ -27,30 +30,87 @@ function getHidePosition() {
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
 let win = null;
-let panelVisible = false; // 面板是否处于呼出状态（离屏隐藏时不依赖 win.isVisible()）
-let history = [];
 let lastText = '';
 let lastImageHash = '';
-// 图片内容哈希缓存：entry.id -> sha1，用于全历史按内容判定同一条目（图片文件创建后不会变化）
-const imageHashCache = new Map();
+// 图片 dataUrl 缓存：broadcast 时对每个图片条目做 读盘+解码+PNG 重编码+base64，
+// 实测 25 张图约 614ms 且全程阻塞主进程——这是「回车→粘贴」延迟的主因
+// （粘贴前 copyEntry 的 commit() 会先触发一次 broadcast）。
+// 图片文件创建后内容不变（条目身份规则），按 imagePath 永久缓存；
+// 条目被裁剪/删除/清空时经 removeImageFile 端口同步失效，载入时整体清空。
+const imageDataUrlCache = new Map();
+
+// 「历史」领域核心：条目身份/去重/置顶块/裁剪/备注全部收在 store 的 interface 之后（electron/history.js），
+// 这里注入文件系统效果端口；persist/broadcast 由本文件的 commit() 编排。
+const store = createHistoryStore({
+  max: MAX_HISTORY,
+  maxNoteLength: MAX_NOTE_LENGTH,
+  saveImagePng: (png, id) => {
+    const imagePath = path.join(imagesDir(), `${id}.png`);
+    try {
+      fs.writeFileSync(imagePath, png);
+      return imagePath;
+    } catch (err) {
+      console.error('Failed to save clipboard image:', err);
+      return null;
+    }
+  },
+  hashImageFile: (imagePath) => {
+    try { return sha1(fs.readFileSync(imagePath)); } catch (_) { return ''; }
+  },
+  removeImageFile: (imagePath) => {
+    imageDataUrlCache.delete(imagePath);
+    try { fs.unlinkSync(imagePath); } catch (_) { /* ignore */ }
+  },
+  imageFileExists: (imagePath) => {
+    try { return fs.existsSync(imagePath); } catch (_) { return false; }
+  },
+});
 let settings = { autoStart: false, shortcut: 'Control+Shift+V' };
 let isQuitting = false;
 let pollTimer = null;
 let tray = null;
 let trayMenu = null;
-let clickWatcher = null;
-let shortcutCapturing = false; // 是否正在等待用户按下新快捷键
-let shortcutOldAccel = null; // 捕获前的旧快捷键（取消时恢复）
-let searchActive = false; // 面板是否处于搜索模式（搜索框可输入）
-let searchComposing = false; // 搜索模式下中文输入法组合中：暂停面板导航键，全部让给输入框
-let noteEditing = false; // 面板是否正在编辑选中条目的备注
-let noteEditEntryId = null; // 鼠标点击备注图标时传入的目标条目 id
-let focusTarget = null; // 本次呼出面板前的前台窗口/焦点控件快照
-let focusPasteHelper = null; // 常驻原生焦点恢复 + Ctrl+V 注入进程
-let focusHelperLineBuffer = '';
-let focusHelperRequestId = 0;
+let clickWatcher = null; // click-watcher.exe 的行通道句柄（助手 seam 返回）
+let focusHelper = null; // focus-paste-helper.exe 的 JSON 请求通道（助手 seam 返回）
 let showPanelPromise = null;
-const focusHelperPending = new Map();
+
+// 面板模式状态机（electron/panel-modes.js）：浏览/搜索/备注编辑/快捷键捕获的模式状态、
+// 转换级联、全局热键集合推导全部在其 interface 之后；这里只注入窗口/通知/快照效果端口。
+const modes = createPanelModes({
+  registerKey: (accel, handler) => {
+    try {
+      const ok = globalShortcut.register(accel, handler);
+      if (!ok) console.error(`注册全局快捷键 ${accel} 失败（可能被其他程序占用）`);
+      return ok;
+    } catch (err) {
+      console.error(`注册全局快捷键 ${accel} 失败:`, err.message);
+      return false;
+    }
+  },
+  unregisterKey: (accel) => {
+    try { globalShortcut.unregister(accel); } catch (_) { /* ignore */ }
+  },
+  canInteract: () => !!win && !win.isDestroyed(),
+  focusPanel: () => {
+    if (win && !win.isDestroyed()) win.focus();
+  },
+  blurPanelIfFocused: () => releasePanelFocus(),
+  send: (channel, ...args) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+  },
+  captureFocus: async () => captureFocusTarget(),
+  restoreFocus: (target) => {
+    void restoreFocusOnly(target);
+  },
+  reportNoFocusTarget: () => sendFocusError({ stage: 'restore', reason: 'no_focus_target' }),
+  validateNoteTarget: (targetId) => {
+    if (targetId === null) return store.entries().length > 0;
+    return typeof targetId === 'string' && !!store.find(targetId);
+  },
+  onToggleRequested: () => {
+    void togglePanel();
+  },
+});
 
 // ---------- persistence helpers ----------
 
@@ -70,88 +130,29 @@ function focusPasteHelperPath() {
   return path.join(app.getAppPath(), 'resources', 'focus-paste-helper.exe');
 }
 
-function clearFocusHelperPending(error) {
-  for (const [id, pending] of focusHelperPending) {
-    clearTimeout(pending.timer);
-    pending.reject(error);
-    focusHelperPending.delete(id);
-  }
-}
-
+// 焦点粘贴助手：常驻 JSON 行协议进程（snapshot/restore/paste）。
+// spawn、行缓冲、请求 id、超时全部在助手 seam（electron/native-helper.js）里。
 function startFocusPasteHelper() {
   const helper = focusPasteHelperPath();
   if (!fs.existsSync(helper)) {
     console.error('Focus paste helper not found:', helper);
     return;
   }
-
-  try {
-    const child = spawn(helper, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    focusPasteHelper = child;
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      focusHelperLineBuffer += chunk;
-      let newlineIndex = focusHelperLineBuffer.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const line = focusHelperLineBuffer.slice(0, newlineIndex).trim();
-        focusHelperLineBuffer = focusHelperLineBuffer.slice(newlineIndex + 1);
-        if (line) {
-          try {
-            const response = JSON.parse(line);
-            const pending = focusHelperPending.get(String(response.id));
-            if (pending) {
-              clearTimeout(pending.timer);
-              focusHelperPending.delete(String(response.id));
-              pending.resolve(response);
-            }
-          } catch (_) { /* 忽略辅助进程的异常输出 */ }
-        }
-        newlineIndex = focusHelperLineBuffer.indexOf('\n');
-      }
-    });
-    child.stderr.on('data', (chunk) => {
+  focusHelper = createJsonRpcHelper({
+    exePath: helper,
+    timeoutMs: 2500,
+    onStderr: (chunk) => {
       const text = String(chunk).trim();
       if (text) console.error('Focus paste helper:', text);
-    });
-    child.on('error', (err) => {
-      clearFocusHelperPending(new Error(err.message));
-      if (focusPasteHelper === child) focusPasteHelper = null;
-    });
-    child.on('exit', () => {
-      clearFocusHelperPending(new Error('focus-paste-helper exited'));
-      if (focusPasteHelper === child) focusPasteHelper = null;
-    });
-  } catch (err) {
-    console.error('Failed to start focus paste helper:', err.message);
-    focusPasteHelper = null;
-  }
+    },
+  });
 }
 
 function requestFocusHelper(command, target = null, timeout = 2500) {
-  if (!focusPasteHelper || !focusPasteHelper.stdin) {
+  if (!focusHelper) {
     return Promise.reject(new Error('focus-paste-helper not running'));
   }
-  const id = String(++focusHelperRequestId);
-  return new Promise((resolve, reject) => {
-    const pending = {
-      timer: null,
-      resolve,
-      reject,
-    };
-    pending.timer = setTimeout(() => {
-      focusHelperPending.delete(id);
-      reject(new Error(`focus-paste-helper ${command} timed out`));
-    }, timeout);
-    focusHelperPending.set(id, pending);
-    try {
-      focusPasteHelper.stdin.write(`${JSON.stringify({ id, cmd: command, target })}\n`);
-    } catch (err) {
-      clearTimeout(pending.timer);
-      focusHelperPending.delete(id);
-      reject(err);
-    }
-  });
+  return focusHelper.call(command, target, timeout);
 }
 
 // 获取 app-icon-helper.exe 路径
@@ -162,22 +163,13 @@ function appIconHelperPath() {
   return path.join(app.getAppPath(), 'resources', 'app-icon-helper.exe');
 }
 
-// 异步获取前台应用信息（方案A：轮询时抓取）
+// 异步获取前台应用信息（方案A：轮询时抓取；一次性助手经 seam 运行并解析末行 JSON）
 async function getForegroundAppInfo() {
   const helper = appIconHelperPath();
   if (!fs.existsSync(helper)) return null;
   try {
-    const stdout = await new Promise((resolve, reject) => {
-      execFile(helper, { timeout: 1500, windowsHide: true }, (err, stdout, stderr) => {
-        if (err) return reject(err);
-        resolve(stdout);
-      });
-    });
-    // helper 输出单行JSON，可能带换行，取最后一行非空
-    const lines = stdout.trim().split('\n').map(s => s.trim()).filter(Boolean);
-    if (lines.length === 0) return null;
-    const info = JSON.parse(lines[lines.length - 1]);
-    if (info.error) return null;
+    const info = await readOneShotJson({ exePath: helper, timeoutMs: 1500 });
+    if (!info || info.error) return null;
     let iconDataUrl = null;
     if (info.iconBase64) {
       iconDataUrl = `data:image/png;base64,${info.iconBase64}`;
@@ -205,77 +197,47 @@ function sha1(buf) {
   return crypto.createHash('sha1').update(buf).digest('hex');
 }
 
-// 返回图片条目的内容 sha1（带缓存）；非图片或文件缺失返回 ''
-function getImageHash(entry) {
-  if (!entry || entry.type !== 'image' || !entry.imagePath) return '';
-  let hash = imageHashCache.get(entry.id);
-  if (hash === undefined) {
-    try {
-      hash = sha1(fs.readFileSync(entry.imagePath));
-    } catch (_) {
-      hash = '';
-    }
-    imageHashCache.set(entry.id, hash);
-  }
-  return hash;
-}
-
 function toRendererEntry(entry) {
   // 来源应用信息透传给渲染进程（若无则为null，UI会fallback）
   const sourceApp = entry.sourceApp || null;
-  const note = normalizeNote(entry.note);
+  const note = store.normalizeNote(entry.note);
   if (entry.type === 'image') {
     let dataUrl = '';
-    try {
-      if (entry.imagePath && fs.existsSync(entry.imagePath)) {
-        dataUrl = nativeImage.createFromPath(entry.imagePath).toDataURL();
+    if (entry.imagePath) {
+      dataUrl = imageDataUrlCache.get(entry.imagePath) || '';
+      if (!dataUrl) {
+        try {
+          if (fs.existsSync(entry.imagePath)) {
+            dataUrl = nativeImage.createFromPath(entry.imagePath).toDataURL();
+            if (dataUrl) imageDataUrlCache.set(entry.imagePath, dataUrl);
+          }
+        } catch (_) { /* ignore */ }
       }
-    } catch (_) { /* ignore */ }
+    }
     if (!dataUrl) return null;
     return { id: entry.id, type: 'image', dataUrl, createdAt: entry.createdAt, sourceApp, pinned: !!entry.pinned, pinnedAt: entry.pinnedAt || 0, note };
   }
   return { id: entry.id, type: 'text', text: entry.text ?? '', createdAt: entry.createdAt, sourceApp, pinned: !!entry.pinned, pinnedAt: entry.pinnedAt || 0, note };
 }
 
-function normalizeNote(note) {
-  return typeof note === 'string' ? note.trim().slice(0, MAX_NOTE_LENGTH) : '';
-}
-
 function persist() {
   try {
-    const data = history.map(({ id, type, text, imagePath, createdAt, sourceApp, pinned, pinnedAt, note }) => ({
-      id, type, text, imagePath, createdAt, sourceApp, pinned: !!pinned, pinnedAt: pinnedAt || 0, note: normalizeNote(note)
-    }));
-    fs.writeFileSync(historyFile(), JSON.stringify(data));
+    fs.writeFileSync(historyFile(), JSON.stringify(store.toJSON()));
   } catch (err) {
     console.error('Failed to persist history:', err);
   }
 }
 
 function loadHistory() {
-  imageHashCache.clear();
+  let parsed = null;
   try {
-    const raw = fs.readFileSync(historyFile(), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) history = parsed.filter((e) => e && e.id);
-  } catch (_) {
-    history = [];
-  }
-  history = history.filter((e) => {
-    if (e.type === 'image') return !!e.imagePath && fs.existsSync(e.imagePath);
-    return e.type === 'text';
-  });
-  // 归一化旧数据字段（旧版本可能没有置顶标记或备注）
-  for (const e of history) {
-    e.pinned = !!e.pinned;
-    e.pinnedAt = e.pinnedAt || 0;
-    e.note = normalizeNote(e.note);
-  }
-  sortHistory();
-  trimHistory();
+    parsed = JSON.parse(fs.readFileSync(historyFile(), 'utf8'));
+  } catch (_) { /* first run or unreadable file */ }
+  imageDataUrlCache.clear();
+  store.load(parsed);
   // 预热图标缓存：从历史中已有的 sourceApp 恢复，避免重复提取
   try {
-    for (const e of history) {
+    for (const e of store.entries()) {
       if (e.sourceApp && e.sourceApp.exePath && e.sourceApp.iconDataUrl) {
         iconCache.set(e.sourceApp.exePath, e.sourceApp.iconDataUrl);
       }
@@ -298,76 +260,17 @@ function syncBaseline() {
 }
 
 // ---------- history operations ----------
+// 排序/去重/置顶块/裁剪的全部规则都在 store（electron/history.js）的 interface 之后；
+// 本节只做效果编排：一次变更 = store 方法 + commit()（persist + broadcast）。
 
-// 排序规则：置顶条目固定在最前（按置顶时间新→旧），之后按原数组顺序（即最近使用新→旧）。
-function sortHistory() {
-  const pinned = history.filter((e) => e.pinned).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
-  const rest = history.filter((e) => !e.pinned);
-  history = pinned.concat(rest);
-}
-
-function insertNewEntry(entry) {
-  // 新条目插到置顶块之后、普通块最前
-  let pinnedCount = 0;
-  while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
-  history.splice(pinnedCount, 0, entry);
-}
-
-// 把已有条目提升为"最近使用"：普通条目移到普通块最前；置顶条目刷新 pinnedAt 并移到置顶块最前。
-// 落位规则与 copyEntry 一致；备注/来源/创建时间等属性保持不变。
-function promoteEntry(entry) {
-  const idx = history.indexOf(entry);
-  if (idx !== -1) history.splice(idx, 1);
-  if (entry.pinned) {
-    entry.pinnedAt = Date.now();
-    history.unshift(entry);
-  } else {
-    let pinnedCount = 0;
-    while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
-    history.splice(pinnedCount, 0, entry);
-  }
-}
-
-function trimHistory() {
-  if (history.length <= MAX_HISTORY) return;
-  const removed = [];
-  // 置顶条目优先保留：先裁掉尾部未置顶的条目；全部置顶时才裁掉最旧的置顶条目
-  while (history.length > MAX_HISTORY) {
-    let idx = -1;
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (!history[i].pinned) { idx = i; break; }
-    }
-    if (idx === -1) idx = history.length - 1;
-    removed.push(...history.splice(idx, 1));
-  }
-  for (const entry of removed) {
-    imageHashCache.delete(entry.id);
-    if (entry.type === 'image' && entry.imagePath) {
-      try { fs.unlinkSync(entry.imagePath); } catch (_) { /* ignore */ }
-    }
-  }
-}
-
-function broadcast() {
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('clipboard:updated', history.map(toRendererEntry).filter(Boolean));
-  }
+function commit() {
+  persist();
+  broadcast();
 }
 
 function addTextEntry(text, sourceApp) {
-  if (!text) return;
-  // 条目身份只看内容：全历史查找同文本（无论备注/来源/置顶），命中则提升为最近使用而非新建。
-  const existing = history.find((e) => e.type === 'text' && e.text === text);
-  if (existing) {
-    promoteEntry(existing);
-    persist();
-    broadcast();
-    return;
-  }
-  insertNewEntry({ id: crypto.randomUUID(), type: 'text', text, createdAt: Date.now(), sourceApp: sourceApp || null, pinned: false, pinnedAt: 0, note: '' });
-  trimHistory();
-  persist();
-  broadcast();
+  const { entry } = store.recordText(text, sourceApp);
+  if (entry) commit();
 }
 
 function addImageEntry(image, sourceApp) {
@@ -375,29 +278,16 @@ function addImageEntry(image, sourceApp) {
   if (!png || png.length === 0) return;
   const hash = sha1(png);
   if (hash === lastImageHash) return;
-  // 条目身份只看内容：全历史查找相同图片（PNG sha1），命中则提升为最近使用而非新建。
-  const existing = history.find((e) => e.type === 'image' && getImageHash(e) === hash);
-  if (existing) {
-    promoteEntry(existing);
-    lastImageHash = hash;
-    persist();
-    broadcast();
-    return;
-  }
-  const id = crypto.randomUUID();
-  const imagePath = path.join(imagesDir(), `${id}.png`);
-  try {
-    fs.writeFileSync(imagePath, png);
-  } catch (err) {
-    console.error('Failed to save clipboard image:', err);
-    return;
-  }
-  imageHashCache.set(id, hash);
-  insertNewEntry({ id, type: 'image', imagePath, createdAt: Date.now(), sourceApp: sourceApp || null, pinned: false, pinnedAt: 0, note: '' });
+  const { entry } = store.recordImage(png, sourceApp);
+  if (!entry) return; // 写盘失败：不动轮询基线，下次轮询重试
   lastImageHash = hash;
-  trimHistory();
-  persist();
-  broadcast();
+  commit();
+}
+
+function broadcast() {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('clipboard:updated', store.entries().map(toRendererEntry).filter(Boolean));
+  }
 }
 
 let isPolling = false; // 防止异步重叠
@@ -430,9 +320,8 @@ async function pollClipboard() {
 }
 
 function copyEntry(id) {
-  const idx = history.findIndex((e) => e.id === id);
-  if (idx === -1) return false;
-  const entry = history[idx];
+  const entry = store.find(id);
+  if (!entry) return false;
   if (entry.type === 'text') {
     clipboard.writeText(entry.text || '');
   } else if (entry.type === 'image' && entry.imagePath && fs.existsSync(entry.imagePath)) {
@@ -440,19 +329,12 @@ function copyEntry(id) {
   } else {
     return false;
   }
-  history.splice(idx, 1);
-  if (entry.pinned) {
-    // 置顶条目复制后仍置顶，并刷新置顶时间，排到置顶块最前
-    entry.pinnedAt = Date.now();
-    history.unshift(entry);
-  } else {
-    // 普通条目复制后插到置顶块之后、普通块最前
-    let pinnedCount = 0;
-    while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
-    history.splice(pinnedCount, 0, entry);
-  }
-  persist();
-  broadcast();
+  // 复制后的落位与去重提升是同一规则（置顶刷新 pinnedAt 移块首；普通移普通块最前）
+  store.promote(entry);
+  commit();
+  // 同步轮询基线：刚写进剪贴板的内容不应在下一个 600ms 轮询里被当成"新复制"
+  // 再次提升+广播（一次多余的全列表重绘，也是粘贴后闪烁的来源）
+  syncBaseline();
   return true;
 }
 
@@ -495,6 +377,9 @@ const ELEVATED_TASK_NAME = 'ClipboardToolElevated';
 // schtasks /create 强制要求 /sc 触发器，无法表达"仅作静默拉起通道（无触发器）"，
 // Register-ScheduledTask 支持无触发器注册；-Force 覆盖重建。
 // 本进程以管理员运行（requireAdministrator），注册不会弹 UAC。
+// 注意：这段注册脚本与 resources/task-launcher.cs 的 CreateTask 是同一件事的两种语言实现
+// （安装期启动器无法复用本文件的 JS），差异仅在触发器：本文件按 autoStart 开关带/不带
+// AtLogOn 触发器，task-launcher 只创建无触发器版本。改动任务名/Principal 需两处同步。
 function psRegisterTask(withLogonTrigger) {
   const action =
     "$action = New-ScheduledTaskAction -Execute '" + process.execPath.replace(/'/g, "''") + "'; " +
@@ -603,88 +488,17 @@ function formatShortcut(accel) {
   }).join(' + ');
 }
 
-// 注册/重注册全局呼出快捷键，返回是否成功
-function registerToggleShortcut() {
-  const accel = settings.shortcut || DEFAULT_SHORTCUT;
-  try { globalShortcut.unregister(accel); } catch (_) { /* ignore */ }
-  let ok = false;
-  try {
-    ok = globalShortcut.register(accel, () => {
-      void togglePanel();
-    });
-  } catch (err) {
-    console.error('注册全局快捷键 ' + formatShortcut(accel) + ' 失败:', err.message);
-  }
-  if (!ok) console.error('注册全局快捷键 ' + formatShortcut(accel) + ' 失败（可能已被其他程序占用）');
-  return ok;
-}
-
-// 把 DOM 按键 code（KeyV / Digit1 / F5 / ArrowUp 等）转成 accelerator 主键，无法映射返回 null
-function codeToKey(code) {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);       // 字母 A-Z
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);     // 数字 0-9
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;  // F1-F24
-  const map = {
-    Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace',
-    Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
-    PageUp: 'PageUp', PageDown: 'PageDown',
-    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
-  };
-  return map[code] || null;
-}
-
 // 弹出窗口，让用户按下新的快捷键组合（Esc 取消）
-// 开始更换快捷键：显示面板并进入捕获模式（面板临时获得焦点，按键由渲染进程捕获）
+// 开始更换快捷键：进入捕获模式（模式机先退出其它输入态并注销全部全局键），
+// 随后显示面板并聚焦，让渲染进程捕获按键。
 async function startShortcutCapture() {
-  if (shortcutCapturing) return; // 已在捕获中
   if (!win || win.isDestroyed()) return;
-  // 若正处于备注编辑，先保存并退出，避免两个输入态叠加
-  if (noteEditing) endNoteEdit({ restoreFocus: false });
-  // 若正处于搜索模式，先退回浏览模式，避免两个输入态叠加
-  if (searchActive) exitSearchMode({ restoreFocus: false });
-  if (!focusTarget) await captureFocusTarget();
-  if (!focusTarget) {
-    sendFocusError({ stage: 'restore', reason: 'no_focus_target' });
-    return;
-  }
-  const oldAccel = settings.shortcut || DEFAULT_SHORTCUT;
-  shortcutCapturing = true;
-  shortcutOldAccel = oldAccel;
-
-  // 先注销旧全局快捷键，避免捕获期间按下它触发面板
-  try { globalShortcut.unregister(oldAccel); } catch (_) { /* ignore */ }
-  // 注销导航快捷键，让按键正常进入渲染进程
-  unregisterNavShortcuts();
-
-  // 显示面板（若已显示则原地不动）
+  if (!(await modes.beginShortcutCapture())) return;
   await showPanel({ capture: false });
-  // 捕获快捷键期间，导航快捷键要全部让位给要按下的组合键。
-  unregisterNavShortcuts();
+  if (!win || win.isDestroyed()) return;
   // 捕获按键前聚焦面板（基线 focusable:true，直接 focus 即可）
   win.focus();
-  if (!win.isDestroyed()) win.webContents.send('shortcut:capture-start', { current: formatShortcut(oldAccel) });
-}
-
-// 结束捕获并恢复旧快捷键（取消时调用）
-function cancelShortcutCapture({ restoreFocus = true } = {}) {
-  if (!shortcutCapturing) return;
-  shortcutCapturing = false;
-  if (shortcutOldAccel) {
-    try {
-      globalShortcut.register(shortcutOldAccel, () => {
-        void togglePanel();
-      });
-    } catch (_) { /* ignore */ }
-  }
-  shortcutOldAccel = null;
-  // 把焦点还回原程序（基线 focusable:true，直接 blur 即可）
-  if (win && !win.isDestroyed()) {
-    releasePanelFocus();
-    win.webContents.send('shortcut:capture-end');
-    if (restoreFocus) void restoreFocusOnly();
-  }
-  // 面板仍显示时恢复导航快捷键
-  if (panelVisible) registerNavShortcuts();
+  win.webContents.send('shortcut:capture-start', { current: formatShortcut(settings.shortcut) });
 }
 
 
@@ -743,21 +557,22 @@ function startClickWatcher() {
     console.error('Click watcher not found:', exe);
     return;
   }
-  clickWatcher = spawn(exe, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
-  console.log('点击监听器已启动');
-  clickWatcher.stdout.setEncoding('utf8');
-  clickWatcher.stdout.on('data', (chunk) => {
-    for (const line of chunk.split('\n')) {
-      const m = /^click (-?\d+) (-?\d+)/.exec(line.trim());
+  // 行缓冲由助手 seam 统一提供：此前 chunk.split('\n') 在事件跨 chunk 边界时会静默丢点击
+  clickWatcher = spawnLineHelper({
+    exePath: exe,
+    ignoreStderr: true,
+    onLine: (line) => {
+      const m = /^click (-?\d+) (-?\d+)/.exec(line);
       if (m) handleGlobalClick(parseInt(m[1], 10), parseInt(m[2], 10));
-    }
+    },
+    onExit: () => { clickWatcher = null; },
+    onError: (err) => console.error('Click watcher error:', err.message),
   });
-  clickWatcher.on('exit', () => { clickWatcher = null; });
-  clickWatcher.on('error', (err) => console.error('Click watcher error:', err.message));
+  console.log('点击监听器已启动');
 }
 
 function handleGlobalClick(x, y) {
-  if (!win || win.isDestroyed() || !panelVisible) return;
+  if (!win || win.isDestroyed() || !modes.isPanelVisible()) return;
   // 钩子坐标是物理像素，转成 DIP 再和窗口边界（DIP）比较。
   const dip = screen.screenToDipPoint({ x, y });
   const b = win.getBounds();
@@ -799,13 +614,13 @@ function createWindow() {
   });
 
   // 浏览态自动失焦：focusable:true 下点击会激活窗口，浏览态下立即 blur 将焦点还回原程序，
-  // 输入态（searchActive/noteEditing/shortcutCapturing）则保留焦点以便输入。
+  // 输入态（搜索/备注编辑/快捷键捕获）则保留焦点以便输入。输入态判断由模式状态机给出。
   win.on('focus', () => {
-    if (searchActive || noteEditing || shortcutCapturing) return;
+    if (modes.isInputActive()) return;
     // 延迟一帧再 blur，让点击事件先进入渲染进程，避免在 mousedown 前就失焦吃掉点击
     setTimeout(() => {
-      if (!win || win.isDestroyed() || !panelVisible) return;
-      if (searchActive || noteEditing || shortcutCapturing) return;
+      if (!win || win.isDestroyed() || !modes.isPanelVisible()) return;
+      if (modes.isInputActive()) return;
       if (!win.isFocused()) return;
       try { win.blur(); } catch (_) { /* ignore */ }
     }, 0);
@@ -888,95 +703,6 @@ function positionPanel() {
   }
 }
 
-// 面板显示期间，全局拦截 ↑/↓/Enter/Esc/Space/Z/Del/B，只作用于剪贴板面板，不进入输入框。
-// 第三项 = 是否在搜索模式下依然拦截：搜索模式里 Space/Z/Del/B 让位给搜索输入框
-// （Space/Z/Del/B 需要用于文本编辑），↑↓/Enter/Esc 保持面板语义。
-const NAV_SHORTCUTS = [
-  ['Up', 'up', true],
-  ['Down', 'down', true],
-  ['Enter', 'enter', true],
-  ['Esc', 'escape', true],
-  ['Delete', 'delete', false],
-  ['Z', 'pin', false],
-  ['B', 'note', false],
-  ['Space', 'search', false],
-];
-
-function registerNavShortcuts() {
-  for (const [accelerator, action, enabledInSearch] of NAV_SHORTCUTS) {
-    // 搜索模式下被让位的键不注册；IME 组合期间所有导航键暂停，交给输入法
-    if ((!enabledInSearch && searchActive) || (searchActive && searchComposing)) continue;
-    try {
-      const ok = globalShortcut.register(accelerator, () => {
-        if (action === 'search') {
-          void enterSearchMode();
-          return;
-        }
-        if (action === 'escape' && searchActive) {
-          void exitSearchMode();
-          return;
-        }
-        if (action === 'note') {
-          void beginNoteEdit();
-          return;
-        }
-        sendPanelKey(action);
-      });
-      if (!ok) console.error(`注册导航快捷键 ${accelerator} 失败（可能被其他程序占用）`);
-    } catch (err) {
-      console.error(`注册导航快捷键 ${accelerator} 失败:`, err.message);
-    }
-  }
-}
-
-function unregisterNavShortcuts() {
-  for (const [accelerator] of NAV_SHORTCUTS) {
-    try { globalShortcut.unregister(accelerator); } catch (_) { /* ignore */ }
-  }
-}
-
-function sendPanelKey(action) {
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('panel:key', action);
-  }
-}
-
-// 进入备注编辑：临时让面板可聚焦，并注销导航键，使输入框能正常接收字母、空格和删除键。
-async function beginNoteEdit(targetId = null) {
-  if (!win || win.isDestroyed() || !panelVisible || noteEditing) return false;
-  if (searchActive) exitSearchMode({ restoreFocus: false });
-  if (!focusTarget) {
-    const target = await captureFocusTarget();
-    if (!target) {
-      sendFocusError({ stage: 'restore', reason: 'no_focus_target' });
-      return false;
-    }
-  }
-  if (targetId !== null && typeof targetId !== 'string') return false;
-  if (targetId === null && history.length === 0) return false;
-  if (targetId && !history.some((entry) => entry.id === targetId)) return false;
-
-  noteEditEntryId = targetId || null;
-  noteEditing = true;
-  unregisterNavShortcuts();
-  win.focus();
-  if (!win.isDestroyed()) win.webContents.send('panel:key', 'note-edit-enter', noteEditEntryId);
-  return true;
-}
-
-// 退出备注编辑：先让渲染层根据草稿保存，再归还焦点并恢复浏览模式导航键。
-function endNoteEdit({ restoreFocus = true } = {}) {
-  if (!noteEditing) return;
-  noteEditing = false;
-  noteEditEntryId = null;
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('panel:key', 'note-edit-exit');
-    releasePanelFocus();
-    if (restoreFocus) void restoreFocusOnly();
-  }
-  if (panelVisible) registerNavShortcuts();
-}
-
 // 把焦点还给原程序（仅当面板当前持有焦点时，避免影响其他前台窗口）
 function releasePanelFocus() {
   if (win && !win.isDestroyed() && win.isFocused()) {
@@ -984,68 +710,15 @@ function releasePanelFocus() {
   }
 }
 
-// 进入搜索模式：临时把面板窗口变为可聚焦并聚焦搜索输入框（支持正常输入/中文输入法），
-// 同时切换导航快捷键集合（Space/Z/Del 让位给输入框）。
-async function enterSearchMode() {
-  if (!win || win.isDestroyed() || !panelVisible || searchActive) return false;
-  if (noteEditing) endNoteEdit({ restoreFocus: false });
-  if (!focusTarget) {
-    const target = await captureFocusTarget();
-    if (!target) {
-      sendFocusError({ stage: 'restore', reason: 'no_focus_target' });
-      return false;
-    }
-  }
-  searchActive = true;
-  unregisterNavShortcuts();
-  registerNavShortcuts();
-  win.focus();
-  if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-enter');
-  return true;
-}
-
-// 退出搜索模式：归还焦点给原程序，恢复浏览模式的导航快捷键集合。
-function exitSearchMode({ restoreFocus = true } = {}) {
-  if (!win || win.isDestroyed()) { searchActive = false; searchComposing = false; return; }
-  if (!searchActive) return;
-  searchActive = false;
-  searchComposing = false;
-  if (panelVisible) {
-    unregisterNavShortcuts();
-    registerNavShortcuts();
-  }
-  releasePanelFocus();
-  if (!win.isDestroyed()) win.webContents.send('panel:key', 'search-exit');
-  if (restoreFocus) void restoreFocusOnly();
-}
-
-// 中文输入法组合期间：暂停搜索模式的导航键，让 ↑↓/Enter 等全部进入输入框
-function setSearchComposing(composing) {
-  if (searchComposing === !!composing) return;
-  searchComposing = !!composing;
-  if (searchActive && panelVisible) {
-    unregisterNavShortcuts();
-    registerNavShortcuts();
-  }
-}
-
 async function showPanel({ capture = false } = {}) {
   if (!win || win.isDestroyed()) return;
   if (showPanelPromise) return showPanelPromise;
   showPanelPromise = (async () => {
-    if (capture && !focusTarget) {
-      await captureFocusTarget();
-      if (!win || win.isDestroyed()) return;
-    }
+    if (capture) await modes.ensureFocusTarget({ reportOnFailure: false });
+    if (!win || win.isDestroyed()) return;
     positionPanel();
-    panelVisible = true;
-    noteEditing = false;
-    noteEditEntryId = null;
-    // 每次呼出都重置搜索模式（渲染层在 panel:shown 里清空查询词）
-    searchActive = false;
-    searchComposing = false;
-    registerNavShortcuts();
-    if (!win.isDestroyed()) win.webContents.send('panel:shown');
+    // 模式状态机负责：重置搜索/备注态、推导注册导航键、通知渲染层（panel:shown）
+    modes.show();
     // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
   })().finally(() => {
     showPanelPromise = null;
@@ -1054,24 +727,9 @@ async function showPanel({ capture = false } = {}) {
 }
 
 function hidePanel({ restoreFocus = true } = {}) {
-
   if (!win || win.isDestroyed()) return;
-  // 捕获快捷键过程中隐藏面板：先结束捕获（恢复旧快捷键）
-  if (shortcutCapturing) cancelShortcutCapture({ restoreFocus: false });
-  // 备注编辑中隐藏面板：先让渲染层保存草稿
-  if (noteEditing) endNoteEdit({ restoreFocus: false });
-  // 搜索模式中隐藏面板：先让渲染层退出搜索，再统一归还焦点
-  if (searchActive) exitSearchMode({ restoreFocus: false });
-  panelVisible = false;
-  searchActive = false;
-  searchComposing = false;
-  noteEditing = false;
-  noteEditEntryId = null;
-  unregisterNavShortcuts();
-  releasePanelFocus();
-  const targetToRestore = focusTarget;
-  focusTarget = null;
-  if (restoreFocus && targetToRestore) void restoreFocusOnly(targetToRestore);
+  // 模式状态机负责：逐层退出捕获/备注/搜索（发对退出事件）、注销导航键、消费焦点快照
+  modes.hide({ restoreFocus });
   // 移到同显示器屏幕外（保持 DPI 一致）
   try {
     const [hx, hy] = getHidePosition();
@@ -1081,35 +739,38 @@ function hidePanel({ restoreFocus = true } = {}) {
 
 function togglePanel() {
   if (!win || win.isDestroyed()) return;
-  if (panelVisible) hidePanel();
+  if (modes.isPanelVisible()) hidePanel();
   else void showPanel({ capture: true });
 }
 
 // ---------- focus snapshot, restore and paste ----------
 
+// 焦点恢复/粘贴失败的用户文案（唯一映射处）：panel:focus-error 事件与
+// clipboard:copy 的结果契约共用同一份文本。
+function focusErrorMessage(stage) {
+  return stage === 'paste'
+    ? '复制已写入剪贴板，但无法粘贴回原输入框，请重试。'
+    : '无法恢复原输入框，已取消本次粘贴，避免写入错误窗口。';
+}
+
 function sendFocusError(result = {}) {
   if (!win || win.isDestroyed()) return;
   const stage = result.stage || 'restore';
   const reason = result.reason || (stage === 'paste' ? 'paste_send_failed' : 'restore_failed');
-  const message = stage === 'paste'
-    ? '复制已写入剪贴板，但无法粘贴回原输入框，请重试。'
-    : '无法恢复原输入框，已取消本次粘贴，避免写入错误窗口。';
-  win.webContents.send('panel:focus-error', { stage, reason, message });
+  win.webContents.send('panel:focus-error', { stage, reason, message: focusErrorMessage(stage) });
 }
 
 async function captureFocusTarget() {
-  if (focusTarget) return focusTarget;
   try {
     const result = await requestFocusHelper('snapshot');
     if (!result || result.ok !== true || !result.target) return null;
-    focusTarget = result.target;
-    return focusTarget;
+    return result.target;
   } catch (_) {
     return null;
   }
 }
 
-async function restoreFocusOnly(target = focusTarget) {
+async function restoreFocusOnly(target) {
   if (!target) return true;
   try {
     const result = await requestFocusHelper('restore', target);
@@ -1122,138 +783,103 @@ async function restoreFocusOnly(target = focusTarget) {
   }
 }
 
-async function restoreFocusAndPaste(target = focusTarget) {
+// 恢复原窗口焦点并注入 Ctrl+V。返回结果契约 { ok, stage, reason }：
+// 失败时仍会通过 panel:focus-error 推送同样的错误详情（键盘路径依赖该事件）。
+async function restoreFocusAndPaste(target = modes.focusTargetSnapshot()) {
   if (!target) {
     sendFocusError({ stage: 'restore', reason: 'no_focus_target' });
-    return false;
+    return { ok: false, stage: 'restore', reason: 'no_focus_target' };
   }
   try {
     const result = await requestFocusHelper('paste', target);
-    if (result && result.ok) return true;
-    sendFocusError(result || { stage: 'paste', reason: 'paste_send_failed' });
-    return false;
+    if (result && result.ok) return { ok: true, stage: 'paste', reason: '' };
+    const stage = (result && result.stage) || 'paste';
+    const reason = (result && result.reason) || 'paste_send_failed';
+    sendFocusError(result || { stage, reason });
+    return { ok: false, stage, reason };
   } catch (_) {
     sendFocusError({ stage: 'paste', reason: 'helper_not_available' });
-    return false;
+    return { ok: false, stage: 'paste', reason: 'helper_not_available' };
   }
 }
 
 // ---------- IPC ----------
 
 function registerIpc() {
-  ipcMain.handle('clipboard:get', () => history.map(toRendererEntry).filter(Boolean));
+  ipcMain.handle('clipboard:get', () => store.entries().map(toRendererEntry).filter(Boolean));
+  // 复制并粘贴：三个入口（键盘 Enter / 双击 / 复制按钮）共用同一个结果契约
+  // { ok, message }，渲染层按契约渲染，错误文案与 panel:focus-error 事件同源。
   ipcMain.handle('clipboard:copy', async (_e, id) => {
-    if (!copyEntry(id)) return false;
-    const pasted = await restoreFocusAndPaste();
-    if (!pasted) return false;
+    if (!copyEntry(id)) {
+      return { ok: false, message: '条目不存在或内容已不可用。' };
+    }
+    const pasteResult = await restoreFocusAndPaste();
+    if (!pasteResult.ok) {
+      return { ok: false, message: focusErrorMessage(pasteResult.stage) };
+    }
     hidePanel({ restoreFocus: false });
-    return true;
+    return { ok: true, message: '已复制并粘贴' };
   });
   ipcMain.handle('clipboard:remove', (_e, id) => {
-    const idx = history.findIndex((e) => e.id === id);
-    if (idx === -1) return false;
-    const [removed] = history.splice(idx, 1);
-    imageHashCache.delete(removed.id);
-    if (removed.type === 'image' && removed.imagePath) {
-      try { fs.unlinkSync(removed.imagePath); } catch (_) { /* ignore */ }
-    }
-    persist();
-    broadcast();
+    if (!store.remove(id)) return false;
+    commit();
     return true;
   });
   ipcMain.handle('clipboard:pin', (_e, id) => {
-    const idx = history.findIndex((e) => e.id === id);
-    if (idx === -1) return false;
-    const [entry] = history.splice(idx, 1);
-    if (entry.pinned) {
-      // 取消置顶：回到普通块最前
-      entry.pinned = false;
-      let pinnedCount = 0;
-      while (pinnedCount < history.length && history[pinnedCount].pinned) pinnedCount += 1;
-      history.splice(pinnedCount, 0, entry);
-    } else {
-      // 置顶：标记并移动到置顶块最前
-      entry.pinned = true;
-      entry.pinnedAt = Date.now();
-      history.unshift(entry);
-    }
-    persist();
-    broadcast();
+    if (!store.togglePin(id)) return false;
+    commit();
     return true;
   });
   ipcMain.handle('clipboard:clear', () => {
-    for (const entry of history) {
-      if (entry.type === 'image' && entry.imagePath) {
-        try { fs.unlinkSync(entry.imagePath); } catch (_) { /* ignore */ }
-      }
-    }
-    history = [];
-    imageHashCache.clear();
-    persist();
-    broadcast();
+    store.clear();
+    commit();
     return true;
   });
 
   // 备注：保存、进入编辑、退出编辑
   ipcMain.handle('note:set', (_e, id, note) => {
     if (typeof id !== 'string') return false;
-    const entry = history.find((item) => item.id === id);
-    if (!entry) return false;
-    entry.note = normalizeNote(note);
-    persist();
-    broadcast();
+    if (!store.setNote(id, note)) return false;
+    commit();
     return true;
   });
-  ipcMain.handle('note:begin-edit', (_e, id) => beginNoteEdit(id));
+  ipcMain.handle('note:begin-edit', (_e, id) => {
+    if (!win || win.isDestroyed()) return false;
+    return modes.beginNoteEdit(id);
+  });
   ipcMain.handle('note:end-edit', () => {
-    endNoteEdit();
+    modes.endNoteEdit();
     return true;
   });
 
   // 更换快捷键：渲染进程按下组合键后请求注册
   ipcMain.handle('shortcut:try', (_e, accel) => {
-    if (typeof accel !== 'string' || !shortcutCapturing) {
-      return { ok: false, formatted: formatShortcut(accel) };
-    }
     const formatted = formatShortcut(accel);
-    let ok = false;
-    try {
-      ok = globalShortcut.register(accel, () => {
-        void togglePanel();
-      });
-    } catch (err) {
-      ok = false;
+    if (!modes.trySetToggleShortcut(accel)) {
+      return { ok: false, formatted };
     }
-    if (!ok) return { ok: false, formatted };
     // 成功：保存设置并更新托盘菜单
-    shortcutCapturing = false;
-    shortcutOldAccel = null;
     settings.shortcut = accel;
     saveSettings();
     buildTrayMenu();
     if (tray) tray.setContextMenu(trayMenu);
     console.log('全局快捷键已更换为:', formatted);
-    // 恢复焦点给原程序
-    if (win && !win.isDestroyed()) {
-      releasePanelFocus();
-      void restoreFocusOnly();
-    }
-    // 面板仍显示时恢复导航快捷键
-    if (panelVisible) registerNavShortcuts();
+    // 恢复焦点给原程序（导航键恢复已由模式状态机完成）
+    if (win && !win.isDestroyed()) modes.restoreOriginalFocus();
     return { ok: true, formatted };
   });
   ipcMain.handle('shortcut:cancel', () => {
-    if (shortcutCapturing) cancelShortcutCapture();
+    modes.cancelShortcutCapture();
     return true;
   });
   // 搜索：渲染层点击常驻搜索框时进入搜索模式（与按空格等效）
   ipcMain.handle('search:activate', async () => {
-    await enterSearchMode();
+    if (win && !win.isDestroyed()) await modes.beginSearch();
     return true;
   });
   // 搜索：中文输入法组合中暂停面板导航键（↑↓/Enter 让给 IME 候选），组合结束恢复
   ipcMain.handle('search:set-composing', (_e, composing) => {
-    setSearchComposing(!!composing);
+    modes.setComposing(!!composing);
     return true;
   });
   ipcMain.handle('window:hide', () => hidePanel());
@@ -1288,7 +914,8 @@ if (!gotSingleInstanceLock) {
     syncBaseline();
     broadcast();
 
-    registerToggleShortcut();
+    // 呼出快捷键也归模式状态机的差量注册管理（捕获/恢复都由它推导）
+    modes.setToggleShortcut(settings.shortcut || DEFAULT_SHORTCUT);
 
     pollTimer = setInterval(pollClipboard, POLL_INTERVAL);
   });
@@ -1300,15 +927,12 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
-    if (focusPasteHelper) {
-      clearFocusHelperPending(new Error('app is quitting'));
-      try { focusPasteHelper.stdin.end(); } catch (_) { /* ignore */ }
-      try { focusPasteHelper.kill(); } catch (_) { /* ignore */ }
-      focusPasteHelper = null;
+    if (focusHelper) {
+      focusHelper.stop();
+      focusHelper = null;
     }
     if (clickWatcher) {
-      try { clickWatcher.stdin.end(); } catch (_) { /* ignore */ }
-      try { clickWatcher.kill(); } catch (_) { /* ignore */ }
+      clickWatcher.stop();
       clickWatcher = null;
     }
     if (tray) { tray.destroy(); tray = null; }

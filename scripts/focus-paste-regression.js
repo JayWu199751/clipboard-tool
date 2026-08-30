@@ -126,8 +126,14 @@ const electronMock = {
     setPosition(x, y) {
       panelPosition = [x, y];
     }
-    setContentBounds() {}
-    setBounds() {}
+    // 忠实模拟真实窗口：setBounds/setContentBounds 会移动窗口（此前是静默 no-op，
+    // 导致 hidePanel 的主路径不更新 panelPosition，断言只能靠 fallback 分支碰运气）
+    setContentBounds(bounds) {
+      if (bounds && typeof bounds.x === 'number') panelPosition = [bounds.x, bounds.y];
+    }
+    setBounds(bounds) {
+      if (bounds && typeof bounds.x === 'number') panelPosition = [bounds.x, bounds.y];
+    }
     showInactive() {}
     setFocusable(value) {
       this.focusable = value;
@@ -245,7 +251,7 @@ function fail(message) {
   await waitFor(() => helperWrites.some((command) => command.cmd === 'paste'));
 
   const normalPaste = helperWrites.find((command) => command.cmd === 'paste');
-  if (!normalCopied) fail('Normal browser-mode copy was reported as failed.');
+  if (!normalCopied.ok) fail('Normal browser-mode copy was reported as failed.');
   if (clipboardText !== 'PASTE_ME') fail('Clipboard did not receive the selected text entry.');
   if (!normalPaste || !normalPaste.target || normalPaste.target.focusHwnd !== 0x10020) {
     fail('Normal browser-mode paste did not use the original focused control snapshot.');
@@ -271,7 +277,7 @@ function fail(message) {
 
   const searchPastPastes = helperWrites.filter((command) => command.cmd === 'paste');
   const searchPaste = searchPastPastes[searchPastPastes.length - 1];
-  if (!searchCopied) fail('Search-mode copy was reported as failed.');
+  if (!searchCopied.ok) fail('Search-mode copy was reported as failed.');
   if (clipboardText !== 'PASTE_ME') fail('Clipboard did not receive the selected text entry.');
   if (!searchPaste || !searchPaste.target || searchPaste.target.focusHwnd !== 0x10020) {
     fail('Search-mode paste did not use the original focused control snapshot.');
@@ -290,7 +296,10 @@ function fail(message) {
   const failed = await ipcHandlers.get('clipboard:copy')(null, 'item-1');
   await waitFor(() => focusErrorEvents.length === 1);
 
-  if (failed) fail('Failed restore-and-paste was reported as successful.');
+  if (failed.ok) fail('Failed restore-and-paste was reported as successful.');
+  if (failed.message !== '复制已写入剪贴板，但无法粘贴回原输入框，请重试。') {
+    fail('Copy result contract did not carry the paste failure message.');
+  }
   if (panelPosition[0] < -1000) fail('Panel was hidden despite the paste failure.');
   if (focusErrorEvents[0]?.reason !== 'paste_send_failed') {
     fail('Renderer did not receive the paste failure reason.');

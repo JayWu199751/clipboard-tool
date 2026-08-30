@@ -109,7 +109,7 @@ if (typeof window !== "undefined" && !(window as any).clipboardAPI) {
     onPanelKey: (_cb: any) => {},
     onPanelShown: (_cb: any) => {},
     onFocusError: (_cb: any) => {},
-    copy: async () => true,
+    copy: async () => ({ok: true, message: "已复制并粘贴"}),
     remove: async () => true,
     pin: async () => true,
     clear: async () => true,
@@ -487,7 +487,13 @@ function App() {
     ro.observe(el);
     return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); if (hideTimer) window.clearTimeout(hideTimer); };
   }, [filteredEntries.length]);
-  const handleCopy = useCallback((id: string) => { void window.clipboardAPI.copy(id); showToast("已复制并粘贴"); }, [showToast]);
+  // 复制并粘贴按主进程的结果契约渲染：成功收面板（主进程处理）+ 成功 toast；
+  // 失败展示契约携带的文案（与键盘路径的 panel:focus-error 底栏提示同源），不再假报成功。
+  const handleCopy = useCallback(async (id: string) => {
+    const result = await window.clipboardAPI.copy(id);
+    if (result?.ok) showToast("已复制并粘贴");
+    else if (result?.message) showToast(result.message);
+  }, [showToast]);
   const handleRemove = useCallback((id: string) => { void window.clipboardAPI.remove(id); showToast("已删除"); }, [showToast]);
   const handlePin = useCallback((id: string) => { void window.clipboardAPI.pin(id); }, []);
   const handleClear = useCallback(() => { void window.clipboardAPI.clear(); showToast("历史已清空"); }, [showToast]);

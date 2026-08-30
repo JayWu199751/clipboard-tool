@@ -1,6 +1,10 @@
 // ClipboardTool Focus Paste Helper
 // Long-running native helper for focus snapshots, focus restoration and Ctrl+V injection.
 // It inherits the parent process token, so no separate elevation or UAC prompt is used.
+// stdin/stdout JSON 行协议的 schema 唯一命名处：electron/native-helper.js 顶部的文档块
+// （请求行 { id, cmd: snapshot|restore|paste, target? }，响应行 { id, ok, target?, stage?, reason? }）。
+// 改动协议时三处同步：本文件 HandleCommand、electron/native-helper.js、
+// scripts/focus-paste-regression.js 的 parseHelperCommand mock。
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -245,6 +249,19 @@ static class FocusPasteHelper
         return foreground == hwnd || IsRootWindow(foreground, hwnd);
     }
 
+    // 以 4ms 步进轮询前台状态，窗口一切过去立即返回（替代写死 Sleep：成功路径不等满额延迟）
+    static bool WaitForForeground(IntPtr hwnd, int budgetMs)
+    {
+        int waited = 0;
+        while (waited < budgetMs)
+        {
+            if (IsForegroundTarget(hwnd)) return true;
+            Thread.Sleep(4);
+            waited += 4;
+        }
+        return IsForegroundTarget(hwnd);
+    }
+
     static void SendAlt()
     {
         INPUT[] inputs = new INPUT[]
@@ -258,8 +275,7 @@ static class FocusPasteHelper
     static bool TryActivate(IntPtr hwnd)
     {
         SetForegroundWindow(hwnd);
-        Thread.Sleep(30);
-        return IsForegroundTarget(hwnd);
+        return WaitForForeground(hwnd, 48);
     }
 
     static bool RestoreTarget(Dictionary<string, object> target)
@@ -267,6 +283,20 @@ static class FocusPasteHelper
         IntPtr hwnd = ToHandle(GetLong(target, "hwnd"));
         IntPtr focusHwnd = ToHandle(GetLong(target, "focusHwnd"));
         if (hwnd == IntPtr.Zero || !ValidateTarget(target)) return false;
+
+        // 浏览模式常态：面板从未拿走焦点，原窗口仍是前台、原控件仍持有焦点 → 零操作直接返回。
+        // 这是「回车→粘贴」的主路径，此前即使一切就位也要吃 TryActivate 里的固定 Sleep(30)。
+        if (IsForegroundTarget(hwnd))
+        {
+            GUITHREADINFO current = new GUITHREADINFO();
+            current.cbSize = (uint)Marshal.SizeOf(typeof(GUITHREADINFO));
+            uint probePid;
+            uint probeThread = GetWindowThreadProcessId(hwnd, out probePid);
+            IntPtr currentFocus = (probeThread != 0 && GetGUIThreadInfo(probeThread, ref current))
+                ? current.hwndFocus : IntPtr.Zero;
+            if (focusHwnd == IntPtr.Zero || !IsWindow(focusHwnd) || currentFocus == focusHwnd)
+                return true;
+        }
 
         if (IsIconic(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
 
@@ -278,18 +308,17 @@ static class FocusPasteHelper
         // 搜索面板持有前台激活权时，Windows 会拒绝辅助进程直接调用
         // SetForegroundWindow。先尝试授权，再发送一次无害的 Alt 键事件，
         // 让辅助进程取得输入权，然后重试恢复原窗口。
+        // 每步激活都走轮询（成功即刻返回），失败级联不再需要段间固定 Sleep。
         AllowSetForegroundWindow(ASFW_ANY);
         bool foregroundSet = TryActivate(hwnd);
         if (!foregroundSet)
         {
             SendAlt();
-            Thread.Sleep(40);
             foregroundSet = TryActivate(hwnd);
         }
         if (!foregroundSet)
         {
             SwitchToThisWindow(hwnd, true);
-            Thread.Sleep(40);
             foregroundSet = TryActivate(hwnd);
         }
         if (!foregroundSet)
@@ -297,7 +326,6 @@ static class FocusPasteHelper
             ShowWindowAsync(hwnd, SW_RESTORE);
             SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            Thread.Sleep(40);
             foregroundSet = TryActivate(hwnd);
         }
         if (focusHwnd != IntPtr.Zero && IsWindow(focusHwnd))
@@ -338,6 +366,7 @@ static class FocusPasteHelper
 
     static Dictionary<string, object> Restore(string id, Dictionary<string, object> target, bool paste)
     {
+        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
         Dictionary<string, object> result = new Dictionary<string, object>();
         result["id"] = id;
         result["cmd"] = paste ? "paste" : "restore";
@@ -355,6 +384,7 @@ static class FocusPasteHelper
             Thread.Sleep(60);
         }
 
+        result["ms"] = sw.ElapsedMilliseconds;
         if (!restored)
         {
             result["ok"] = false;

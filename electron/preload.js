@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
     ipcRenderer.removeAllListeners('panel:focus-error');
     ipcRenderer.on('panel:focus-error', (_event, error) => callback(error));
   },
+  // 返回结果契约 { ok, message }：键盘 Enter / 双击 / 复制按钮共用
   copy: (id) => ipcRenderer.invoke('clipboard:copy', id),
   remove: (id) => ipcRenderer.invoke('clipboard:remove', id),
   pin: (id) => ipcRenderer.invoke('clipboard:pin', id),

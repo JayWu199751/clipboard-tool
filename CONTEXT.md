@@ -72,14 +72,22 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 | 焦点粘贴助手（focus-paste-helper.exe） | 常驻原生辅助进程，通过 stdin/stdout JSON 提供 snapshot/restore/paste；直接继承主进程令牌，不额外提权 |
 | 面板键捕获通道 | 面板显示期间拦截 ↑↓/Enter/Esc/Del/Z/空格 的机制：主进程 globalShortcut（RegisterHotKey），提权后对所有完整性窗口生效 |
 | 搜索模式（searchActive） | 面板的输入态：常驻搜索框由灰色禁用变为可编辑，窗口临时可聚焦以支持文字输入（含中文 IME）；Space/Z/Del 让位给输入框，↑↓/Enter/Esc 保持面板语义 |
+| 历史核心（history store） | 纯内存模块 `electron/history.js`：条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化的唯一实现；文件系统效果（写图/哈希/删图）经注入端口进入，持久化与 broadcast 留在 main.js |
+| 面板模式状态机（panel-modes） | 纯逻辑模块 `electron/panel-modes.js`：浏览/搜索（含 IME 组合子态）/备注编辑/快捷键捕获四态；呼出键与导航键的全局热键集合由当前模式推导并差量注册；焦点快照生命周期归它管理 |
+| 助手进程 seam（native-helper） | `electron/native-helper.js`：spawn、stdio 行缓冲、JSON 请求 id+超时、一次性运行、生命周期清理的唯一实现；focus-paste 协议 schema 在其顶部文档块命名（C# 实现与回归 mock 为另两处同步点） |
+| 复制粘贴结果契约（CopyResult） | `clipboard:copy` 返回 `{ ok, message }`：键盘 Enter / 双击 / 复制按钮三入口共用；message 为主进程给出的可展示文案，错误文案与 `panel:focus-error` 事件同源 |
 
 ## 架构脉络
 
-- `electron/main.js`：剪贴板轮询、去重、历史持久化、全局快捷键（呼出 + 面板导航 `↑/↓/Enter/Esc/Del/Z/B/空格` + 搜索/备注编辑模式切换）、焦点快照/恢复/粘贴、托盘、计划任务管理（静默提权启动/开机启动）。
+- `electron/main.js`：效果编排——剪贴板轮询与去重基线、持久化、托盘、窗口/离屏隐藏、计划任务管理（静默提权启动/开机启动）、IPC 注册；历史规则与模式规则分别在 store / 状态机 interface 之后。
+- `electron/history.js`：历史核心（纯内存，plain node 可测）。`createHistoryStore` 的小 interface：`recordText / recordImage / promote / togglePin / remove / clear / setNote / load / toJSON` 等；排序/去重/置顶/裁剪规则只存在于这里。
+- `electron/panel-modes.js`：面板模式状态机（纯逻辑，plain node 可测）。`createPanelModes` 的 interface：`show / hide / beginSearch / endSearch / setComposing / beginNoteEdit / endNoteEdit / beginShortcutCapture / cancelShortcutCapture / trySetToggleShortcut`；热键集合由模式推导、差量注册；窗口焦点/渲染层通知/焦点快照经注入端口。
+- `electron/native-helper.js`：助手进程 seam（spawnImpl/execImpl 可注入测试）。`createLineSplitter / spawnLineHelper / createJsonRpcHelper / readOneShotJson`；focus-paste-helper、app-icon-helper、click-watcher 均为这条 seam 上的薄 adapter。
 - `electron/preload.js`：`contextBridge` 暴露 `window.clipboardAPI`（getHistory / onUpdated / copy / remove / pin / clear / setNote / 快捷键 / 焦点错误事件）。
 - `src/App.tsx`：面板 UI、主题、键盘逻辑（主进程面板键经 `panel:key` 转发）、快捷更换覆盖层。
 - 数据流向：主进程维护唯一真相，`broadcast()` 推 `clipboard:updated` 给渲染层；渲染层不直接改数组。
-- `resources/focus-paste-helper.cs`：`focus-paste-helper.exe` 的原生实现，负责窗口/焦点快照、恢复和 `Ctrl+V` 注入。
+- `resources/focus-paste-helper.cs`：`focus-paste-helper.exe` 的原生实现，负责窗口/焦点快照、恢复和 `Ctrl+V` 注入；协议 schema 命名处见 `electron/native-helper.js`。
+- 测试：`npm test` 依次跑 `scripts/history-unit.js`、`scripts/panel-modes-unit.js`、`scripts/native-helper-unit.js`（三个纯模块的 interface 直测，无需 Electron mock）与 `scripts/focus-paste-regression.js`、`scripts/autostart-regression.js`（整模块 Electron mock 回归）。
 
 ## 关键决策（设计树档案）
 
@@ -153,6 +161,20 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 5. **实施期验证**：提权后裸键热键在管理员前台确实生效（若意外失效 → 回退助手键盘钩子方案）；单实例锁不冲突。
 
 ## 变更日志
+
+- **粘贴延迟优化（2026-08-30）**：「回车→粘贴」实测从 ~1s 降到 <50ms。三处根因，分段实测定位（新增诊断脚本 `scripts/helper-timing.js` 量助手、`scripts/latency-bench.js` 量主进程各段）：
+  1. **broadcast 图片重编码（主因，实测 614ms）**：每次 broadcast 对历史里每个图片条目做 读盘+解码+PNG 重编码+base64，全程阻塞主进程，且发生在助手注入之前（copyEntry 的 commit 先广播）。修复：`imageDataUrlCache` 按 imagePath 缓存 dataUrl（图片文件创建后内容不变），裁剪/删除/清空经 removeImageFile 端口同步失效、载入时清空；实测命中缓存后 0ms。顺带消除每次新复制后 600ms 轮询广播的同类 614ms 阻塞（回车若排在其后也被拖住）。
+  2. **助手固定 Sleep（实测 31–47ms）**：RestoreTarget 的激活级联每步写死 Sleep(30/40)，即使原窗口一直是前台（浏览模式常态）也要等满。修复：前台+焦点控件已在原位时零操作直返；激活改 4ms 步进轮询（`WaitForForeground`，预算 48ms）成功即刻返回；失败级联去掉段间 Sleep（轮询本身覆盖等待）。实测 restore 31–47ms → 0–2ms。响应新增 `ms` 字段便于回归观察（mock 不带此字段，main.js 忽略未知字段）。
+  3. **粘贴内容被轮询重复处理**：copyEntry 写剪贴板后未同步轮询基线，下一个 600ms 轮询把粘贴内容当"新复制"再次提升+广播（多余全列表重绘/闪烁）。修复：copyEntry 末尾 `syncBaseline()`。
+  - 助手 exe 已重新编译（build:helper 全套 + INPUT 尺寸断言通过）；发现并清理了两个残留的孤儿助手进程（主程序未运行却占着 exe 文件锁）。
+
+- **架构深化四项（2026-08-30，$improve-codebase-architecture）**：按「deep module」原则重排主进程——
+  1. **历史核心**：`electron/history.js` 新建；条目身份/去重提升/置顶块插入（原 4 处复制粘贴）/persist+broadcast 成对调用（原 8 处）/图片清理（原 3 处）收敛为 store 的小 interface，文件效果经注入端口；main.js 相应收缩。新增 `test:history` 15 例直测领域规则（此前零覆盖）。
+  2. **面板模式状态机**：`electron/panel-modes.js` 新建；浏览/搜索（含 IME）/备注/捕获四态 + 焦点快照生命周期归一；全局热键集合由模式推导并差量注册（替代原先散布 13 处的 register/unregister 舞步与 5 个松散布尔）；渲染层协议（panel:key/panel:shown/shortcut:capture-*）不变，App.tsx 无需改动。新增 `test:panel-modes` 11 例。顺带删除 main.js 中已失效的 `codeToKey` 副本（渲染层才是真源）。
+  3. **助手进程 seam**：`electron/native-helper.js` 新建；focus-paste-helper（JSON 请求 id+超时）、app-icon-helper（一次性 execFile+末行 JSON）、click-watcher（文本行）统一走 `spawnLineHelper / createJsonRpcHelper / readOneShotJson`；协议 schema 在模块顶部命名，focus-paste-helper.cs 加同步注记。**修复 click-watcher 事件跨 chunk 边界被静默丢弃的缺陷**（原 `chunk.split('\n')` 无缓冲）。新增 `test:native-helper` 9 例。task-launcher.cs 与 main.js 的计划任务注册脚本仍为两种语言各一份（安装期启动器无法复用 JS；统一需重编译原生 exe 并重新实证提权链路，暂缓），已在两处加同步注记。
+  4. **复制粘贴结果契约**：`clipboard:copy` 返回 `{ ok, message }`（CopyResult），错误文案由 main.js 的 `focusErrorMessage` 统一给出并与 `panel:focus-error` 事件同源；鼠标路径不再在粘贴失败时假报「已复制并粘贴」；键盘路径行为不变。focus-paste 回归同步改为断言契约。
+  - 回归基建修复：`scripts/focus-paste-regression.js` 的 BrowserWindow mock 的 `setContentBounds/setBounds` 此前是静默 no-op，面板隐藏断言只能靠 try/catch 回退分支碰运气（commit 0282497 起即为红）；现 mock 忠实模拟窗口移动，断言回到主路径。
+  - 校验：`npm test` 五套件全绿（15+11+9 例单测 + 两条整模块回归）、`typecheck` 通过。
 
 - **托盘图标高清化（2026-08-29）**：修复 175% 等非整数缩放下托盘图标发糊。根因：Electron 43 Windows 托盘 `Tray::SetImage → NativeImage::GetHICON(SM_CXSMICON)` 用 1x 位图原样生成 HICON（`CreateHICONFromSkBitmap(AsBitmap())`，不带尺寸参数、不认 @2x 阶梯），单一 32px 基图被系统重采样到 28 物理像素。修复：`scripts/gen-tray-icons.mjs` 用参数化 SDF（坐标下降拟合 32px 原图，平均误差 1.47/255）按目标尺寸直出 `tray-icon{,-light}-{16,20,24,28,32}.png`（`npm run gen:tray` 可再生）；`electron/main.js` 按主屏 `scaleFactor` 取 `round(16×sf)` 对应单尺寸图 1:1 渲染，`display-metrics-changed` 时重选。实测（物理分辨率截屏模板匹配）：峰值白度 211→255，笔画边缘 1px 硬边，1:1 对齐偏差 12.8（重采样时 40+）。32px 原图保留作窗口图标与回退。
 

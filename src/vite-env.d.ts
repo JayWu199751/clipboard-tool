@@ -9,6 +9,13 @@ interface ShortcutTryResult {
   formatted: string;
 }
 
+// clipboard:copy 的结果契约：三个入口（键盘 Enter / 双击 / 复制按钮）共用，
+// message 为主进程给出的可展示文案（错误文案与 panel:focus-error 事件同源）。
+interface CopyResult {
+  ok: boolean;
+  message: string;
+}
+
 interface FocusErrorInfo {
   stage: string;
   reason: string;
@@ -21,7 +28,7 @@ interface ClipboardAPI {
   onPanelKey(callback: (action: PanelKeyAction, noteEntryId?: string | null) => void): void;
   onPanelShown(callback: () => void): void;
   onFocusError(callback: (error: FocusErrorInfo) => void): void;
-  copy(id: string): Promise<boolean>;
+  copy(id: string): Promise<CopyResult>;
   remove(id: string): Promise<boolean>;
   pin(id: string): Promise<boolean>;
   clear(): Promise<boolean>;
