@@ -542,15 +542,42 @@ function trayIconPath(name = 'tray-icon.png') {
   return path.join(app.getAppPath(), 'resources', name);
 }
 
-// 按系统亮暗主题切换托盘图标（深色任务栏用白色图标，浅色用黑色图标）
-function updateTrayIcon() {
-  if (!tray) return;
-  const name = nativeTheme.shouldUseDarkColors ? 'tray-icon-light.png' : 'tray-icon.png';
-  const icon = nativeImage.createFromPath(trayIconPath(name));
-  if (!icon.isEmpty()) tray.setImage(icon);
+// Windows 托盘 HICON 由 Electron 直接用 NativeImage 的 1x 位图生成
+// （GetHICON -> IconUtil::CreateHICONFromSkBitmap(AsBitmap())，不带尺寸参数），
+// 系统再把它画到 SM_CXSMICON 物理像素上：位图不是恰好目标尺寸就会被重采样发糊，
+// PNG 的 @2x 式 DPI 阶梯在该路径完全不被使用。因此按主屏 scaleFactor 选一张
+// 「恰好 round(16*scale) 物理像素」的单一尺寸图（scripts/gen-tray-icons.mjs 生成），
+// HICON 1:1 渲染零重采样。
+const TRAY_ICON_SIZES = [16, 20, 24, 28, 32]; // 100%..200% 缩放档位
+
+function trayTargetSize() {
+  let sf = 1;
+  try { sf = screen.getPrimaryDisplay().scaleFactor || 1; } catch (_) { /* ignore */ }
+  const target = Math.round(16 * sf);
+  return TRAY_ICON_SIZES.reduce((best, s) => (Math.abs(s - target) < Math.abs(best - target) ? s : best), TRAY_ICON_SIZES[0]);
 }
 
-// 窗口图标跟随系统主题切换（与托盘图标一致：深色主题用白色，浅色用黑色）
+// 按系统亮暗主题与 DPI 选托盘图（深色任务栏用白色图标，浅色用黑色图标）
+function loadTrayIcon() {
+  const base = nativeTheme.shouldUseDarkColors ? 'tray-icon-light' : 'tray-icon';
+  const sized = nativeImage.createFromPath(trayIconPath(`${base}-${trayTargetSize()}.png`));
+  if (!sized.isEmpty()) return sized;
+  return nativeImage.createFromPath(trayIconPath(`${base}.png`)); // 缺分尺寸图时回退 32px 基图
+}
+
+let trayIconKey = '';
+function updateTrayIcon() {
+  if (!tray) return;
+  // 同主题同尺寸时跳过，display-metrics-changed 高频触发也不重复 setImage
+  const key = `${nativeTheme.shouldUseDarkColors ? 'light' : 'dark'}@${trayTargetSize()}`;
+  if (key === trayIconKey) return;
+  const icon = loadTrayIcon();
+  if (icon.isEmpty()) return;
+  trayIconKey = key;
+  tray.setImage(icon);
+}
+
+// 窗口图标跟随系统主题切换（走 32px 基图：窗口图标路径由系统多尺寸缩放，无托盘 HICON 问题）
 function updateWindowIcon() {
   if (!win || win.isDestroyed()) return;
   const name = nativeTheme.shouldUseDarkColors ? 'tray-icon-light.png' : 'tray-icon.png';
@@ -679,12 +706,11 @@ function buildTrayMenu() {
 }
 
 function createTray() {
-  const iconPath = trayIconPath();
-  if (!fs.existsSync(iconPath)) {
-    console.error('Tray icon not found:', iconPath);
+  if (!fs.existsSync(trayIconPath())) {
+    console.error('Tray icon not found:', trayIconPath());
     return;
   }
-  tray = new Tray(nativeImage.createFromPath(iconPath));
+  tray = new Tray(loadTrayIcon());
   tray.setToolTip('剪贴板工具');
   updateTrayIcon();
   updateWindowIcon();
@@ -692,6 +718,8 @@ function createTray() {
     updateTrayIcon();
     updateWindowIcon();
   });
+  // 修改缩放比或拖到不同 DPI 显示器时 SM_CXSMICON 随之变化，重选对应物理尺寸
+  try { screen.on('display-metrics-changed', () => { updateTrayIcon(); }); } catch (_) { /* ignore */ }
   buildTrayMenu();
   tray.setContextMenu(trayMenu);
   tray.on('click', () => { void showPanel({ capture: true }); });

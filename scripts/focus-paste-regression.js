@@ -126,6 +126,8 @@ const electronMock = {
     setPosition(x, y) {
       panelPosition = [x, y];
     }
+    setContentBounds() {}
+    setBounds() {}
     showInactive() {}
     setFocusable(value) {
       this.focusable = value;

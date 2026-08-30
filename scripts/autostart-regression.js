@@ -38,6 +38,8 @@ const electronMock = {
     setMenu() {}
     loadFile() {}
     setPosition() {}
+    setContentBounds() {}
+    setBounds() {}
     showInactive() {}
     setFocusable() {}
     focus() {}

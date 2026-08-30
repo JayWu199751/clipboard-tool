@@ -154,6 +154,8 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 
 ## 变更日志
 
+- **托盘图标高清化（2026-08-29）**：修复 175% 等非整数缩放下托盘图标发糊。根因：Electron 43 Windows 托盘 `Tray::SetImage → NativeImage::GetHICON(SM_CXSMICON)` 用 1x 位图原样生成 HICON（`CreateHICONFromSkBitmap(AsBitmap())`，不带尺寸参数、不认 @2x 阶梯），单一 32px 基图被系统重采样到 28 物理像素。修复：`scripts/gen-tray-icons.mjs` 用参数化 SDF（坐标下降拟合 32px 原图，平均误差 1.47/255）按目标尺寸直出 `tray-icon{,-light}-{16,20,24,28,32}.png`（`npm run gen:tray` 可再生）；`electron/main.js` 按主屏 `scaleFactor` 取 `round(16×sf)` 对应单尺寸图 1:1 渲染，`display-metrics-changed` 时重选。实测（物理分辨率截屏模板匹配）：峰值白度 211→255，笔画边缘 1px 硬边，1:1 对齐偏差 12.8（重采样时 40+）。32px 原图保留作窗口图标与回退。
+
 - **Apple 风格精修（2026-08-27，$apple-style）**：按 Cathedral 规范重做 `src/styles.css` — :root 注入全套 Apple Tokens（Primary Ink #1d1d1f / Hairline #d6d6d6 / Canvas #f5f5f7 / Paper #ffffff / Cool Wash #e8e8ed / Electric Blue #0071e3 唯一 CTA / Link Blue #0066cc 等）、SF Pro Display/Text 字族与 numr、毛玻璃画布（Canvas 半透明 28px blur）+ Paper 无边卡（16px 圆角，悬停 Faded Surface，选中 Electric 6%）、来源图标 pastel 唯一彩色、44px 导航、12px 胶囊搜索（Hairline + Electric 环）、11px 微文案 whispered 标题、无阴影无分割线节奏；深色映射 #1d1d1f/#2c2c2e；`docs/screenshots` 同步新亮/暗/详情截图；校验：`typecheck` 通过、亮/暗/搜索/详情四态截图已验收。
 
 - **修复焦点粘贴回归**（2026-08-25）：恢复 `focus-paste-helper` 中 `INPUT` 联合体的 `MOUSEINPUT` 结构；它是 Win32 `SendInput` 结构定义的一部分，删除后 64 位下 `INPUT` 从 40 字节缩为 32 字节，`SendInput` 报 `ERROR_INVALID_PARAMETER(87)`，表现为“复制已写入剪贴板，但无法粘贴回原输入框”。构建脚本新增 `INPUT` 尺寸断言防止再次误删。

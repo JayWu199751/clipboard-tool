@@ -53,6 +53,7 @@ clipboard-tool/
 ├── installer.nsh       # NSIS 自定义脚本（快捷方式→静默启动器、卸载清理计划任务）
 ├── scripts/
 │   ├── build-helper.ps1 # 构建辅助程序
+│   ├── gen-tray-icons.mjs # 按物理尺寸直出托盘图标（16/20/24/28/32，SDF 拟合 32px 原图；npm run gen:tray）
 │   ├── autostart-regression.js # 开机启动计划任务回归
 │   └── focus-paste-regression.js # 普通/搜索焦点恢复、Enter 粘贴与失败处理回归
 ├── docs/
