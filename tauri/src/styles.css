@@ -3895,21 +3895,32 @@ html { background: transparent !important; } body { background: transparent !imp
   .desktop { border-radius: var(--radius-window) !important; }
 }
 
-/* 列表内联备注输入 — 紧凑胶囊，不撑高行高 */
+/* 列表内联备注输入 — 20px 紧凑胶囊，修复底部边框被裁 */
 .item-meta .note-input {
   width: auto !important;
   min-height: 0 !important;
-  height: 22px !important;
-  min-width: 90px !important;
-  max-width: 160px !important;
-  flex: 0 1 140px !important;
-  padding: 0 8px !important;
-  font-size: 11px !important;
-  line-height: 20px !important;
+  height: 20px !important;
+  min-width: 80px !important;
+  max-width: 150px !important;
+  flex: 0 1 130px !important;
+  padding: 0 6px !important;
+  font-size: 10.5px !important;
+  line-height: 18px !important;
   border-radius: 6px !important;
-  background: var(--color-paper) !important;
+  background: #fff !important;
+  vertical-align: middle !important;
+  margin: -1px 0 !important;
 }
-.item-meta .note-input::placeholder { color: var(--text-dim) !important; }
+.item-meta .note-input::placeholder { color: var(--text-dim) !important; font-size: 10.5px !important; }
+.item-meta .note-input:focus {
+  box-shadow: 0 0 0 2px var(--accent-ring) !important;
+}
+/* 输入态让容器溢出可见，避免 1px 底边被 overflow:hidden 裁掉 */
+.history-item:has(.item-meta .note-input),
+.item-main:has(.item-meta .note-input),
+.item-meta:has(.note-input) {
+  overflow: visible !important;
+}
 .note-section .note-input {
   height: 36px !important;
   min-height: 36px !important;
