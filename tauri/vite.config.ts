@@ -10,6 +10,9 @@ export default defineConfig({
     strictPort: true,
     // 显式绑定 IPv4 回环，避免被安全软件拦截 IPv6 监听
     host: '127.0.0.1',
+    watch: {
+      ignored: ['**/src-tauri/target/**', '**/src-tauri/gen/**', '**/dist/**', '**/node_modules/**'],
+    },
   },
   build: {
     outDir: 'dist',
