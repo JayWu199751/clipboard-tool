@@ -66,28 +66,47 @@ Windows 剪贴板历史工具（Tauri 2 + React 19 + Rust，原 Electron 实现�
 | 来源应用（SourceApp） | 复制时前台应用（exePath / appName / windowTitle / iconDataUrl），轮询 A 版方案 |
 | 备注（note） | 用户附加到历史条目的可选单行文本；独立于剪贴板正文和来源应用（不参与条目身份判定），空字符串表示没有备注，随条目持久化 |
 | 常驻提权 | 应用始终以高完整性运行（exe 清单 requireAdministrator）；UIPI 不拦截其热键与输入注入，管理员目标窗口照常工作 |
-| 静默启动通道（计划任务） | `ClipboardToolElevated`（/rl highest）：快捷方式经 task-launcher.exe 运行时直接以管理员令牌创建进程，不弹 UAC；开机启动 = 其 onlogon 触发器 |
+| 静默启动通道（计划任务） | `ClipboardToolElevated`（/rl highest）：快捷方式经 `tasks::run_elevated_task` 拉起时直接以管理员令牌创建进程，不弹 UAC；开机启动 = 其 onlogon 触发器 |
 | 开机启动意图（autoStart） | settings.json 持久化的用户意图；运行时事实（任务触发器是否存在）每次由开关操作重建 |
 | 焦点快照（focusTarget） | 呼出面板前记录的前台窗口/焦点控件/进程/线程组合，用于搜索或备注编辑结束后恢复原输入框 |
-| 焦点粘贴助手（focus-paste-helper.exe） | 常驻原生辅助进程，通过 stdin/stdout JSON 提供 snapshot/restore/paste；直接继承主进程令牌，不额外提权 |
+| 焦点粘贴（focus_paste） | 进程内 Win32 调用（GetForegroundWindow / SetForegroundWindow / SetFocus / SendInput），无辅助进程；`snapshot()` 记快照，`restore_and_paste(target, paste)` 恢复并注入 Ctrl+V，失败带 `RestoreFailure{stage,reason}` |
 | 面板键捕获通道 | 面板显示期间拦截 ↑↓/Enter/Esc/Del/Z/空格 的机制：主进程 globalShortcut（RegisterHotKey），提权后对所有完整性窗口生效 |
 | 搜索模式（searchActive） | 面板的输入态：常驻搜索框由灰色禁用变为可编辑，窗口临时可聚焦以支持文字输入（含中文 IME）；Space/Z/Del 让位给输入框，↑↓/Enter/Esc 保持面板语义 |
-| 历史核心（history store） | 纯内存模块 `electron/history.js`：条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化的唯一实现；文件系统效果（写图/哈希/删图）经注入端口进入，持久化与 broadcast 留在 main.js |
-| 面板模式状态机（panel-modes） | 纯逻辑模块 `electron/panel-modes.js`：浏览/搜索（含 IME 组合子态）/备注编辑/快捷键捕获四态；呼出键与导航键的全局热键集合由当前模式推导并差量注册；焦点快照生命周期归它管理 |
-| 助手进程 seam（native-helper） | `electron/native-helper.js`：spawn、stdio 行缓冲、JSON 请求 id+超时、一次性运行、生命周期清理的唯一实现；focus-paste 协议 schema 在其顶部文档块命名（C# 实现与回归 mock 为另两处同步点） |
-| 复制粘贴结果契约（CopyResult） | `clipboard:copy` 返回 `{ ok, message }`：键盘 Enter / 双击 / 复制按钮三入口共用；message 为主进程给出的可展示文案，错误文案与 `panel:focus-error` 事件同源 |
+| 历史核心（history） | 纯内存模块 `src-tauri/src/history.rs`：条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化的唯一实现；文件系统效果（写图 / 哈希 / 删图 / 时间 / 生成 id）经 `HistoryStoreBuilder` 的注入端口进入，持久化与 broadcast 留在 `main.rs` |
+| 面板模式状态机（panel_modes） | 纯逻辑模块 `src-tauri/src/panel_modes.rs`：浏览/搜索（含 IME 组合子态）/备注编辑/快捷键捕获四态；呼出键与导航键的全局热键集合由当前模式推导并差量注册；焦点快照生命周期归它管理。效果经 `ModesHost` trait 注入，不依赖 tauri / Win32 |
+| 模式入口（Modes） | `src-tauri/src/modes.rs`：状态机的唯一入口。独占一条 `modes-executor` 线程持有 `PanelModes`，外部只能投递 15 个具名操作（`show` / `hide` / `hide_after_paste` / `dispatch_accel` / `hide_if_clicked_outside` / …），拿不到 `&mut PanelModes`；效果宿主 `Host` 为 module 私有 |
+| 无锁快照（modes_visible / modes_input_active） | 执行线程每次模式操作后刷新的两个 `AtomicBool`，供主线程（鼠标钩子回调、窗口事件）只读判断「面板是否可见 / 是否处于输入态」，绝不阻塞在模式上 |
+| 面板窗口（PanelWindow） | `src-tauri/src/panel_window.rs`：浮层面板几何、焦点、鼠标穿透的唯一归属。`show_at_cursor` / `park_offscreen` / `focus` / `release_focus` / `set_mouse_passthrough` / `hit_test`；「必须投递主线程」与「物理像素 vs DIP」全在实现内部 |
+| 轮询基线（PollBaseline） | `src-tauri/src/poll_baseline.rs`：「这次剪贴板内容算不算一次新复制」的唯一实现。`observe`→`Change` 判定与暂存分离，`confirm(ok)` 决定基线是否推进并置重试标志，`sync_now` 用于自己刚写入后的认账 |
+| 复制并粘贴链路（paste_chain） | `src-tauri/src/paste_chain.rs`：「取内容 → 写剪贴板 → 落位 → 取焦点快照 → 恢复并注入 → 隐藏面板」这条顺序与 `CopyResult` 文案的唯一归属；六个效果经 `PastePort` trait 注入（生产 `Win32PastePort` / 测试假实现） |
+| 复制粘贴结果契约（CopyResult） | `clipboard:copy` 返回 `{ ok, message }`：键盘 Enter / 双击 / 复制按钮三入口共用；`message: &'static str` 由 `paste_chain` 给出，错误文案与 `panel:focus-error` 事件同源（两处都只经 `paste_chain::focus_error_message`） |
+| 开机启动通道（startup） | `src-tauri/src/startup.rs`：`Channel`（dev / 未提权 / 已提权三态）、`apply_intent` 与 `set_auto_start` 共用的 `sync_fact`、「拉起→退出」舞步的唯一实现；注册计划任务经注入进入，决策表可测 |
+| 设置契约（settings） | `src-tauri/src/settings.rs`：`settings.json` 的读写、camelCase 键名契约（兼容旧 snake_case 残留）与坏档兜底的唯一实现 |
+| 面板视图规则（panelView） | `tauri/src/panelView.ts`：搜索过滤、命中高亮片段、选中项落位（`clampIndex` / `moveIndex` / `entryAt`）的纯函数唯一实现；`App.tsx` 只负责把命中片段画成 `<mark>` |
 
 ## 架构脉络
 
-- `electron/main.js`：效果编排——剪贴板轮询与去重基线、持久化、托盘、窗口/离屏隐藏、计划任务管理（静默提权启动/开机启动）、IPC 注册；历史规则与模式规则分别在 store / 状态机 interface 之后。
-- `electron/history.js`：历史核心（纯内存，plain node 可测）。`createHistoryStore` 的小 interface：`recordText / recordImage / promote / togglePin / remove / clear / setNote / load / toJSON` 等；排序/去重/置顶/裁剪规则只存在于这里。
-- `electron/panel-modes.js`：面板模式状态机（纯逻辑，plain node 可测）。`createPanelModes` 的 interface：`show / hide / beginSearch / endSearch / setComposing / beginNoteEdit / endNoteEdit / beginShortcutCapture / cancelShortcutCapture / trySetToggleShortcut`；热键集合由模式推导、差量注册；窗口焦点/渲染层通知/焦点快照经注入端口。
-- `electron/native-helper.js`：助手进程 seam（spawnImpl/execImpl 可注入测试）。`createLineSplitter / spawnLineHelper / createJsonRpcHelper / readOneShotJson`；focus-paste-helper、app-icon-helper、click-watcher 均为这条 seam 上的薄 adapter。
-- `electron/preload.js`：`contextBridge` 暴露 `window.clipboardAPI`（getHistory / onUpdated / copy / remove / pin / clear / setNote / 快捷键 / 焦点错误事件）。
-- `src/App.tsx`：面板 UI、主题、键盘逻辑（主进程面板键经 `panel:key` 转发）、快捷更换覆盖层。
-- 数据流向：主进程维护唯一真相，`broadcast()` 推 `clipboard:updated` 给渲染层；渲染层不直接改数组。
-- `resources/focus-paste-helper.cs`：`focus-paste-helper.exe` 的原生实现，负责窗口/焦点快照、恢复和 `Ctrl+V` 注入；协议 schema 命名处见 `electron/native-helper.js`。
-- 测试：`npm test` 依次跑 `scripts/history-unit.js`、`scripts/panel-modes-unit.js`、`scripts/native-helper-unit.js`（三个纯模块的 interface 直测，无需 Electron mock）与 `scripts/focus-paste-regression.js`、`scripts/autostart-regression.js`（整模块 Electron mock 回归）。
+Rust 主进程（`tauri/src-tauri/src/`）按「规则在 module，效果在 main.rs」分层：
+
+- `main.rs`：效果编排——剪贴板读写、持久化与广播、托盘、全局热键分发、IPC 命令注册、`AppState`。规则一律在 module interface 之后，本文件不做任何领域判定。
+- `history.rs`：历史核心（纯内存，15 例单测）。`HistoryStore` 的小 interface：`record_text / record_image / promote / toggle_pin / remove / clear / set_note / load / to_json / find / entries`；排序 / 去重 / 置顶块 / 裁剪豁免 / 备注归一化只存在于这里。写图、哈希、删图、时间、id 经 `HistoryStoreBuilder` 的函数端口注入。
+- `panel_modes.rs`：面板模式状态机（纯逻辑，11 例单测，不依赖 tauri / Win32）。`PanelModes` 的 interface：`show / hide / on_nav_action / begin_search / end_search / set_composing / begin_note_edit / end_note_edit / begin_shortcut_capture / cancel_shortcut_capture / try_set_toggle_shortcut / set_toggle_shortcut / registered_action_for`；热键集合由当前模式推导并差量注册，窗口焦点 / 渲染层通知 / 焦点快照经 `ModesHost` trait 注入。
+- `modes.rs`：状态机的唯一入口。`Modes::spawn` 起一条 `modes-executor` 线程独占 `PanelModes`，外部只有 15 个具名操作可投递；`Host`（`ModesHost` 的实现）与 `show_on` / `hide_on` / `toggle_on` 全为 module 私有。死锁防线（插件 register 内部投递主线程并阻塞等待）的说明在此文件顶部。
+- `panel_window.rs`：面板窗口（4 例纯几何单测）。`PanelWindow` 的 interface：`show_at_cursor / park_offscreen / focus / release_focus / set_mouse_passthrough / hit_test / exists / is_dark_theme / set_icon / set_position / show`；`centered` / `parked` / `contains_point` 是纯函数，主线程投递与 DIP 换算在实现内部。
+- `poll_baseline.rs`：轮询基线（7 例单测）。`observe / confirm / skip_unchanged / note_seq / sync_now`，「算不算一次新复制」与写盘失败重试标志的唯一实现。
+- `paste_chain.rs`：复制并粘贴链路（9 例单测）。`run(&mut port, id)` 是唯一入口，六个效果经 `PastePort` 注入；`focus_error_message` 是失败文案的唯一映射处。
+- `startup.rs` / `settings.rs` / `tasks.rs`：开机启动的意图与事实分离（通道判定 + 「拉起→退出」舞步，6 例单测）、`settings.json` 键名契约与坏档兜底（6 例单测）、计划任务注册与提权事实查询。
+- `focus_paste.rs` / `source_app.rs` / `click_watcher.rs`：进程内 Win32 的焦点快照与 Ctrl+V 注入、前台应用信息与图标提取、`WH_MOUSE_LL` 全局点击钩子。原 Electron 版的 4 个 C# 助手进程全部退役，因此不再有 `native-helper` 这条 seam。
+
+渲染层（`tauri/src/`）：
+
+- `api.ts`：`window.clipboardAPI` 的 invoke / listen 适配层（替代 `electron/preload.js` 的 contextBridge），接口面与 Electron 版一致。
+- `panelView.ts`：面板视图规则（纯函数，14 例 node 单测）。`filterEntries / highlight / spansToText / clampIndex / moveIndex / entryAt`。
+- `App.tsx`：面板 UI、主题、键盘逻辑（主进程面板键经 `panel:key` 转发）、快捷更换覆盖层；只把命中片段画成 `<mark>`，不再自己算过滤与选中项。
+
+数据流向：Rust 侧维护唯一真相，`commit()` = `persist()` + `broadcast()`，广播经 `emit_panel` 推 `clipboard:updated` 给渲染层；渲染层不直接改数组。
+
+测试：`npm run test` = `test:view`（`node scripts/panel-view-unit.mjs`，14 例，零框架 mock）+ `test:rust`（`cargo test`，58 例），全部是纯模块 interface 直测。GUI 行为（提权 exe、热键、真机粘贴、托盘清晰度、NSIS）仍需人工，清单见 README「待真机验证」。
 
 ## 关键决策（设计树档案）
 
