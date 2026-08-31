@@ -1,7 +1,12 @@
 // ClipboardTool（Tauri 重写）主进程编排。
-// 移植自 electron/main.js：剪贴板轮询与去重基线、持久化、托盘（DPI/主题自适应）、
-// 面板窗口管理（呼出/隐藏/离屏驻留/浏览态自动失焦）、计划任务（静默提权/开机启动）、
-// 全局热键、全局点击监听、IPC 命令。
+// 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
+//   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
+//   panel_modes    面板四态状态机 + 全局热键差量注册
+//   panel_window   面板几何 / 焦点 / 鼠标穿透（主线程投递与 DIP 换算都在其内部）
+//   poll_baseline  「算不算一次新复制」的基线判定
+//   startup        静默启动通道的意图 / 事实分离
+//   settings       settings.json 键名契约
+// 剩下的编排职责：剪贴板读写、持久化与广播、托盘、全局热键分发、IPC 命令。
 //
 // 与 Electron 版的结构差异：
 // - 4 个 C# 助手进程（focus-paste / app-icon / click-watcher / task-launcher）全部退役，
@@ -25,6 +30,7 @@ mod click_watcher;
 mod focus_paste;
 mod history;
 mod panel_modes;
+mod panel_window;
 mod poll_baseline;
 mod source_app;
 mod settings;
@@ -34,6 +40,7 @@ mod tasks;
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
 use panel_modes::{FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
+use panel_window::{PanelWindow, PANEL_LABEL};
 use poll_baseline::{Change, PollBaseline};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -44,20 +51,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State, Theme, Wry};
+use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use base64::Engine as _;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
-};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
-const PANEL_WIDTH: f64 = 418.0;
-const PANEL_HEIGHT: f64 = 823.0;
 const TRAY_ICON_SIZES: [u32; 5] = [16, 20, 24, 28, 32];
-const PANEL_LABEL: &str = "panel";
 const TRAY_ID: &str = "main-tray";
 
 struct AppState {
@@ -235,8 +234,13 @@ fn persist(state: &AppState) {
     }
 }
 
-fn broadcast(app: &AppHandle, state: &AppState) {
+// 面板事件的唯一出口：窗口不存在时静默丢弃
+fn emit_panel(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
     let Some(win) = app.get_webview_window(PANEL_LABEL) else { return };
+    let _ = win.emit(event, payload);
+}
+
+fn broadcast(app: &AppHandle, state: &AppState) {
     let entries: Vec<RendererEntry> = {
         let store = state.store.lock().unwrap();
         store
@@ -245,7 +249,7 @@ fn broadcast(app: &AppHandle, state: &AppState) {
             .filter_map(|e| to_renderer_entry(state, e))
             .collect()
     };
-    let _ = win.emit("clipboard:updated", entries);
+    emit_panel(app, "clipboard:updated", entries);
 }
 
 // 一次变更 = store 方法 + commit()（persist + broadcast）
@@ -390,8 +394,8 @@ fn focus_error_message(stage: &str) -> &'static str {
 }
 
 fn send_focus_error(app: &AppHandle, stage: &str, reason: &str) {
-    let Some(win) = app.get_webview_window(PANEL_LABEL) else { return };
-    let _ = win.emit(
+    emit_panel(
+        app,
         "panel:focus-error",
         FocusErrorPayload {
             stage: stage.to_string(),
@@ -401,104 +405,13 @@ fn send_focus_error(app: &AppHandle, stage: &str, reason: &str) {
     );
 }
 
-// ---------- 面板窗口管理 ----------
+// ---------- 面板窗口（几何 / 焦点 / 穿透的唯一归属见 panel_window module） ----------
 
-fn panel_window(app: &AppHandle) -> Option<tauri::WebviewWindow<Wry>> {
-    app.get_webview_window(PANEL_LABEL)
-}
-
-// 显示器物理工作区（扣除任务栏）
-fn monitor_work_area(m: &tauri::Monitor) -> (i32, i32, i32, i32) {
-    let wa = m.work_area();
-    (wa.position.x, wa.position.y, wa.size.width as i32, wa.size.height as i32)
-}
-
-fn monitor_scale_at(app: &AppHandle, x: i32, y: i32) -> Option<f64> {
-    let monitors = app.available_monitors().ok()?;
-    for m in monitors {
-        let pos = m.position();
-        let size = m.size();
-        if x >= pos.x && x < pos.x + size.width as i32 && y >= pos.y && y < pos.y + size.height as i32
-        {
-            return Some(m.scale_factor());
-        }
-    }
-    None
-}
-
-// 窗口几何/焦点等变更统一投递主线程执行：跨线程直接调用会向主线程同步发送消息，
-// 一旦主线程同时在等待我们的锁（热键/点击/命令路径都持有状态锁）即互相等待死锁
-// （表现为窗口"无响应"）。
-fn position_panel(app: &AppHandle) {
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || position_panel_on_main(&app2));
-}
-
-fn position_panel_on_main(app: &AppHandle) {
-    let Some(win) = panel_window(app) else { return };
-    let Ok(cursor) = app.cursor_position() else { return };
-    // 光标所在显示器的工作区居中；用固定面板尺寸避免离屏 DPI 漂移
-    let Some(monitor) = app
-        .available_monitors()
-        .ok()
-        .and_then(|ms| {
-            ms.into_iter()
-                .find(|m| {
-                    let p = m.position();
-                    let s = m.size();
-                    cursor.x as i32 >= p.x
-                        && (cursor.x as i32) < p.x + s.width as i32
-                        && cursor.y as i32 >= p.y
-                        && (cursor.y as i32) < p.y + s.height as i32
-                })
-        })
-        .or_else(|| win.current_monitor().ok().flatten())
-    else {
-        return;
-    };
-    let scale = monitor.scale_factor();
-    let (ax, ay, aw, ah) = monitor_work_area(&monitor);
-    let area_x = ax as f64 / scale;
-    let area_y = ay as f64 / scale;
-    let area_w = aw as f64 / scale;
-    let area_h = ah as f64 / scale;
-    let nx = (area_x + (area_w - PANEL_WIDTH) / 2.0).round();
-    let ny = (area_y + (area_h - PANEL_HEIGHT) / 2.0).round();
-    let _ = win.set_position(Position::Logical(LogicalPosition::new(nx, ny)));
-}
-
-// 隐藏到当前显示器工作区右侧 20 DIP（保持同屏 DPI，避免跨屏漂移）
-fn move_panel_offscreen(app: &AppHandle) {
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || move_panel_offscreen_on_main(&app2));
-}
-
-fn move_panel_offscreen_on_main(app: &AppHandle) {
-    let Some(win) = panel_window(app) else { return };
-    let (hx, hy) = match win.current_monitor().ok().flatten() {
-        Some(m) => {
-            let (ax, ay, aw, _ah) = monitor_work_area(&m);
-            let s = m.scale_factor();
-            ((ax as f64 + aw as f64) / s + 20.0, ay as f64 / s)
-        }
-        None => (-10000.0, 0.0),
-    };
-    let _ = win.set_position(Position::Logical(LogicalPosition::new(hx, hy)));
-}
-
-// 把焦点还给原程序（仅当面板当前持有焦点时）：Electron win.blur() 等价于 SetFocus(NULL)，
-// 必须在窗口归属线程调用
-fn release_panel_focus(app: &AppHandle) {
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(win) = panel_window(&app2) else { return };
-        if win.is_focused().unwrap_or(false) {
-            unsafe {
-                // SetFocus(NULL) 失败（无持有焦点的窗口）可安全忽略
-                let _ = SetFocus(None);
-            }
-        }
-    });
+// 窗口几何、焦点、样式变更都必须投递主线程执行：跨线程直接调用会向主线程同步发消息，
+// 主线程若正在等我们的锁（热键 / 点击 / 命令路径都持有状态锁）即互等死锁。
+// 这条约束现在由 PanelWindow 的实现内部承担，调用方只管动作。
+fn panel(app: &AppHandle) -> PanelWindow {
+    PanelWindow::new(app)
 }
 
 // ---------- 模式状态机效果宿主（仅在执行线程上使用） ----------
@@ -552,26 +465,20 @@ impl ModesHost for ModesHostImpl {
     }
 
     fn can_interact(&self) -> bool {
-        panel_window(&self.app).is_some()
+        panel(&self.app).exists()
     }
 
     fn focus_panel(&self) {
-        let app1 = self.app.clone();
-        let app2 = app1.clone();
-        let _ = app1.run_on_main_thread(move || {
-            if let Some(win) = panel_window(&app2) {
-                let _ = win.set_focus();
-            }
-        });
+        panel(&self.app).focus()
     }
 
     fn blur_panel_if_focused(&self) {
-        release_panel_focus(&self.app);
+        panel(&self.app).release_focus()
     }
 
     fn send_panel_key(&self, action: &str, note_entry_id: Option<&str>) {
-        let Some(win) = panel_window(&self.app) else { return };
-        let _ = win.emit(
+        emit_panel(
+            &self.app,
             "panel:key",
             PanelKeyPayload {
                 action: action.to_string(),
@@ -581,13 +488,11 @@ impl ModesHost for ModesHostImpl {
     }
 
     fn send_panel_shown(&self) {
-        let Some(win) = panel_window(&self.app) else { return };
-        let _ = win.emit("panel:shown", ());
+        emit_panel(&self.app, "panel:shown", ());
     }
 
     fn send_capture_end(&self) {
-        let Some(win) = panel_window(&self.app) else { return };
-        let _ = win.emit("shortcut:capture-end", ());
+        emit_panel(&self.app, "shortcut:capture-end", ());
     }
 
     fn capture_focus(&self) -> Option<FocusTarget> {
@@ -682,7 +587,7 @@ fn show_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostIm
         // 呼出时序：先记录前台窗口与焦点控件，再显示面板（失败静默，面板照常显示）
         modes.ensure_focus_target(host, false);
     }
-    position_panel(app);
+    panel(app).show_at_cursor();
     // 模式状态机负责：重置搜索/备注态、推导注册导航键、通知渲染层（panel:shown）
     modes.show(host);
     // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
@@ -692,7 +597,7 @@ fn hide_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostIm
     diag_log(&format!("hide_panel restore_focus={restore_focus}"));
     // 模式状态机负责：逐层退出捕获/备注/搜索（发对退出事件）、注销导航键、消费焦点快照
     modes.hide(host, restore_focus);
-    move_panel_offscreen(app);
+    panel(app).park_offscreen();
 }
 
 fn toggle_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostImpl) {
@@ -712,24 +617,9 @@ fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
         if !modes.is_panel_visible() {
             return;
         }
-        let Some(win) = panel_window(&app2) else { return };
-        // 钩子坐标是物理像素，转成 DIP 再和窗口边界（DIP）比较
-        let scale =
-            monitor_scale_at(&app2, x, y).or_else(|| win.scale_factor().ok()).unwrap_or(1.0);
-        let dip_x = x as f64 / scale;
-        let dip_y = y as f64 / scale;
-        let Ok(pos) = win.outer_position() else { return };
-        let Ok(size) = win.outer_size() else { return };
-        let win_scale = win.scale_factor().unwrap_or(scale);
-        let bx = pos.x as f64 / win_scale;
-        let by = pos.y as f64 / win_scale;
-        let bw = size.width as f64 / win_scale;
-        let bh = size.height as f64 / win_scale;
-        diag_log(&format!(
-            "click phys=({x},{y}) scale={scale} dip=({dip_x:.1},{dip_y:.1}) bounds=({bx:.1},{by:.1},{bw:.1},{bh:.1}) pos=({},{}) size=({},{})",
-            pos.x, pos.y, size.width, size.height
-        ));
-        if dip_x >= bx && dip_x <= bx + bw && dip_y >= by && dip_y <= by + bh {
+        // 钩子坐标是物理像素，命中判定（含按显示器缩放换算 DIP）在 PanelWindow 内部；
+        // 判不出来（窗口缺失 / 几何读不到）时不隐藏，沿用原行为
+        if !matches!(panel(&app2).hit_test(x, y), Some(false)) {
             return;
         }
         hide_panel_on(&app2, modes, host, true);
@@ -786,19 +676,20 @@ fn window_icon_image(dark_theme: bool) -> Option<tauri::image::Image<'static>> {
     tauri::image::Image::from_bytes(bytes).ok()
 }
 
-fn update_tray_icon(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
-    let state = app.state::<AppState>();
-    let scale = app
-        .primary_monitor()
+// 托盘图标按主屏缩放取「恰好物理尺寸」的图，取不到缩放时按 1x 处理
+fn primary_scale(app: &AppHandle) -> f64 {
+    app.primary_monitor()
         .ok()
         .flatten()
         .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-    let dark = panel_window(app)
-        .and_then(|w| w.theme().ok())
-        .map(|t| t == Theme::Dark)
-        .unwrap_or(false);
+        .unwrap_or(1.0)
+}
+
+fn update_tray_icon(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let state = app.state::<AppState>();
+    let scale = primary_scale(app);
+    let dark = panel(app).is_dark_theme();
     // 同主题同尺寸时跳过，display-metrics 高频触发也不重复 setImage
     let key = format!("{}@{}", if dark { "light" } else { "dark" }, (16.0 * scale).round() as i32);
     {
@@ -814,13 +705,8 @@ fn update_tray_icon(app: &AppHandle) {
 }
 
 fn update_window_icon(app: &AppHandle, dark: bool) {
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(win) = panel_window(&app2) else { return };
-        if let Some(icon) = window_icon_image(dark) {
-            let _ = win.set_icon(icon);
-        }
-    });
+    let Some(icon) = window_icon_image(dark) else { return };
+    panel(app).set_icon(icon);
 }
 
 fn build_tray_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
@@ -851,16 +737,8 @@ fn rebuild_tray_menu(app: &AppHandle) {
 
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
-    let scale = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-    let dark = panel_window(app)
-        .and_then(|w| w.theme().ok())
-        .map(|t| t == Theme::Dark)
-        .unwrap_or(false);
+    let scale = primary_scale(app);
+    let dark = panel(app).is_dark_theme();
     let icon = tray_icon_image(dark, scale).ok_or_else(|| std::io::Error::other("tray icon missing"))?;
     let menu = build_tray_menu(app, &state)?;
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -931,11 +809,14 @@ fn start_shortcut_capture(app: &AppHandle) {
             return;
         }
         show_panel_on(&app2, modes, host, false);
-        let Some(win) = panel_window(&app2) else { return };
         // 捕获按键前聚焦面板（基线 focusable:true，直接 focus 即可；投递主线程执行）
         host.focus_panel();
         let current = format_shortcut(&app2.state::<AppState>().settings.lock().unwrap().shortcut);
-        let _ = win.emit("shortcut:capture-start", ShortcutCaptureStartPayload { current });
+        emit_panel(
+            &app2,
+            "shortcut:capture-start",
+            ShortcutCaptureStartPayload { current },
+        );
     });
 }
 
@@ -1100,7 +981,7 @@ async fn note_set(app: AppHandle, state: State<'_, AppState>, id: String, note: 
 
 #[tauri::command]
 async fn note_begin_edit(app: AppHandle, state: State<'_, AppState>, id: Option<String>) -> Result<bool, String> {
-    if panel_window(&app).is_none() {
+    if !panel(&app).exists() {
         return Ok(false);
     }
     let ok = state
@@ -1152,7 +1033,7 @@ async fn shortcut_cancel(_app: AppHandle, state: State<'_, AppState>) -> Result<
 // 搜索：渲染层点击常驻搜索框时进入搜索模式（与按空格等效）
 #[tauri::command]
 async fn search_activate(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
-    if panel_window(&app).is_none() {
+    if !panel(&app).exists() {
         return Ok(true);
     }
     let _ = state.modes_exec.exec(|m, h| m.begin_search(h)).await;
@@ -1174,24 +1055,15 @@ async fn window_hide(app: AppHandle, state: State<'_, AppState>) -> Result<bool,
     Ok(true)
 }
 
-// 透明窗口点击穿透：圆角外区域应穿透到下层窗口（Windows 实现：切换 WS_EX_TRANSPARENT）
+// 透明窗口点击穿透：圆角外区域应穿透到下层窗口（Windows 实现在 PanelWindow 内）
 #[tauri::command]
 async fn window_set_ignore_mouse(app: AppHandle, ignore: bool, forward: Option<bool>) -> Result<bool, String> {
     let _ = forward; // forward 仅 macOS 有意义
-    let Some(win) = panel_window(&app) else { return Ok(false) };
-    let Ok(hwnd) = win.hwnd() else { return Ok(false) };
-    let hwnd_raw = hwnd.0 as isize; // HWND 含裸指针非 Send，取值后主线程重建
-    // 样式切换必须发生在主线程（跨线程改窗口样式同样是同步消息）
-    let _ = app.run_on_main_thread(move || unsafe {
-        let hwnd = HWND(hwnd_raw as *mut _);
-        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let new_style = if ignore {
-            style | WS_EX_TRANSPARENT.0
-        } else {
-            style & !WS_EX_TRANSPARENT.0
-        };
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style as isize);
-    });
+    let panel = panel(&app);
+    if !panel.exists() {
+        return Ok(false);
+    }
+    panel.set_mouse_passthrough(ignore);
     Ok(true)
 }
 
@@ -1322,13 +1194,14 @@ fn main() {
 
             // ready-to-show 热身：先在 (0,0) 显示一次让 WebView 完成首帧渲染，120ms 后移到屏外，
             // 避免首次呼出时内容空白闪烁（与 main.js 的 ready-to-show 舞步一致）
-            if let Some(win) = panel_window(app.handle()) {
-                let _ = win.set_position(Position::Logical(LogicalPosition::new(0.0, 0.0)));
-                let _ = win.show();
+            let warmup = panel(app.handle());
+            if warmup.exists() {
+                warmup.set_position(0.0, 0.0);
+                warmup.show();
                 let app2 = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(120));
-                    move_panel_offscreen(&app2);
+                    panel(&app2).park_offscreen();
                 });
             }
 
@@ -1389,22 +1262,14 @@ fn main() {
                 // 只读无锁原子快照——主线程绝不允许阻塞在模式状态上（死锁防线）。
                 tauri::WindowEvent::Focused(true) => {
                     diag_log("focused(true) -> queue auto-blur check");
-                    let app2 = app.clone();
-                    let _ = app.run_on_main_thread(move || {
-                        let state = app2.state::<AppState>();
-                        if !state.modes_visible.load(Ordering::Relaxed)
-                            || state.modes_input_active.load(Ordering::Relaxed)
-                        {
-                            return;
-                        }
-                        let Some(win) = panel_window(&app2) else { return };
-                        if !win.is_focused().unwrap_or(false) {
-                            return;
-                        }
-                        unsafe {
-                            let _ = SetFocus(None);
-                        }
-                    });
+                    // 只读无锁原子快照：主线程绝不允许阻塞在模式状态上（死锁防线）。
+                    // 归还焦点这个动作本身由 PanelWindow 投递主线程执行。
+                    let state = app.state::<AppState>();
+                    if state.modes_visible.load(Ordering::Relaxed)
+                        && !state.modes_input_active.load(Ordering::Relaxed)
+                    {
+                        panel(app).release_focus();
+                    }
                 }
                 tauri::WindowEvent::ThemeChanged(_) => {
                     update_tray_icon(app);
