@@ -2,7 +2,8 @@
 // 纯内存 module：不依赖 tauri / Win32，可按 interface 直接测试。
 // 文件系统效果经注入端口进入（save_image_png / hash_image_file / remove_image_file /
 // image_file_exists）；持久化与 broadcast 由调用方（main.rs）完成，不属于本 module。
-// 领域规则出处：CONTEXT.md「条目身份与去重」「置顶功能」「备注功能」决策档案。
+// 领域规则出处：ADR-0003（条目身份只由内容决定）、ADR-0004（置顶块与普通块）、
+// CONTEXT.md「备注」「落位」。
 // Rust 移植自 electron/history.js（测试用例同步移植自 scripts/history-unit.js；
 // 对象同一性断言在 Rust 中改为按 id 的 find 断言，行为语义不变）。
 

@@ -1,5 +1,7 @@
 # Windows UIPI 与全局输入拦截研究（Electron 剪贴板工具场景）
 
+> **适用范围**：本文件是一次性调研记录，保持原样不改写。调研发生在 Electron 时期，但结论与框架无关——Electron 的 `globalShortcut` 与 Tauri 的 `tauri-plugin-global-shortcut` 底层同为 `RegisterHotKey`，`SendInput` 侧更是同一套 Win32。项目已于 2026-08-31 删除 Electron 实现，本文的落地结论是 [ADR-0001](adr/0001-require-administrator-with-scheduled-task.md)（整工具常驻提权 + 计划任务静默启动）与 [ADR-0002](adr/0002-no-elevation-ui.md)（界面上不提提权）。文中「Electron 主进程」「Electron 生态」等说法按调研当时的语境读。
+>
 > 场景：Electron 主进程以 normal integrity 运行，globalShortcut（底层是 RegisterHotKey）与 SendInput 自动粘贴在"目标应用以 Administrator 运行并处于前台"时失效。
 > 调研日期：2026-04；方法：直接抓取 Microsoft Learn / 官方文档原文、GitHub 源码、StackExchange API（superuser/SO）、GitHub issue、DDG 检索；由于搜索桥(web_search/read_page)故障，全部内容经由 curl 直取并做了原文核对。**凡未能从主源验证的结论均已显式标注。**
 

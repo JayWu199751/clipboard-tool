@@ -1,6 +1,6 @@
 // 静默提权启动通道：计划任务 ClipboardToolElevated 是唯一的提权入口。
 //
-// 领域契约（见 CONTEXT.md「开机启动意图」）：
+// 领域契约（见 CONTEXT.md「意图 / 事实」与 ADR-0001）：
 //   意图 = settings.json 的 autoStart，用户设定，持久化；
 //   事实 = 计划任务及其 onlogon 触发器是否存在，不持久化，每次启动按意图实测重建。
 // 之所以要分开：未提权进程建不出 RunLevel=Highest 的任务，此时只能先落盘意图、
