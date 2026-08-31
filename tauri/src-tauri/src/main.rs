@@ -1083,10 +1083,18 @@ fn ensure_elevated_task(app: &AppHandle) {
 fn set_auto_start(app: &AppHandle, enabled: bool) {
     let state = app.state::<AppState>();
     let new_value = if is_dev() {
-        // 开发模式退回仅持久化意图（Electron 版此处走登录项）
+        // 开发模式仅持久化意图
+        enabled
+    } else if !is_elevated() {
+        // 未提权时无法创建 Highest 任务，先持久化用户意图，待下次提权启动时由 ensure_elevated_task 补建
+        eprintln!("未提权，已保存开机启动意图 {}，任务将在下次提权启动时生效", if enabled { "✅" } else { "❌" });
+        diag_log(&format!("set_auto_start deferred: enabled={} not elevated", enabled));
         enabled
     } else {
         let ok = tasks::ps_register_task(&current_exe_path(), enabled);
+        if !ok {
+            eprintln!("创建计划任务失败：开关回退");
+        }
         ok && enabled
     };
     {
