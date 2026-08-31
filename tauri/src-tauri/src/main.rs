@@ -1,7 +1,8 @@
 // ClipboardTool（Tauri 重写）主进程编排。
 // 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
 //   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
-//   panel_modes    面板四态状态机 + 全局热键差量注册
+//   panel_modes    面板四态状态机 + 全局热键差量注册（纯逻辑）
+//   modes          状态机的唯一入口：独占执行线程、具名操作、效果宿主
 //   panel_window   面板几何 / 焦点 / 鼠标穿透（主线程投递与 DIP 换算都在其内部）
 //   poll_baseline  「算不算一次新复制」的基线判定
 //   startup        静默启动通道的意图 / 事实分离
@@ -11,24 +12,21 @@
 // 与 Electron 版的结构差异：
 // - 4 个 C# 助手进程（focus-paste / app-icon / click-watcher / task-launcher）全部退役，
 //   对应逻辑成为本进程内的模块（focus_paste / source_app / click_watcher / tasks）。
-// - 面板模式状态机（panel_modes）经 ModesHost trait 注入效果；焦点快照从异步 JSON-RPC
+// - 面板模式状态机（panel_modes）经 modes::ModesHost 注入效果；焦点快照从异步 JSON-RPC
 //   变为同步 Win32 调用。
 // - 数据目录沿用 %APPDATA%\ClipboardTool，与 Electron 版共享历史 JSON 与图片文件。
 //
-// 线程模型（死锁防线的核心，改动前必读）：
-// - tauri-plugin-global-shortcut 的 register/unregister 内部是「投递主线程 + 阻塞等待」
-//   （run_main_thread! 宏：run_on_main_thread + mpsc recv）。谁在持有 modes 锁时调用它，
-//   而主线程恰好在等这把锁（如点击面板后的 Focused 事件任务），就构成互等死锁
-//   （历史上表现为「点击复制并粘贴 → 无响应卡死」）。
-// - 因此面板模式状态机由专用执行线程（ModesExecutor）独占：所有模式操作单向投递过去，
-//   主线程只读无锁原子快照（modes_visible / modes_input_active），绝不阻塞在模式上；
-//   执行线程调用插件时主线程必然空闲，插件的内嵌投递总能完成 → 无循环等待。
+// 线程模型（死锁防线的核心，改动前必读）：见 modes module 顶部注释。
+// 一句话：PanelModes 由 modes::Modes 独占的执行线程持有，本文件只通过 AppState::modes
+// 投递具名操作；主线程只读无锁原子快照（modes_visible / modes_input_active），
+// 绝不阻塞在模式上。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod click_watcher;
 mod focus_paste;
 mod history;
+mod modes;
 mod panel_modes;
 mod panel_window;
 mod poll_baseline;
@@ -39,20 +37,19 @@ mod tasks;
 
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
-use panel_modes::{FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
+use modes::Modes;
 use panel_window::{PanelWindow, PANEL_LABEL};
 use poll_baseline::{Change, PollBaseline};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc as std_mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 use base64::Engine as _;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
@@ -61,8 +58,8 @@ const TRAY_ID: &str = "main-tray";
 
 struct AppState {
     store: Mutex<HistoryStore>,
-    // 面板模式状态机的唯一入口（独占执行线程），绝不从主线程/命令线程直接加锁
-    modes_exec: ModesExecutor,
+    // 面板模式状态的唯一入口：内部独占一条执行线程，外部拿不到 &mut PanelModes
+    modes: Modes,
     // 主线程使用的无锁快照（执行线程在每次模式操作后刷新）
     modes_visible: AtomicBool,
     modes_input_active: AtomicBool,
@@ -414,233 +411,6 @@ fn panel(app: &AppHandle) -> PanelWindow {
     PanelWindow::new(app)
 }
 
-// ---------- 模式状态机效果宿主（仅在执行线程上使用） ----------
-
-struct ModesHostImpl {
-    app: AppHandle,
-}
-
-impl ModesHostImpl {
-    fn new(app: &AppHandle) -> Self {
-        ModesHostImpl { app: app.clone() }
-    }
-}
-
-impl ModesHost for ModesHostImpl {
-    fn register_key(&mut self, accel: &str, _action: HotkeyAction) -> bool {
-        let Ok(shortcut) = accel.to_string().parse::<Shortcut>() else {
-            eprintln!("注册全局快捷键 {accel} 失败：无法解析");
-            return false;
-        };
-        let state = self.app.state::<AppState>();
-        {
-            let hotkeys = state.hotkeys.lock().unwrap();
-            if hotkeys.contains_key(&shortcut) {
-                return false;
-            }
-        }
-        // 插件内部会投递主线程并阻塞等待——本方法只在执行线程上调用，主线程永远空闲可处理
-        let ok = self.app.global_shortcut().register(shortcut).is_ok();
-        if ok {
-            state.hotkeys.lock().unwrap().insert(shortcut, accel.to_string());
-        } else {
-            eprintln!("注册全局快捷键 {accel} 失败（可能被其他程序占用）");
-        }
-        ok
-    }
-
-    fn unregister_key(&mut self, accel: &str) {
-        let state = self.app.state::<AppState>();
-        let shortcut = {
-            let hotkeys = state.hotkeys.lock().unwrap();
-            hotkeys
-                .iter()
-                .find(|(_, a)| a.as_str() == accel)
-                .map(|(s, _)| *s)
-        };
-        if let Some(shortcut) = shortcut {
-            let _ = self.app.global_shortcut().unregister(shortcut);
-            state.hotkeys.lock().unwrap().remove(&shortcut);
-        }
-    }
-
-    fn can_interact(&self) -> bool {
-        panel(&self.app).exists()
-    }
-
-    fn focus_panel(&self) {
-        panel(&self.app).focus()
-    }
-
-    fn blur_panel_if_focused(&self) {
-        panel(&self.app).release_focus()
-    }
-
-    fn send_panel_key(&self, action: &str, note_entry_id: Option<&str>) {
-        emit_panel(
-            &self.app,
-            "panel:key",
-            PanelKeyPayload {
-                action: action.to_string(),
-                note_entry_id: note_entry_id.map(|s| s.to_string()),
-            },
-        );
-    }
-
-    fn send_panel_shown(&self) {
-        emit_panel(&self.app, "panel:shown", ());
-    }
-
-    fn send_capture_end(&self) {
-        emit_panel(&self.app, "shortcut:capture-end", ());
-    }
-
-    fn capture_focus(&self) -> Option<FocusTarget> {
-        focus_paste::snapshot().ok()
-    }
-
-    fn restore_focus(&self, target: &FocusTarget) {
-        if let Err(failure) = focus_paste::restore_and_paste(target, false) {
-            send_focus_error(&self.app, failure.stage, failure.reason);
-        }
-    }
-
-    fn report_no_focus_target(&self) {
-        send_focus_error(&self.app, "restore", "no_focus_target");
-    }
-
-    fn validate_note_target(&self, target_id: Option<&str>) -> bool {
-        let state = self.app.state::<AppState>();
-        let store = state.store.lock().unwrap();
-        match target_id {
-            None => !store.is_empty(),
-            Some(id) => store.find(id).is_some(),
-        }
-    }
-
-    fn on_toggle_requested(&self) {
-        // Toggle 统一由 dispatch_hotkey 在执行线程上处理（&self 拿不到 &mut PanelModes）；
-        // 本方法为 trait 完整性保留
-    }
-}
-
-// ---------- 模式状态机执行线程 ----------
-
-type ModesJob = Box<dyn FnOnce(&mut PanelModes, &mut ModesHostImpl) + Send>;
-
-struct ModesExecutor {
-    tx: std_mpsc::Sender<ModesJob>,
-}
-
-impl ModesExecutor {
-    fn new(_app: &AppHandle) -> (Self, std_mpsc::Receiver<ModesJob>) {
-        let (tx, rx) = std_mpsc::channel::<ModesJob>();
-        (ModesExecutor { tx }, rx)
-    }
-
-    // 独占执行线程：模式操作串行化在唯一线程上，主线程/命令线程/点击线程只投递不等待锁。
-    // 每个任务结束后刷新主线程使用的无锁快照。
-    fn spawn_worker(app: AppHandle, rx: std_mpsc::Receiver<ModesJob>) {
-        let _ = std::thread::Builder::new().name("modes-executor".into()).spawn(move || {
-            let mut modes = PanelModes::new();
-            let mut host = ModesHostImpl::new(&app);
-            while let Ok(job) = rx.recv() {
-                job(&mut modes, &mut host);
-                let st = modes.state();
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.modes_visible.store(st.visible, Ordering::Relaxed);
-                    state
-                        .modes_input_active
-                        .store(st.visible && st.mode != Mode::Browse, Ordering::Relaxed);
-                }
-            }
-        });
-    }
-
-    // 投递并等待结果（仅 async 命令线程使用；插件内嵌的主线程投递总能完成，无死锁）
-    fn exec<R, F>(&self, f: F) -> tokio::sync::oneshot::Receiver<R>
-    where
-        F: FnOnce(&mut PanelModes, &mut ModesHostImpl) -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        let (rtx, rrx) = tokio::sync::oneshot::channel();
-        let _ = self.tx.send(Box::new(move |modes, host| {
-            let _ = rtx.send(f(modes, host));
-        }));
-        rrx
-    }
-
-    // 投递不等待（热键分发/点击/托盘等回调线程使用；回调必须立即返回）
-    fn exec_now<F>(&self, f: F)
-    where
-        F: FnOnce(&mut PanelModes, &mut ModesHostImpl) + Send + 'static,
-    {
-        let _ = self.exec(f);
-    }
-}
-
-// 以下 *_on 系列只在执行线程的任务闭包内调用（持有 &mut PanelModes）。
-
-fn show_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostImpl, capture: bool) {
-    diag_log(&format!("show_panel capture={capture}"));
-    if capture {
-        // 呼出时序：先记录前台窗口与焦点控件，再显示面板（失败静默，面板照常显示）
-        modes.ensure_focus_target(host, false);
-    }
-    panel(app).show_at_cursor();
-    // 模式状态机负责：重置搜索/备注态、推导注册导航键、通知渲染层（panel:shown）
-    modes.show(host);
-    // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
-}
-
-fn hide_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostImpl, restore_focus: bool) {
-    diag_log(&format!("hide_panel restore_focus={restore_focus}"));
-    // 模式状态机负责：逐层退出捕获/备注/搜索（发对退出事件）、注销导航键、消费焦点快照
-    modes.hide(host, restore_focus);
-    panel(app).park_offscreen();
-}
-
-fn toggle_panel_on(app: &AppHandle, modes: &mut PanelModes, host: &mut ModesHostImpl) {
-    if modes.is_panel_visible() {
-        hide_panel_on(app, modes, host, true);
-    } else {
-        show_panel_on(app, modes, host, true);
-    }
-}
-
-// ---------- 全局点击监听（回调线程 → 投递执行线程） ----------
-
-fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
-    let state = app.state::<AppState>();
-    let app2 = app.clone();
-    state.modes_exec.exec_now(move |modes, host| {
-        if !modes.is_panel_visible() {
-            return;
-        }
-        // 钩子坐标是物理像素，命中判定（含按显示器缩放换算 DIP）在 PanelWindow 内部；
-        // 判不出来（窗口缺失 / 几何读不到）时不隐藏，沿用原行为
-        if !matches!(panel(&app2).hit_test(x, y), Some(false)) {
-            return;
-        }
-        hide_panel_on(&app2, modes, host, true);
-    });
-}
-
-// ---------- 全局快捷键分发（插件回调线程 → 投递执行线程） ----------
-
-fn dispatch_hotkey(app: &AppHandle, accel: &str) {
-    diag_log(&format!("dispatch_hotkey accel={accel}"));
-    let state = app.state::<AppState>();
-    let accel = accel.to_string();
-    let app2 = app.clone();
-    state.modes_exec.exec_now(move |modes, host| match modes.registered_action_for(&accel) {
-        Some(HotkeyAction::Toggle) => toggle_panel_on(&app2, modes, host),
-        Some(HotkeyAction::Nav(nav)) => modes.on_nav_action(host, nav),
-        None => {}
-    });
-}
-
-// ---------- 托盘 ----------
 
 fn tray_icon_image(dark_theme: bool, scale: f64) -> Option<tauri::image::Image<'static>> {
     // 与 main.js 相同：按主屏 scaleFactor 选「恰好 round(16*scale) 物理像素」的单一尺寸图，
@@ -750,10 +520,11 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => {
                 let state = app.state::<AppState>();
-                let app2 = app.clone();
-                state.modes_exec.exec_now(move |modes, host| show_panel_on(&app2, modes, host, true));
+                state.modes.show();
             }
-            "change-shortcut" => start_shortcut_capture(app),
+            "change-shortcut" => {
+                app.state::<AppState>().modes.begin_shortcut_capture();
+            }
             "autostart" => {
                 let state = app.state::<AppState>();
                 let enabled = !state.settings.lock().unwrap().auto_start;
@@ -768,10 +539,7 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
                 let app = tray.app_handle();
                 let state = app.state::<AppState>();
-                let app2 = app.clone();
-                state
-                    .modes_exec
-                    .exec_now(move |modes, host| show_panel_on(&app2, modes, host, true));
+                state.modes.show();
             }
         })
         .build(app)?;
@@ -796,28 +564,6 @@ fn format_shortcut(accel: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" + ")
-}
-
-// 开始更换快捷键：进入捕获模式（模式机先退出其它输入态并注销全部全局键），
-// 随后显示面板并聚焦，让渲染进程捕获按键。
-// 在托盘菜单回调（主线程）触发：只投递执行线程，回调立即返回。
-fn start_shortcut_capture(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let app2 = app.clone();
-    state.modes_exec.exec_now(move |modes, host| {
-        if !modes.begin_shortcut_capture(host) {
-            return;
-        }
-        show_panel_on(&app2, modes, host, false);
-        // 捕获按键前聚焦面板（基线 focusable:true，直接 focus 即可；投递主线程执行）
-        host.focus_panel();
-        let current = format_shortcut(&app2.state::<AppState>().settings.lock().unwrap().shortcut);
-        emit_panel(
-            &app2,
-            "shortcut:capture-start",
-            ShortcutCaptureStartPayload { current },
-        );
-    });
 }
 
 // ---------- 开机启动（意图落盘 + 事实重建；通道判定与顺序契约见 startup module） ----------
@@ -904,11 +650,7 @@ async fn clipboard_copy(app: AppHandle, state: State<'_, AppState>, id: String) 
     // 再次提升+广播（一次多余的全列表重绘，也是粘贴后闪烁的来源）
     sync_baseline(&state);
     // 4) 恢复原窗口焦点并注入 Ctrl+V
-    let target = state
-        .modes_exec
-        .exec(|m, _h| m.focus_target_snapshot_cloned())
-        .await
-        .unwrap_or(None);
+    let target = state.modes.focus_target().await.unwrap_or(None);
     let Some(target) = target else {
         send_focus_error(&app, "restore", "no_focus_target");
         return Ok(CopyResult { ok: false, message: focus_error_message("restore").to_string() });
@@ -917,8 +659,8 @@ async fn clipboard_copy(app: AppHandle, state: State<'_, AppState>, id: String) 
     match focus_paste::restore_and_paste(&target, true) {
         Ok(()) => {
             diag_log("copy: pasted ok -> hide");
-            let app2 = app.clone();
-            let _ = state.modes_exec.exec(move |m, h| hide_panel_on(&app2, m, h, false)).await; // restoreFocus: false
+            // 粘贴已把焦点归还原窗口，隐藏时不再重复恢复
+            let _ = state.modes.hide_after_paste().await;
             Ok(CopyResult { ok: true, message: "已复制并粘贴".to_string() })
         }
         Err(failure) => {
@@ -985,8 +727,8 @@ async fn note_begin_edit(app: AppHandle, state: State<'_, AppState>, id: Option<
         return Ok(false);
     }
     let ok = state
-        .modes_exec
-        .exec(move |m, h| m.begin_note_edit(h, id.as_deref()))
+        .modes
+        .begin_note_edit(id)
         .await
         .unwrap_or(false);
     Ok(ok)
@@ -994,7 +736,7 @@ async fn note_begin_edit(app: AppHandle, state: State<'_, AppState>, id: Option<
 
 #[tauri::command]
 async fn note_end_edit(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
-    let _ = state.modes_exec.exec(|m, h| m.end_note_edit(h, true)).await;
+    let _ = state.modes.end_note_edit().await;
     Ok(true)
 }
 
@@ -1002,12 +744,7 @@ async fn note_end_edit(_app: AppHandle, state: State<'_, AppState>) -> Result<bo
 #[tauri::command]
 async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String) -> Result<ShortcutTryResult, String> {
     let formatted = format_shortcut(&accel);
-    let accel_for_job = accel.clone();
-    let ok = state
-        .modes_exec
-        .exec(move |m, h| m.try_set_toggle_shortcut(h, &accel_for_job))
-        .await
-        .unwrap_or(false);
+    let ok = state.modes.try_set_toggle_shortcut(&accel).await.unwrap_or(false);
     if !ok {
         return Ok(ShortcutTryResult { ok: false, formatted });
     }
@@ -1020,13 +757,13 @@ async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String)
     rebuild_tray_menu(&app);
     println!("全局快捷键已更换为: {formatted}");
     // 恢复焦点给原程序（导航键恢复已由模式状态机完成）
-    let _ = state.modes_exec.exec(|m, h| m.restore_original_focus(h)).await;
+    let _ = state.modes.restore_original_focus().await;
     Ok(ShortcutTryResult { ok: true, formatted })
 }
 
 #[tauri::command]
 async fn shortcut_cancel(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
-    let _ = state.modes_exec.exec(|m, h| m.cancel_shortcut_capture(h, true)).await;
+    let _ = state.modes.cancel_shortcut_capture().await;
     Ok(true)
 }
 
@@ -1036,22 +773,21 @@ async fn search_activate(app: AppHandle, state: State<'_, AppState>) -> Result<b
     if !panel(&app).exists() {
         return Ok(true);
     }
-    let _ = state.modes_exec.exec(|m, h| m.begin_search(h)).await;
+    let _ = state.modes.begin_search().await;
     Ok(true)
 }
 
 // 搜索：中文输入法组合中暂停面板导航键（↑↓/Enter 让给 IME 候选），组合结束恢复
 #[tauri::command]
 async fn search_set_composing(_app: AppHandle, state: State<'_, AppState>, composing: bool) -> Result<bool, String> {
-    let _ = state.modes_exec.exec(move |m, h| m.set_composing(h, composing)).await;
+    let _ = state.modes.set_composing(composing).await;
     Ok(true)
 }
 
 #[tauri::command]
-async fn window_hide(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+async fn window_hide(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     diag_log("window_hide command");
-    let app2 = app.clone();
-    let _ = state.modes_exec.exec(move |m, h| hide_panel_on(&app2, m, h, true)).await;
+    let _ = state.modes.hide().await;
     Ok(true)
 }
 
@@ -1104,10 +840,7 @@ fn main() {
             tauri_plugin_single_instance::Builder::new()
                 .callback(|app, _args, _cwd| {
                     let state = app.state::<AppState>();
-                    let app2 = app.clone();
-                    state
-                        .modes_exec
-                        .exec_now(move |modes, host| show_panel_on(&app2, modes, host, true));
+                    state.modes.show();
                 })
                 .build(),
         )
@@ -1117,7 +850,7 @@ fn main() {
                     let state = app.state::<AppState>();
                     let accel = state.hotkeys.lock().unwrap().get(shortcut).cloned();
                     if let Some(accel) = accel {
-                        dispatch_hotkey(app, &accel);
+                        state.modes.dispatch_accel(&accel);
                     }
                 }
             }).build(),
@@ -1173,10 +906,10 @@ fn main() {
             }
             let settings = settings::load(&data_dir.join("settings.json"));
 
-            let (modes_exec, modes_rx) = ModesExecutor::new(app.handle());
+            // 执行线程在这里起来：任务收尾要读 AppState 刷新快照，故先 manage 再 spawn
             app.manage(AppState {
                 store: Mutex::new(store),
-                modes_exec,
+                modes: Modes::spawn(app.handle()),
                 modes_visible: AtomicBool::new(false),
                 modes_input_active: AtomicBool::new(false),
                 settings: Mutex::new(settings),
@@ -1187,9 +920,6 @@ fn main() {
                 data_dir,
                 tray_icon_key: Mutex::new(String::new()),
             });
-            // 状态就绪后再启动执行线程（任务里会读 AppState 刷新快照）
-            ModesExecutor::spawn_worker(app.handle().clone(), modes_rx);
-
             let state = app.state::<AppState>();
 
             // ready-to-show 热身：先在 (0,0) 显示一次让 WebView 完成首帧渲染，120ms 后移到屏外，
@@ -1210,16 +940,14 @@ fn main() {
             // 全局点击监听（点击面板外关闭面板）
             let app2 = app.handle().clone();
             let watcher = click_watcher::ClickWatcher::start(move |x, y| {
-                handle_global_click(&app2, x, y);
+                app2.state::<AppState>().modes.hide_if_clicked_outside(x, y);
             });
             app.manage(Mutex::new(watcher));
 
             // 呼出快捷键也归模式状态机的差量注册管理（捕获/恢复都由它推导）
             {
                 let shortcut = state.settings.lock().unwrap().shortcut.clone();
-                state.modes_exec.exec_now(move |modes, host| {
-                    modes.set_toggle_shortcut(&shortcut, host);
-                });
+                state.modes.set_toggle_shortcut(&shortcut);
             }
 
             // 计划任务按持久化意图重建（dev / 未提权时的取舍由 startup 判定）
@@ -1252,10 +980,7 @@ fn main() {
                     // 面板窗口只隐藏不关闭，应用常驻托盘
                     api.prevent_close();
                     let state = app.state::<AppState>();
-                    let app2 = app.clone();
-                    state
-                        .modes_exec
-                        .exec_now(move |modes, host| hide_panel_on(&app2, modes, host, true));
+                    state.modes.hide();
                 }
                 // 浏览态自动失焦：focusable:true 下点击会激活窗口，浏览态下立即 blur 将焦点还回
                 // 原程序，输入态（搜索/备注编辑/快捷键捕获）则保留焦点以便输入。

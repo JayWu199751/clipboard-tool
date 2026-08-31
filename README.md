@@ -20,6 +20,7 @@
 | `main.js` 的 settings 读写 | `src-tauri/src/settings.rs`（键名契约与坏档兜底，单测 6 例） |
 | `main.js` 内的轮询基线（lastText / lastImageHash / 重试标志） | `src-tauri/src/poll_baseline.rs`（唯一实现「算不算一次新复制」，单测 7 例） |
 | `main.js` 的面板窗口管理（呼出/离屏驻留/失焦/穿透） | `src-tauri/src/panel_window.rs`（几何与主线程投递的唯一归属，单测 4 例纯几何） |
+| `main.js` 里散布各处的 `webContents.send` / 直接持锁改模式 | `src-tauri/src/modes.rs`（模式状态机唯一入口：具名操作 + 独占执行线程 + 效果宿主） |
 | `electron/preload.js` contextBridge | `src/api.ts`（invoke/listen 适配层，`window.clipboardAPI` 接口面不变，App.tsx 零改动） |
 | `App.tsx` 内的搜索过滤 / 高亮 / 选中项算式 | `src/panelView.ts`（纯逻辑，单测 14 例；App.tsx 只画 `<mark>`） |
 | 600ms 轮询（无条件 readImage+toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开，减少与其它程序的争用） |
@@ -73,7 +74,8 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 2. **插件热键 API 的阻塞投递会造成跨线程死锁**：`global_shortcut().register/unregister` 内部是
    「投递主线程 + 阻塞 recv」。若从持有自建锁的线程调用，而主线程恰在等同一把锁（如点击面板
    触发的 Focused 事件任务），即互等卡死（表现为"点击复制并粘贴→无响应"）。解法：模式状态机
-   由专用执行线程独占（ModesExecutor），所有模式操作单向投递，主线程只读无锁原子快照。
+   由专用执行线程独占（`modes::Modes`），外部只能投递具名操作、拿不到状态机本身，
+   主线程只读无锁原子快照。
 
 ### 待真机验证（与 Electron 版同类的实证项）
 
