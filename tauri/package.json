@@ -11,7 +11,9 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "typecheck": "tsc --noEmit",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:view": "node scripts/panel-view-unit.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "npm run test:view && npm run test:rust"
   },
   "dependencies": {
     "react": "^19.2.8",

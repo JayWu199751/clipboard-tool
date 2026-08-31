@@ -2,7 +2,8 @@
 
 > 基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面剪贴板工具：自动记录文字/图片历史，全局快捷键呼出，一键复制并粘贴回原输入框。原 Electron 实现已于 2026-08-31 删除，当前为纯 Tauri 实现；数据目录仍沿用 `%APPDATA%\ClipboardTool` 与旧版存档兼容（历史 JSON、图片、settings.json）。
 
-> 渲染层 React 代码从 Electron 版原样复用，主进程由 JavaScript 重写为 Rust（下表为历史对比，Electron 代码已移除）。
+> 主进程由 JavaScript 重写为 Rust，渲染层 React 代码沿用 Electron 版结构（下表为历史对比，Electron 代码已移除）。
+> 渲染层的搜索/选中规则与主进程的历史、模式规则一样收敛为纯 module（`src/panelView.ts`），可脱离框架直测。
 
 ## 与 Electron 版的架构差异
 
@@ -18,6 +19,7 @@
 | `main.js` 内的提权/开机启动分支 | `src-tauri/src/startup.rs`（通道判定 + 意图/事实分离，单测 3 例） |
 | `main.js` 的 settings 读写 | `src-tauri/src/settings.rs`（键名契约与坏档兜底，单测 6 例） |
 | `electron/preload.js` contextBridge | `src/api.ts`（invoke/listen 适配层，`window.clipboardAPI` 接口面不变，App.tsx 零改动） |
+| `App.tsx` 内的搜索过滤 / 高亮 / 选中项算式 | `src/panelView.ts`（纯逻辑，单测 14 例；App.tsx 只画 `<mark>`） |
 | 600ms 轮询（无条件 readImage+toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开，减少与其它程序的争用） |
 
 数据目录沿用 `%APPDATA%\ClipboardTool`，与 Electron 版共享历史 JSON、图片文件与 settings.json（两版不要同时运行）。
@@ -28,6 +30,8 @@
 cd tauri
 npm install
 npm run dev        # tauri dev：vite 5173 + 调试 exe（asInvoker，非提权）
+npm run test       # 全部单测：test:view（node 14 例）+ test:rust（cargo 35 例）
+npm run test:view  # node scripts/panel-view-unit.mjs（面板视图规则，零框架）
 npm run test:rust  # cargo test（35 例：history 15 + panel-modes 11 + settings 6 + startup 3）
 npm run typecheck  # tsc --noEmit
 npm run build      # tauri build（NSIS）
@@ -55,7 +59,7 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 
 ## 实测验证记录（2026-08-31）
 
-- `cargo test` 35/35 通过；`tsc --noEmit`、`vite build` 干净。
+- `npm run test` 全绿：`cargo test` 35/35、`node scripts/panel-view-unit.mjs` 14/14；`tsc --noEmit`、`vite build` 干净（产物内已无预览用假数据）。
 - 冒烟（隔离 APPDATA）：文本/图片复制均被记录（来源应用 exePath/appName/windowTitle + 图标 dataUrl 提取正常），PNG 落盘 `images/`，历史 JSON schema 与 Electron 版兼容；二启唤出面板，暗色主题/列表/选中态/来源图标/快捷键条渲染正确。
 - 真实点击/热键全流程：热键呼出、↑↓ 选择、Esc 隐藏、点击复制并粘贴（写剪贴板→焦点恢复→Ctrl+V 注入→隐藏面板，全程 <1ms）、点击面板外隐藏、剪贴板实时广播更新列表——全部通过，进程稳定。
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ClipboardEntry } from './types';
+import { clampIndex, entryAt, filterEntries, highlight, moveIndex } from './panelView';
 
 type Theme = 'light' | 'dark' | 'system';
 type FocusError = { stage: string; reason: string; message: string };
@@ -43,35 +44,13 @@ function formatTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// 把命中片段用 <mark> 包起来高亮（大小写不敏感、空格分词 AND 匹配）
-function highlightText(text: string, query: string): ReactNode {
-  const q = query.trim().toLowerCase();
-  if (!q) return text;
-  const terms = q.split(/\s+/).filter(Boolean);
-  let parts: { text: string; hit: boolean }[] = [{ text, hit: false }];
-  for (const term of terms) {
-    const next: { text: string; hit: boolean }[] = [];
-    for (const part of parts) {
-      if (part.hit) {
-        next.push(part);
-        continue;
-      }
-      let lower = part.text.toLowerCase();
-      let rest = part.text;
-      let found = lower.indexOf(term);
-      while (found !== -1) {
-        if (found > 0) next.push({ text: rest.slice(0, found), hit: false });
-        next.push({ text: rest.slice(found, found + term.length), hit: true });
-        rest = rest.slice(found + term.length);
-        lower = lower.slice(found + term.length);
-        found = lower.indexOf(term);
-      }
-      if (rest) next.push({ text: rest, hit: false });
-    }
-    parts = next;
-  }
-  return parts.map((part, i) =>
-    part.hit ? <mark key={i} className="highlight">{part.text}</mark> : part.text
+// 命中片段渲染：匹配规则在 panelView.highlight，这里只负责把命中片段画成 <mark>
+function renderHighlight(text: string, query: string): ReactNode {
+  const spans = highlight(text, query);
+  const [only] = spans;
+  if (spans.length === 1 && !only.hit) return text;
+  return spans.map((span, i) =>
+    span.hit ? <mark key={i} className="highlight">{span.text}</mark> : span.text
   );
 }
 
@@ -90,42 +69,6 @@ function IconMoon(){return(<svg className="icon" style={{width:15,height:15}} vi
 function IconAuto(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx={12} cy={12} r={9}/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" opacity={0.35}/></svg>);}
 function getSourceTone(appName?: string){const n=(appName||"").toLowerCase();if(n.includes("备忘录")||n.includes("便签")||n.includes("notes"))return"source-notes";if(n.includes("figma"))return"source-figma";if(n.includes("safari")||n.includes("浏览器")||n.includes("browser")||n.includes("chrome")||n.includes("edge"))return"source-safari";if(n.includes("pages"))return"source-pages";if(n.includes("访达")||n.includes("finder")||n.includes("explorer"))return"source-finder";if(n.includes("预览")||n.includes("preview"))return"source-preview";if(n.includes("文本编辑")||n.includes("textedit")||n.includes("notepad"))return"source-textedit";if(n.includes("终端")||n.includes("terminal")||n.includes("powershell")||n.includes("cmd"))return"source-terminal";if(n.includes("截图")||n.includes("screenshot")||n.includes("snip"))return"source-screenshot";if(n.includes("代码")||n.includes("code")||n.includes("vscode")||n.includes("xcode"))return"source-code";return"source-icon";}
 
-// MOCK_CLIPBOARD_API for preview (when running outside Electron)
-if (typeof window !== "undefined" && !(window as any).clipboardAPI) {
-  (window as any).clipboardAPI = {
-    getHistory: async () => {
-      // Mock data for preview
-      const now = Date.now();
-      return [
-        { id: "1", type: "text", text: "v2.4.0\n- 支持新的 Fluid Search\n- 提升窗口缩放时的帧率...", createdAt: now - 2*60*1000, sourceApp: { appName: "备忘录", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-        { id: "2", type: "image", dataUrl: "https://picsum.photos/seed/clip1/200/120", createdAt: now - 18*60*1000, sourceApp: { appName: "Figma", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-        { id: "3", type: "text", text: "developer.apple.com\nhttps://developer.apple.com/design/human-interface-guidelines/", createdAt: now - 42*60*1000, sourceApp: { appName: "Safari", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-        { id: "4", type: "text", text: "主题：桌面剪切板轻评审\n结论：保留主操作卡、减少弹窗，用视频情绪承载高信息。", createdAt: now - 60*60*1000, sourceApp: { appName: "备忘录", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-        { id: "5", type: "text", text: "fig Design-Specs.fig", createdAt: now - 2*60*60*1000, sourceApp: { appName: "Figma", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-        { id: "6", type: "image", dataUrl: "https://picsum.photos/seed/clip2/200/120", createdAt: now - 4*60*60*1000, sourceApp: { appName: "预览", windowTitle: "", exePath: "", iconDataUrl: null }, pinned: false, pinnedAt: 0, note: "" },
-      ];
-    },
-    onUpdated: (_cb: any) => {},
-    onPanelKey: (_cb: any) => {},
-    onPanelShown: (_cb: any) => {},
-    onFocusError: (_cb: any) => {},
-    copy: async () => ({ok: true, message: "已复制并粘贴"}),
-    remove: async () => true,
-    pin: async () => true,
-    clear: async () => true,
-    setNote: async () => true,
-    beginNoteEdit: async () => true,
-    endNoteEdit: async () => {},
-    onShortcutCaptureStart: () => {},
-    onShortcutCaptureEnd: () => {},
-    tryShortcut: async () => ({ok: false, formatted: ""}),
-    cancelShortcut: async () => {},
-    hide: async () => {},
-    setIgnoreMouse: async () => {},
-    activateSearch: async () => {},
-    setSearchComposing: async () => {},
-  };
-}
 function App() {
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -158,29 +101,16 @@ function App() {
   const noteSavePendingRef = useRef(false);
   const cancelNoteBlurRef = useRef(false);
 
-  // 搜索过滤：大小写不敏感，空格分词后多词 AND；正文、备注和来源应用都参与匹配。
-  const filteredEntries = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return entries;
-    const terms = q.split(/\s+/).filter(Boolean);
-    return entries.filter((entry) => {
-      const haystack = [
-        entry.type === 'text' ? entry.text ?? '' : '',
-        entry.note ?? '',
-        entry.sourceApp?.appName ?? '',
-        entry.sourceApp?.windowTitle ?? '',
-        entry.sourceApp?.exePath ?? '',
-      ].join(' ').toLowerCase();
-      return terms.every((term) => haystack.includes(term));
-    });
-  }, [entries, query]);
+  // 搜索过滤规则见 panelView.filterEntries（大小写不敏感、空格分词多词 AND、
+  // 正文/备注/来源应用五字段参与、结果保持原始顺序）
+  const filteredEntries = useMemo(() => filterEntries(entries, query), [entries, query]);
   filteredEntriesRef.current = filteredEntries;
 
   const openNoteEditor = useCallback((targetId: string | null) => {
     const list = filteredEntriesRef.current;
     const target = targetId
       ? list.find((entry) => entry.id === targetId)
-      : list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+      : entryAt(list, clampIndex(selectedIndexRef.current, list.length));
     if (!target) return;
     const next = { id: target.id, draft: target.note ?? '' };
     noteEditRef.current = next;
@@ -275,22 +205,22 @@ function App() {
       const list = filteredEntriesRef.current;
       if (action === 'up') {
         // 在第一个时按上键不跳转，保持在第一个
-        setSelectedIndex((i) => Math.max(0, i - 1));
+        setSelectedIndex((i) => moveIndex(i, list.length, 'up'));
       } else if (action === 'down') {
         // 在最后一个时按下键不跳转，保持在最后一个
-        setSelectedIndex((i) => Math.min(Math.max(list.length - 1, 0), i + 1));
+        setSelectedIndex((i) => moveIndex(i, list.length, 'down'));
       } else if (action === 'enter') {
-        const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+        const item = entryAt(list, clampIndex(selectedIndexRef.current, list.length));
         if (item) void window.clipboardAPI.copy(item.id);
       } else if (action === 'delete') {
         // 搜索模式下 Del 让位给搜索输入框（编辑文字），不删除条目
         if (searchActiveRef.current) return;
-        const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+        const item = entryAt(list, clampIndex(selectedIndexRef.current, list.length));
         if (item) void window.clipboardAPI.remove(item.id);
       } else if (action === 'pin') {
         // 搜索模式下 Z 让位给搜索输入框（打字），不置顶
         if (searchActiveRef.current) return;
-        const item = list[Math.min(selectedIndexRef.current, Math.max(list.length - 1, 0))];
+        const item = entryAt(list, clampIndex(selectedIndexRef.current, list.length));
         if (item) void window.clipboardAPI.pin(item.id);
       } else if (action === 'escape') {
         // 捕获快捷键时 Esc 由覆盖层处理，这里忽略；搜索模式下 Esc 由主进程先退出搜索
@@ -376,7 +306,7 @@ function App() {
 
   // 列表/搜索结果变化时保持选中项在有效范围内（搜索时针对过滤后的结果）。
   useEffect(() => {
-    setSelectedIndex((i) => Math.max(0, Math.min(i, Math.max(filteredEntries.length - 1, 0))));
+    setSelectedIndex((i) => clampIndex(i, filteredEntries.length));
   }, [filteredEntries.length]);
 
   // 搜索模式下每次查询变化，选中项重置到第一个匹配项。
@@ -453,7 +383,7 @@ function App() {
 
   ;
 
-    const selectedEntry = filteredEntries[selectedIndex] ?? null;
+    const selectedEntry = entryAt(filteredEntries, selectedIndex);
   const themeTip = theme === "light" ? "切换到深色模式" : theme === "dark" ? "切换到跟随系统" : "切换到浅色模式";
   const [detailOpen, setDetailOpen] = useState(false);
   const [toast, setToast] = useState<{text: string; actionLabel?: string; onAction?: () => void} | null>(null);
@@ -541,8 +471,8 @@ function App() {
                             {entry.sourceApp?.iconDataUrl ? (<img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:10}} draggable={false}/>) : entry.type==="image" ? (<IconImage/>) : (<span style={{fontSize:11,fontWeight:700}}><IconClipboard/></span>)}
                           </div>
                           <div className="item-main" onClick={(e)=>{e.stopPropagation();openDetail(i);}}>
-                            {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? highlightText(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
-                            <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt)}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? highlightText(entry.note,query):entry.note}</span></>) : null}</div>
+                            {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? renderHighlight(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
+                            <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt)}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? renderHighlight(entry.note,query):entry.note}</span></>) : null}</div>
                           </div>
                           <div className="item-actions">
                             <button type="button" className="icon-button" data-tooltip={entry.pinned?"取消置顶":"置顶"} data-action="pin" aria-label={entry.pinned?"取消置顶":"置顶"} onClick={(e)=>{e.stopPropagation();handlePin(entry.id);}}><IconPin filled={entry.pinned}/></button>
