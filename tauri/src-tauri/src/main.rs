@@ -7,6 +7,7 @@
 //   poll_baseline  「算不算一次新复制」的基线判定
 //   startup        静默启动通道的意图 / 事实分离
 //   settings       settings.json 键名契约
+//   paste_chain    复制并粘贴链路的五步顺序与结果文案
 // 剩下的编排职责：剪贴板读写、持久化与广播、托盘、全局热键分发、IPC 命令。
 //
 // 与 Electron 版的结构差异：
@@ -29,6 +30,7 @@ mod history;
 mod modes;
 mod panel_modes;
 mod panel_window;
+mod paste_chain;
 mod poll_baseline;
 mod source_app;
 mod settings;
@@ -38,10 +40,13 @@ mod tasks;
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
 use modes::Modes;
+use panel_modes::FocusTarget;
 use panel_window::{PanelWindow, PANEL_LABEL};
+use paste_chain::{CopyContent, CopyResult, PastePort};
 use poll_baseline::{Change, PollBaseline};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -93,12 +98,6 @@ struct RendererEntry {
     pinned: bool,
     pinned_at: u64,
     note: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct CopyResult {
-    ok: bool,
-    message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -380,16 +379,8 @@ fn poll_loop(app: AppHandle) {
     }
 }
 
-// ---------- 焦点错误文案（唯一映射处） ----------
-
-fn focus_error_message(stage: &str) -> &'static str {
-    if stage == "paste" {
-        "复制已写入剪贴板，但无法粘贴回原输入框，请重试。"
-    } else {
-        "无法恢复原输入框，已取消本次粘贴，避免写入错误窗口。"
-    }
-}
-
+// 失败回报渲染层：文案唯一映射处在 paste_chain::focus_error_message，
+// 与 CopyResult.message 同源（两处都只经那一个函数）。
 fn send_focus_error(app: &AppHandle, stage: &str, reason: &str) {
     emit_panel(
         app,
@@ -397,7 +388,7 @@ fn send_focus_error(app: &AppHandle, stage: &str, reason: &str) {
         FocusErrorPayload {
             stage: stage.to_string(),
             reason: reason.to_string(),
-            message: focus_error_message(stage).to_string(),
+            message: paste_chain::focus_error_message(stage).to_string(),
         },
     );
 }
@@ -596,9 +587,58 @@ fn set_auto_start(app: &AppHandle, want: bool) {
 
 // ---------- IPC 命令 ----------
 
-enum CopyContent {
-    Text(String),
-    Image(String),
+// 复制并粘贴链路的生产 adapter：paste_chain 只管顺序与文案，五个效果在这里落地。
+// 焦点快照与隐藏面板要经模式执行线程，故这两个方法是 async 的（链路整体 await）。
+struct Win32PastePort<'a> {
+    app: &'a AppHandle,
+    state: &'a AppState,
+}
+
+impl PastePort for Win32PastePort<'_> {
+    fn content_of(&mut self, id: &str) -> Option<CopyContent> {
+        // store 短暂锁定，不与模式状态交叉
+        let store = self.state.store.lock().unwrap();
+        let entry = store.find(id)?;
+        match entry.entry_type {
+            EntryType::Text => Some(CopyContent::Text(entry.text.clone().unwrap_or_default())),
+            EntryType::Image => entry.image_path.clone().map(CopyContent::Image),
+        }
+    }
+
+    fn write_clipboard(&mut self, content: &CopyContent) -> bool {
+        match content {
+            CopyContent::Text(text) => write_clipboard_text(text),
+            CopyContent::Image(path) => write_clipboard_image_file(path),
+        }
+    }
+
+    fn settle_after_copy(&mut self, id: &str) {
+        // 复制后的落位与去重提升是同一规则（置顶刷新 pinnedAt 移块首；普通移普通块最前）
+        self.state.store.lock().unwrap().promote(id);
+        commit(self.app, self.state);
+        // 同步轮询基线：刚写进剪贴板的内容不应在下一个 600ms 轮询里被当成"新复制"
+        // 再次提升+广播（一次多余的全列表重绘，也是粘贴后闪烁的来源）
+        sync_baseline(self.state);
+    }
+
+    fn focus_target(&mut self) -> impl Future<Output = Option<FocusTarget>> + Send {
+        let reply = self.state.modes.focus_target();
+        async move { reply.await.unwrap_or(None) }
+    }
+
+    fn restore_and_paste(&mut self, target: &FocusTarget) -> Result<(), focus_paste::RestoreFailure> {
+        focus_paste::restore_and_paste(target, true)
+    }
+
+    fn hide_after_paste(&mut self) -> impl Future<Output = ()> + Send {
+        // 粘贴已把焦点归还原窗口，隐藏时不再重复恢复
+        let reply = self.state.modes.hide_after_paste();
+        async move { let _ = reply.await; }
+    }
+
+    fn report_focus_error(&mut self, stage: &str, reason: &str) {
+        send_focus_error(self.app, stage, reason);
+    }
 }
 
 #[tauri::command]
@@ -607,68 +647,9 @@ fn clipboard_get(state: State<AppState>) -> Vec<RendererEntry> {
     store.entries().iter().filter_map(|e| to_renderer_entry(&state, e)).collect()
 }
 
-// 复制并粘贴：三个入口（键盘 Enter / 双击 / 复制按钮）共用同一个结果契约
-// { ok, message }，渲染层按契约渲染，错误文案与 panel:focus-error 事件同源。
-// 模式相关片段投递执行线程；粘贴注入（慢、纯 Win32）留在命令线程，不持有任何状态锁。
 #[tauri::command]
 async fn clipboard_copy(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<CopyResult, String> {
-    diag_log(&format!("copy: invoked id={id}"));
-    let not_found = || CopyResult {
-        ok: false,
-        message: "条目不存在或内容已不可用。".to_string(),
-    };
-    // 1) 取条目内容（store 短暂锁定，不与模式状态交叉）
-    let content = {
-        let store = state.store.lock().unwrap();
-        match store.find(&id) {
-            Some(entry) => match entry.entry_type {
-                EntryType::Text => CopyContent::Text(entry.text.clone().unwrap_or_default()),
-                EntryType::Image => match &entry.image_path {
-                    Some(path) => CopyContent::Image(path.clone()),
-                    None => return Ok(not_found()),
-                },
-            },
-            None => return Ok(not_found()),
-        }
-    };
-    // 2) 写剪贴板
-    let write_ok = match &content {
-        CopyContent::Text(text) => write_clipboard_text(text),
-        CopyContent::Image(path) => write_clipboard_image_file(path),
-    };
-    diag_log(&format!("copy: clipboard write_ok={write_ok}"));
-    if !write_ok {
-        return Ok(not_found());
-    }
-    // 3) 复制后的落位与去重提升是同一规则（置顶刷新 pinnedAt 移块首；普通移普通块最前）
-    {
-        let mut store = state.store.lock().unwrap();
-        store.promote(&id);
-    }
-    commit(&app, &state);
-    // 同步轮询基线：刚写进剪贴板的内容不应在下一个 600ms 轮询里被当成"新复制"
-    // 再次提升+广播（一次多余的全列表重绘，也是粘贴后闪烁的来源）
-    sync_baseline(&state);
-    // 4) 恢复原窗口焦点并注入 Ctrl+V
-    let target = state.modes.focus_target().await.unwrap_or(None);
-    let Some(target) = target else {
-        send_focus_error(&app, "restore", "no_focus_target");
-        return Ok(CopyResult { ok: false, message: focus_error_message("restore").to_string() });
-    };
-    diag_log("copy: restore+paste begin");
-    match focus_paste::restore_and_paste(&target, true) {
-        Ok(()) => {
-            diag_log("copy: pasted ok -> hide");
-            // 粘贴已把焦点归还原窗口，隐藏时不再重复恢复
-            let _ = state.modes.hide_after_paste().await;
-            Ok(CopyResult { ok: true, message: "已复制并粘贴".to_string() })
-        }
-        Err(failure) => {
-            diag_log(&format!("copy: restore failed stage={} reason={}", failure.stage, failure.reason));
-            send_focus_error(&app, failure.stage, failure.reason);
-            Ok(CopyResult { ok: false, message: focus_error_message(failure.stage).to_string() })
-        }
-    }
+    Ok(paste_chain::run(&mut Win32PastePort { app: &app, state: &state }, &id).await)
 }
 
 #[tauri::command]
