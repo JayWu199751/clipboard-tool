@@ -145,7 +145,6 @@ function App() {
 
   const [searchActive, setSearchActive] = useState(false);
   const [focusError, setFocusError] = useState<FocusError | null>(null);
-  const [elevated, setElevated] = useState<boolean | null>(null);
   const [query, setQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchActiveRef = useRef(searchActive);
@@ -270,8 +269,6 @@ function App() {
   useEffect(() => {
     void window.clipboardAPI.getHistory().then(setEntries);
     window.clipboardAPI.onUpdated(setEntries);
-    // 查询提权状态：未提权时在管理员窗口中热键与粘贴会被 UIPI 拦截
-    (window.clipboardAPI as any).isElevated?.().then(setElevated).catch(() => setElevated(null));
 
     // 主进程在面板显示期间全局拦截 ↑/↓/Enter/Esc，这里只更新 UI / 触发复制。
     window.clipboardAPI.onPanelKey((action, noteEntryId) => {
@@ -586,12 +583,6 @@ function App() {
             </div>
           </section>
         </div>
-        {elevated === false && (
-          <div className="elevation-banner" role="alert" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'8px 12px',margin:'0 16px 8px',borderRadius:10,background:'rgba(255,59,48,0.08)',border:'1px solid rgba(255,59,48,0.18)',fontSize:12,lineHeight:'16px'}}>
-            <span>⚠️ 未提权 — 在管理员窗口中热键与粘贴可能失效</span>
-            <button type="button" className="tool-button" style={{fontSize:12,padding:'4px 10px',borderRadius:8,background:'var(--accent)',color:'#fff',border:'none'}} onClick={() => { const a = (window.clipboardAPI as any); a.restartElevated?.().catch?.(()=>{}); }}>以管理员身份重启</button>
-          </div>
-        )}
         <footer className="shortcut-bar" aria-label="快捷键提示">
           {focusError ? (<span className="footer-error" role="status">{focusError.message}</span>) : noteEdit ? (<span>回车 保存 · Esc 取消 · {noteEdit ? `${noteEdit.draft.length}/{MAX_NOTE_LENGTH}` : "0/{MAX_NOTE_LENGTH}"}</span>) : searchActive ? (<><span className="shortcut"><kbd>ESC</kbd><span>退出搜索</span></span><span className="shortcut"><kbd>↑↓</kbd><span>选择</span></span><span className="shortcut"><kbd>回车</kbd><span>复制</span></span></>) : (<><span className="shortcut"><kbd>Z</kbd><span>置顶</span></span><span className="shortcut"><kbd>DEL</kbd><span>删除</span></span><span className="shortcut"><kbd>回车</kbd><span>复制</span></span><span className="shortcut"><kbd>B</kbd><span>备注</span></span><span className="shortcut"><kbd>ESC</kbd><span>隐藏界面</span></span><span className="shortcut"><kbd>空格</kbd><span>搜索</span></span></>)}
         </footer>

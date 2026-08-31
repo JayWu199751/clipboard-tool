@@ -60,7 +60,4 @@ window.clipboardAPI = {
   activateSearch: () => invoke('search_activate'),
   // 搜索：中文输入法组合状态同步（组合期间主进程暂停面板导航键）
   setSearchComposing: (composing) => invoke('search_set_composing', { composing }),
-  // 提权：查询是否已提权 / 请求以管理员身份重启（任务静默优先，UAC 兜底）
-  isElevated: () => invoke<boolean>('elevation_check'),
-  restartElevated: () => invoke<boolean>('elevation_restart'),
 };

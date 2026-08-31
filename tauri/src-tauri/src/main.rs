@@ -26,9 +26,12 @@ mod focus_paste;
 mod history;
 mod panel_modes;
 mod source_app;
+mod settings;
+mod startup;
 mod tasks;
 
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
+use settings::Settings;
 use panel_modes::{FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -51,25 +54,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
 const PANEL_WIDTH: f64 = 418.0;
 const PANEL_HEIGHT: f64 = 823.0;
-const DEFAULT_SHORTCUT: &str = "Control+Shift+V";
 const TRAY_ICON_SIZES: [u32; 5] = [16, 20, 24, 28, 32];
 const PANEL_LABEL: &str = "panel";
 const TRAY_ID: &str = "main-tray";
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Settings {
-    #[serde(default, alias = "auto_start")]
-    auto_start: bool,
-    #[serde(default)]
-    shortcut: String,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings { auto_start: false, shortcut: DEFAULT_SHORTCUT.to_string() }
-    }
-}
 
 struct AppState {
     store: Mutex<HistoryStore>,
@@ -160,93 +147,14 @@ fn settings_file(state: &AppState) -> PathBuf {
 }
 
 fn save_settings(state: &AppState, settings: &Settings) {
-    if let Ok(json) = serde_json::to_string(settings) {
-        if let Err(err) = std::fs::write(settings_file(state), json) {
-            eprintln!("Failed to save settings: {err}");
-        }
+    if let Err(err) = settings::save(&settings_file(state), settings) {
+        eprintln!("Failed to save settings: {err}");
     }
-}
-
-fn is_dev() -> bool {
-    cfg!(debug_assertions)
-}
-
-fn is_elevated() -> bool {
-    tasks::is_elevated()
-}
-
-// 启动时静默提权尝试：非开发且未提权时，尝试经计划任务拉起提权实例，成功则退出当前进程
-// 返回 true 表示已发起提权拉起，调用方应立即退出
-fn try_auto_elevate_silently() -> bool {
-    if is_dev() || is_elevated() {
-        return false;
-    }
-    let exe = current_exe_path();
-    if exe.is_empty() {
-        return false;
-    }
-    if tasks::task_exists() && tasks::run_elevated_task() {
-        eprintln!("未提权启动，已通过计划任务静默拉起提权实例，当前进程退出");
-        return true;
-    }
-    false
-}
-
-fn elevation_status_message() -> String {
-    if is_elevated() {
-        "已提权 ✅ — 管理员窗口热键与粘贴正常".to_string()
-    } else {
-        "未提权 ⚠️ — 在管理员窗口中热键与粘贴可能被 UIPI 拦截，建议以管理员身份运行".to_string()
-    }
-}
-
-// setup 早期的设置加载（state 未就绪时使用）
-fn load_settings_struct(data_dir: &Path) -> Settings {
-    let path = data_dir.join("settings.json");
-    let mut settings = Settings::default();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        // 优先用 serde 直接解析：rename_all=camelCase 使 auto_start<->autoStart 互通，
-        // alias 额外兼容旧 Tauri 误写的 snake_case auto_start，Electron 存档本身就是 camelCase。
-        if let Ok(parsed) = serde_json::from_str::<Settings>(&text) {
-            settings = parsed;
-        } else if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) {
-            // 兜底：手缝解析，仅吸收已知键，忽略旧字段（容错手写损坏的 json）
-            for key in ["autoStart", "shortcut"] {
-                if let Some(value) = map.get(key) {
-                    match key {
-                        "autoStart" => {
-                            if let Some(b) = value.as_bool() {
-                                settings.auto_start = b;
-                            }
-                        }
-                        "shortcut" => {
-                            if let Some(s) = value.as_str() {
-                                settings.shortcut = s.to_string();
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            // 兼容旧 Tauri bug 存档：曾序列化为 auto_start，需额外兜底
-            if let Some(b) = map.get("auto_start").and_then(|v| v.as_bool()) {
-                if !settings.auto_start && b {
-                    settings.auto_start = b;
-                } else if map.get("autoStart").is_none() {
-                    settings.auto_start = b;
-                }
-            }
-        }
-    }
-    if settings.shortcut.is_empty() {
-        settings.shortcut = Settings::default().shortcut;
-    }
-    settings
 }
 
 // ---------- 诊断日志 ----------
 
-fn diag_log(msg: &str) {
+pub(crate) fn diag_log(msg: &str) {
     if std::env::var("CLIPBOARD_TOOL_DIAG").is_err() {
         return;
     }
@@ -998,19 +906,6 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 let enabled = !state.settings.lock().unwrap().auto_start;
                 set_auto_start(app, enabled);
             }
-            "restart-elevated" => {
-                let exe = current_exe_path();
-                if tasks::task_exists() && tasks::run_elevated_task() {
-                    std::process::exit(0);
-                } else if tasks::run_elevated_via_uac(&exe) {
-                    std::thread::spawn(|| {
-                        std::thread::sleep(std::time::Duration::from_millis(800));
-                        std::process::exit(0);
-                    });
-                } else {
-                    eprintln!("以管理员身份重启失败");
-                }
-            }
             "quit" => {
                 app.exit(0);
             }
@@ -1036,7 +931,7 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
 fn format_shortcut(accel: &str) -> String {
     // Control+Shift+V -> Ctrl + Shift + V
-    let accel = if accel.is_empty() { DEFAULT_SHORTCUT } else { accel };
+    let accel = if accel.is_empty() { settings::DEFAULT_SHORTCUT } else { accel };
     accel
         .split('+')
         .map(|part| match part {
@@ -1069,58 +964,32 @@ fn start_shortcut_capture(app: &AppHandle) {
     });
 }
 
-// ---------- 静默提权启动（计划任务） ----------
+// ---------- 开机启动（意图落盘 + 事实重建；通道判定与顺序契约见 startup module） ----------
 
-fn current_exe_path() -> String {
-    std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default()
-}
-
-// 确保静默拉起通道存在，并按持久化设置保留/移除开机启动触发器
-fn ensure_elevated_task(app: &AppHandle) {
-    if is_dev() {
-        return; // 开发模式跑调试 exe，无提权清单，不需要任务
-    }
-    if !is_elevated() {
-        eprintln!("当前未提权，跳过计划任务注册（需提权进程才能创建 Highest 任务），将在下次提权启动时补建");
-        return;
-    }
+// 启动时按持久化意图重建静默启动通道（dev 下内部为 no-op）
+fn apply_startup_intent(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let auto_start = state.settings.lock().unwrap().auto_start;
-    let exe = current_exe_path();
-    if !tasks::ps_register_task(&exe, auto_start) {
-        eprintln!("创建计划任务失败：快捷方式将退回直接启动（会弹 UAC）");
-    } else {
-        diag_log(&format!("计划任务已确保 auto_start={auto_start}"));
+    let intent = state.settings.lock().unwrap().auto_start;
+    let outcome = startup::apply_intent(intent);
+    diag_log(&format!("apply_startup_intent intent={intent} -> {outcome:?}"));
+    // 正常路径静默；意图没落成事实时（推迟/失败）才提示，否则用户以为开关已生效
+    if outcome.deferred || outcome.effective != intent {
+        eprintln!("{}", outcome.message);
     }
 }
 
-// 开机启动开关：true = 任务带 onlogon 触发器；false = 重建为无触发器任务（静默拉起通道保留）
-fn set_auto_start(app: &AppHandle, enabled: bool) {
+// 开机启动开关：意图先落盘，事实尽力重建；建不了时保留意图等下次提权启动补建
+fn set_auto_start(app: &AppHandle, want: bool) {
     let state = app.state::<AppState>();
-    let new_value = if is_dev() {
-        // 开发模式仅持久化意图
-        enabled
-    } else if !is_elevated() {
-        // 未提权时无法创建 Highest 任务，先持久化用户意图，待下次提权启动时由 ensure_elevated_task 补建
-        eprintln!("未提权，已保存开机启动意图 {}，任务将在下次提权启动时生效", if enabled { "✅" } else { "❌" });
-        diag_log(&format!("set_auto_start deferred: enabled={} not elevated", enabled));
-        enabled
-    } else {
-        let ok = tasks::ps_register_task(&current_exe_path(), enabled);
-        if !ok {
-            eprintln!("创建计划任务失败：开关回退");
-        }
-        ok && enabled
-    };
+    let applied = startup::set_auto_start(want);
     {
         let mut settings = state.settings.lock().unwrap();
-        settings.auto_start = new_value;
+        settings.auto_start = applied.effective;
         save_settings(&state, &settings);
     }
     rebuild_tray_menu(app);
-    println!("开机启动状态: {}", if new_value { "✅" } else { "❌" });
+    println!("开机启动: {} — {}", if applied.effective { "✅" } else { "❌" }, applied.message);
+    diag_log(&format!("set_auto_start want={want} applied={applied:?}"));
 }
 
 // ---------- IPC 命令 ----------
@@ -1351,43 +1220,6 @@ async fn window_set_ignore_mouse(app: AppHandle, ignore: bool, forward: Option<b
     Ok(true)
 }
 
-// ---------- 提权相关命令（渲染层查询与拉起） ----------
-
-#[allow(dead_code)]
-#[tauri::command]
-fn elevation_check() -> bool {
-    is_elevated()
-}
-
-#[allow(dead_code)]
-#[tauri::command]
-async fn elevation_restart() -> Result<bool, String> {
-    let exe = current_exe_path();
-    if exe.is_empty() {
-        return Ok(false);
-    }
-    // 优先尝试静默任务拉起（已存在任务时无 UAC）
-    if tasks::task_exists() {
-        if tasks::run_elevated_task() {
-            // 任务拉起成功后，退出当前进程让提权实例接管
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                std::process::exit(0);
-            });
-            return Ok(true);
-        }
-    }
-    // 兜底：UAC 直启（会弹同意对话框），当前进程同样退出
-    if tasks::run_elevated_via_uac(&exe) {
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            std::process::exit(0);
-        });
-        return Ok(true);
-    }
-    Ok(false)
-}
-
 // ---------- 应用入口 ----------
 
 fn main() {
@@ -1410,14 +1242,13 @@ fn main() {
         }
     }));
 
-    // ---------- 提权自检与静默拉起 ----------
-    if try_auto_elevate_silently() {
+    // ---------- 提权自检与静默拉起（策略见 startup module） ----------
+    // release 清单已保证提权；这里只兜住「以非提权方式启动且静默通道已存在」这一种情况。
+    if startup::relaunch_if_not_elevated() {
         std::process::exit(0);
     }
-    if !is_dev() {
-        let msg = elevation_status_message();
-        eprintln!("{msg}");
-        diag_log(&format!("elevation check: elevated={} msg={msg}", is_elevated()));
+    if let Some(line) = startup::status_line() {
+        eprintln!("{line}");
     }
 
     tauri::Builder::default()
@@ -1493,7 +1324,7 @@ fn main() {
                     }
                 }
             }
-            let settings = load_settings_struct(&data_dir);
+            let settings = settings::load(&data_dir.join("settings.json"));
 
             let (modes_exec, modes_rx) = ModesExecutor::new(app.handle());
             app.manage(AppState {
@@ -1546,10 +1377,10 @@ fn main() {
                 });
             }
 
-            // 计划任务由持久化设置决定（非 dev 才注册）
+            // 计划任务按持久化意图重建（dev / 未提权时的取舍由 startup 判定）
             {
                 let app2 = app.handle().clone();
-                std::thread::spawn(move || ensure_elevated_task(&app2));
+                std::thread::spawn(move || apply_startup_intent(&app2));
             }
 
             // 初始基线 + 首次广播

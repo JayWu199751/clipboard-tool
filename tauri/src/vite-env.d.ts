@@ -44,8 +44,6 @@ interface ClipboardAPI {
   setIgnoreMouse(ignore: boolean, forward?: boolean): Promise<void>;
   activateSearch(): Promise<void>;
   setSearchComposing(composing: boolean): Promise<void>;
-  isElevated(): Promise<boolean>;
-  restartElevated(): Promise<boolean>;
 }
 
 declare global {

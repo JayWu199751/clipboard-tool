@@ -15,6 +15,8 @@
 | **app-icon-helper.exe** | `src-tauri/src/source_app.rs`（SHGetFileInfo/ExtractAssociatedIconW） |
 | **click-watcher.exe** | `src-tauri/src/click_watcher.rs`（进程内 WH_MOUSE_LL 钩子） |
 | **task-launcher.exe** | `src-tauri/src/tasks.rs`（PowerShell Register-ScheduledTask 同款脚本） |
+| `main.js` 内的提权/开机启动分支 | `src-tauri/src/startup.rs`（通道判定 + 意图/事实分离，单测 3 例） |
+| `main.js` 的 settings 读写 | `src-tauri/src/settings.rs`（键名契约与坏档兜底，单测 6 例） |
 | `electron/preload.js` contextBridge | `src/api.ts`（invoke/listen 适配层，`window.clipboardAPI` 接口面不变，App.tsx 零改动） |
 | 600ms 轮询（无条件 readImage+toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开，减少与其它程序的争用） |
 
@@ -26,7 +28,7 @@
 cd tauri
 npm install
 npm run dev        # tauri dev：vite 5173 + 调试 exe（asInvoker，非提权）
-npm run test:rust  # cargo test（26 例：history 15 + panel-modes 11）
+npm run test:rust  # cargo test（35 例：history 15 + panel-modes 11 + settings 6 + startup 3）
 npm run typecheck  # tsc --noEmit
 npm run build      # tauri build（NSIS）
 ```
@@ -41,9 +43,9 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
   npm run build        # release 默认提权（= 旧版 set CLIPBOARD_TOOL_ELEVATED=1 + tauri build）
   CLIPBOARD_TOOL_ELEVATED=0 npm run build  # 强制 asInvoker（调试用）
   ```
-- **静默拉起**：计划任务 `ClipboardToolElevated`（`/rl highest`、交互式令牌、无触发器时仅作拉起通道）。首次提权启动（会弹一次 UAC）或安装器会创建它；后续正常启动若检测到未提权且任务已存在，则**静默经任务拉起提权实例并退出当前进程，不弹 UAC**；若任务尚不存在则走 `Start-Process -Verb RunAs` 兜底（会弹 UAC，但此次即会创建任务，下次静默）。
-- **自检与提示**：启动时 `eprintln!` + `diag.log` 输出提权状态；渲染层通过 `elevation_check` 查询，未提权时面板顶部显示红色横幅“未提权 — 在管理员窗口中热键与粘贴可能失效”并提供“一键以管理员身份重启”按钮（优先任务静默，任务缺失则 UAC）；托盘菜单亦同步显示“已提权 ✅”/“以管理员身份重启 ⚠️”。
-- **开机启动**：仍为该任务的 `AtLogOn` 触发器，开关时重建任务（带/不带触发器，本体保留供静默拉起）。
+- **静默拉起**：计划任务 `ClipboardToolElevated`（`/rl highest`、交互式令牌、无触发器时仅作拉起通道）。首次提权启动（会弹一次 UAC）或安装器会创建它；后续正常启动若检测到未提权且任务已存在，则**静默经任务拉起提权实例并退出当前进程，不弹 UAC**。任务不存在时不做任何兜底：release 清单已保证提权，走到这一支说明清单被改写过（见下条覆盖开关）。
+- **自检与诊断**：提权状态只写 `stderr` 与 `diag.log`（开发构建不输出，避免污染 `npm run dev`）。**渲染层没有任何提权提示**：按定稿决策「整个应用常驻管理员权限，无任何提权提示」，早前的红色横幅、`elevation_check` / `elevation_restart` 命令与托盘「以管理员身份重启」项已全部退役。
+- **开机启动**：仍为该任务的 `AtLogOn` 触发器，开关时重建任务（带/不带触发器，本体保留供静默拉起）。意图（`settings.autoStart`）与事实（任务及其触发器）分离：未提权时建不出 Highest 任务，先落盘意图、等下次提权启动补建，判定集中在 `src-tauri/src/startup.rs`。
 
 > 调试提示：`tauri dev` 始终是 `asInvoker`，在管理员窗口中复现“热键不响应”属预期；请用 `cargo build --release` 或 `CLIPBOARD_TOOL_ELEVATED=1 cargo run --release` 的提权 exe 验证管理员场景，或在已提权 shell 中执行 `cargo run --release`。
 
@@ -53,7 +55,7 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 
 ## 实测验证记录（2026-08-31）
 
-- `cargo test` 26/26 通过；`tsc --noEmit`、`vite build` 干净。
+- `cargo test` 35/35 通过；`tsc --noEmit`、`vite build` 干净。
 - 冒烟（隔离 APPDATA）：文本/图片复制均被记录（来源应用 exePath/appName/windowTitle + 图标 dataUrl 提取正常），PNG 落盘 `images/`，历史 JSON schema 与 Electron 版兼容；二启唤出面板，暗色主题/列表/选中态/来源图标/快捷键条渲染正确。
 - 真实点击/热键全流程：热键呼出、↑↓ 选择、Esc 隐藏、点击复制并粘贴（写剪贴板→焦点恢复→Ctrl+V 注入→隐藏面板，全程 <1ms）、点击面板外隐藏、剪贴板实时广播更新列表——全部通过，进程稳定。
 

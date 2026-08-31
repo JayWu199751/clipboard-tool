@@ -9,10 +9,6 @@
 // dev / 未提权 / 已提权 三条分支的判定，以及「拉起 → 延时退出」的舞步，只在本 module 内各写一次。
 
 use crate::tasks;
-use std::time::Duration;
-
-/// 拉起提权实例后到本进程退出的宽限：让新实例先接管单实例锁，避免两端互抢。
-const RELAUNCH_EXIT_DELAY: Duration = Duration::from_millis(600);
 
 /// 当前进程的启动通道：决定「事实」能不能真的落地。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +45,14 @@ impl Channel {
                 "未提权 — 管理员窗口中的热键与粘贴可能被 UIPI 拦截".to_string()
             }
         }
+    }
+}
+
+/// 供入口打印的诊断行：开发模式返回 None，避免污染 npm run dev 输出。
+pub fn status_line() -> Option<String> {
+    match channel() {
+        Channel::Development => None,
+        other => Some(other.status_line()),
     }
 }
 
@@ -117,25 +121,11 @@ pub fn relaunch_via_task() -> bool {
     tasks::task_exists() && tasks::run_elevated_task()
 }
 
-/// 启动自检：release 且未提权时，尝试经任务静默拉起提权实例。
-/// 返回 true 表示已发起拉起，调用方必须立即退出当前进程。
 pub fn relaunch_if_not_elevated() -> bool {
     if channel() != Channel::NotElevated {
         return false;
     }
-    if relaunch_via_task() {
-        schedule_self_exit();
-        return true;
-    }
-    false
-}
-
-/// 拉起新实例后延时退出本进程（唯一一处「拉起 → 退出」舞步）。
-fn schedule_self_exit() {
-    std::thread::spawn(|| {
-        std::thread::sleep(RELAUNCH_EXIT_DELAY);
-        std::process::exit(0);
-    });
+    relaunch_via_task()
 }
 
 pub fn current_exe_path() -> String {

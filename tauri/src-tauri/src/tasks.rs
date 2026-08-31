@@ -1,13 +1,13 @@
-// 静默提权启动（计划任务）：main.js 的 psRegisterTask / ensureElevatedTask / setAutoStart 移植。
-// 应用清单 requireAdministrator（build.rs 的 CLIPBOARD_TOOL_ELEVATED）时每次启动都是
-// 高完整性进程；正常入口经计划任务 ClipboardToolElevated（/rl highest）静默拉起不弹 UAC。
-// 开机启动 = 该任务的 onlogon 触发器；开关重建任务（带/不带触发器，任务本体保留）。
+// 静默启动通道的「事实层」：只管计划任务 ClipboardToolElevated 的注册/探测/拉起。
+// 意图（settings.autoStart）与通道判定（dev / 未提权 / 已提权）都在 startup module，不在这里。
+// 应用清单 requireAdministrator（build.rs 的 CLIPBOARD_TOOL_ELEVATED）时每次启动都是高完整性
+// 进程；正常入口经该任务（/rl highest）静默拉起不弹 UAC。开机启动 = 任务的 onlogon 触发器。
 //
 // 用 PowerShell Register-ScheduledTask 注册/重建任务：
 // schtasks /create 强制要求 /sc 触发器，无法表达"仅作静默拉起通道（无触发器）"，
 // Register-ScheduledTask 支持无触发器注册；-Force 覆盖重建。
-// 注意：这段注册脚本与 Electron 版 main.js 的 psRegisterTask 是同一件事的两种语言实现，
-// 任务名 / Principal 变更需两处同步。
+// 注意：这段注册脚本与已删除的 Electron 版 main.js psRegisterTask 同源，任务名 / Principal
+// 变更需与安装器（快捷方式指向）一起核对。
 
 use base64::Engine as _;
 use std::os::windows::process::CommandExt;
@@ -29,22 +29,6 @@ fn run_powershell(script: &str) -> bool {
         .output()
         .map(|out| out.status.success())
         .unwrap_or(false)
-}
-
-fn run_powershell_with_output(script: &str) -> Option<String> {
-    let encoded = encode_ps_command(script);
-    std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-        .and_then(|out| {
-            if out.status.success() {
-                Some(String::from_utf8_lossy(&out.stdout).to_string())
-            } else {
-                None
-            }
-        })
 }
 
 // ---------- 提权检测 ----------
@@ -101,43 +85,4 @@ pub fn task_exists() -> bool {
     run_powershell(&format!(
         "if (Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}"
     ))
-}
-
-// 尝试通过已注册的计划任务静默拉起提权实例，成功返回 true（调用方应退出当前非提权进程）
-// 若任务不存在且当前已提权，则先创建任务再运行，实现首次静默通道自举
-#[allow(dead_code)]
-pub fn try_run_elevated_via_task(exe_path: &str) -> bool {
-    if task_exists() {
-        return run_elevated_task();
-    }
-    // 任务不存在：仅当当前已提权时可创建（需要管理员权限创建 Highest 任务）
-    if is_elevated() {
-        if ps_register_task(exe_path, false) {
-            // 任务刚创建，稍作等待后运行
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            return run_elevated_task();
-        }
-    }
-    false
-}
-
-// UAC 直启兜底：以管理员身份重新拉起自身（会弹 UAC 同意对话框）
-// 使用 PowerShell Start-Process -Verb RunAs，避免 ShellExecute 的 parent 窗口句柄限制
-pub fn run_elevated_via_uac(exe_path: &str) -> bool {
-    let exe = exe_path.replace('\'', "''");
-    let script = format!("Start-Process -FilePath '{exe}' -Verb RunAs");
-    run_powershell(&script)
-}
-
-// 获取任务当前是否带 AtLogOn 触发器（用于 UI 同步）
-#[allow(dead_code)]
-pub fn task_has_logon_trigger() -> Option<bool> {
-    let task_name = ELEVATED_TASK_NAME;
-    let script = format!(
-        "$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; \
-         if ($null -eq $t) {{ exit 2 }}; \
-         $has = ($t.Triggers | Where-Object {{ $_.CimClass.CimClassName -like '*LogonTrigger*' }} | Measure-Object).Count -gt 0; \
-         if ($has) {{ Write-Output '1' }} else {{ Write-Output '0' }}"
-    );
-    run_powershell_with_output(&script).map(|s| s.trim() == "1")
 }
