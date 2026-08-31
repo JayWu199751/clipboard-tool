@@ -162,6 +162,8 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 
 ## 变更日志
 
+- **Tauri 版开机启动持久化修复（2026-08-31）**：修复安装后开启「开机启动」后退出重开仍显示关闭的回归。根因：`Settings` 结构体 `#[derive(Serialize)]` 默认按 `auto_start`（snake_case）序列化为 `auto_start`，而 `load_settings_struct` 与 Electron 共用的 `settings.json` 约定 `autoStart`（camelCase），导致保存后重载时找不到键回退为 false，并使 `ensure_elevated_task` 每次启动都重建无触发器任务。修复：`Settings` 加 `#[serde(rename_all = "camelCase")]` 与 `alias = "auto_start"` 兼容旧存档；`save_settings` 现落盘 `autoStart`；`load_settings_struct` 优先走 `serde` 整体解析（兼顾两种键），兜底手缝逻辑额外兼容 `auto_start` 残留并归一化空 `shortcut`；`cargo test` 26/26 与序列化往返（camel/snake 互通）验证通过。
+
 - **粘贴延迟优化（2026-08-30）**：「回车→粘贴」实测从 ~1s 降到 <50ms。三处根因，分段实测定位（新增诊断脚本 `scripts/helper-timing.js` 量助手、`scripts/latency-bench.js` 量主进程各段）：
   1. **broadcast 图片重编码（主因，实测 614ms）**：每次 broadcast 对历史里每个图片条目做 读盘+解码+PNG 重编码+base64，全程阻塞主进程，且发生在助手注入之前（copyEntry 的 commit 先广播）。修复：`imageDataUrlCache` 按 imagePath 缓存 dataUrl（图片文件创建后内容不变），裁剪/删除/清空经 removeImageFile 端口同步失效、载入时清空；实测命中缓存后 0ms。顺带消除每次新复制后 600ms 轮询广播的同类 614ms 阻塞（回车若排在其后也被拖住）。
   2. **助手固定 Sleep（实测 31–47ms）**：RestoreTarget 的激活级联每步写死 Sleep(30/40)，即使原窗口一直是前台（浏览模式常态）也要等满。修复：前台+焦点控件已在原位时零操作直返；激活改 4ms 步进轮询（`WaitForForeground`，预算 48ms）成功即刻返回；失败级联去掉段间 Sleep（轮询本身覆盖等待）。实测 restore 31–47ms → 0–2ms。响应新增 `ms` 字段便于回归观察（mock 不带此字段，main.js 忽略未知字段）。

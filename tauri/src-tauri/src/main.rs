@@ -57,8 +57,9 @@ const PANEL_LABEL: &str = "panel";
 const TRAY_ID: &str = "main-tray";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings {
-    #[serde(default)]
+    #[serde(default, alias = "auto_start")]
     auto_start: bool,
     #[serde(default)]
     shortcut: String,
@@ -204,7 +205,12 @@ fn load_settings_struct(data_dir: &Path) -> Settings {
     let path = data_dir.join("settings.json");
     let mut settings = Settings::default();
     if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) {
+        // 优先用 serde 直接解析：rename_all=camelCase 使 auto_start<->autoStart 互通，
+        // alias 额外兼容旧 Tauri 误写的 snake_case auto_start，Electron 存档本身就是 camelCase。
+        if let Ok(parsed) = serde_json::from_str::<Settings>(&text) {
+            settings = parsed;
+        } else if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) {
+            // 兜底：手缝解析，仅吸收已知键，忽略旧字段（容错手写损坏的 json）
             for key in ["autoStart", "shortcut"] {
                 if let Some(value) = map.get(key) {
                     match key {
@@ -222,7 +228,18 @@ fn load_settings_struct(data_dir: &Path) -> Settings {
                     }
                 }
             }
+            // 兼容旧 Tauri bug 存档：曾序列化为 auto_start，需额外兜底
+            if let Some(b) = map.get("auto_start").and_then(|v| v.as_bool()) {
+                if !settings.auto_start && b {
+                    settings.auto_start = b;
+                } else if map.get("autoStart").is_none() {
+                    settings.auto_start = b;
+                }
+            }
         }
+    }
+    if settings.shortcut.is_empty() {
+        settings.shortcut = Settings::default().shortcut;
     }
     settings
 }
