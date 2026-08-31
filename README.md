@@ -18,6 +18,7 @@
 | **task-launcher.exe** | `src-tauri/src/tasks.rs`（PowerShell Register-ScheduledTask 同款脚本） |
 | `main.js` 内的提权/开机启动分支 | `src-tauri/src/startup.rs`（通道判定 + 意图/事实分离，单测 3 例） |
 | `main.js` 的 settings 读写 | `src-tauri/src/settings.rs`（键名契约与坏档兜底，单测 6 例） |
+| `main.js` 内的轮询基线（lastText / lastImageHash / 重试标志） | `src-tauri/src/poll_baseline.rs`（唯一实现「算不算一次新复制」，单测 7 例） |
 | `electron/preload.js` contextBridge | `src/api.ts`（invoke/listen 适配层，`window.clipboardAPI` 接口面不变，App.tsx 零改动） |
 | `App.tsx` 内的搜索过滤 / 高亮 / 选中项算式 | `src/panelView.ts`（纯逻辑，单测 14 例；App.tsx 只画 `<mark>`） |
 | 600ms 轮询（无条件 readImage+toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开，减少与其它程序的争用） |
@@ -30,9 +31,9 @@
 cd tauri
 npm install
 npm run dev        # tauri dev：vite 5173 + 调试 exe（asInvoker，非提权）
-npm run test       # 全部单测：test:view（node 14 例）+ test:rust（cargo 35 例）
+npm run test       # 全部单测：test:view（node 14 例）+ test:rust（cargo 45 例）
 npm run test:view  # node scripts/panel-view-unit.mjs（面板视图规则，零框架）
-npm run test:rust  # cargo test（35 例：history 15 + panel-modes 11 + settings 6 + startup 3）
+npm run test:rust  # cargo test（45 例：history 15 + panel-modes 11 + poll_baseline 7 + settings 6 + startup 6）
 npm run typecheck  # tsc --noEmit
 npm run build      # tauri build（NSIS）
 ```
@@ -59,7 +60,7 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 
 ## 实测验证记录（2026-08-31）
 
-- `npm run test` 全绿：`cargo test` 35/35、`node scripts/panel-view-unit.mjs` 14/14；`tsc --noEmit`、`vite build` 干净（产物内已无预览用假数据）。
+- `npm run test` 全绿：`cargo test` 45/45、`node scripts/panel-view-unit.mjs` 14/14；`tsc --noEmit`、`vite build` 干净（产物内已无预览用假数据）。
 - 冒烟（隔离 APPDATA）：文本/图片复制均被记录（来源应用 exePath/appName/windowTitle + 图标 dataUrl 提取正常），PNG 落盘 `images/`，历史 JSON schema 与 Electron 版兼容；二启唤出面板，暗色主题/列表/选中态/来源图标/快捷键条渲染正确。
 - 真实点击/热键全流程：热键呼出、↑↓ 选择、Esc 隐藏、点击复制并粘贴（写剪贴板→焦点恢复→Ctrl+V 注入→隐藏面板，全程 <1ms）、点击面板外隐藏、剪贴板实时广播更新列表——全部通过，进程稳定。
 

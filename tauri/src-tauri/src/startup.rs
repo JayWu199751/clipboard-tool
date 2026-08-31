@@ -32,11 +32,6 @@ pub fn channel() -> Channel {
 }
 
 impl Channel {
-    /// 本通道能否创建/重建计划任务
-    fn can_manage_task(self) -> bool {
-        matches!(self, Channel::Elevated)
-    }
-
     pub fn status_line(self) -> String {
         match self {
             Channel::Development => "开发构建（asInvoker）：跳过计划任务通道".to_string(),
@@ -65,10 +60,17 @@ pub struct Outcome {
     pub message: String,
 }
 
-/// 按当前通道把意图同步成事实（任务带/不带 onlogon 触发器）。
-fn sync_fact(intent: bool) -> Outcome {
+/// 决策表：给定通道、exe 路径与意图，得出「事实要不要建、意图是否推迟」。
+/// register 是「重建计划任务」这个效果的注入点：生产传 tasks::ps_register_task，
+/// 测试传假实现，于是三条通道的取舍都能脱离 PowerShell 与提权状态直测。
+fn decide(
+    channel: Channel,
+    exe: &str,
+    intent: bool,
+    register: &dyn Fn(&str, bool) -> bool,
+) -> Outcome {
     let label = if intent { "开" } else { "关" };
-    match channel() {
+    match channel {
         Channel::Development => Outcome {
             effective: intent,
             deferred: false,
@@ -80,7 +82,6 @@ fn sync_fact(intent: bool) -> Outcome {
             message: format!("未提权：已保存开机启动意图（{label}），任务将在下次提权启动时补建"),
         },
         Channel::Elevated => {
-            let exe = current_exe_path();
             if exe.is_empty() {
                 return Outcome {
                     effective: false,
@@ -88,7 +89,7 @@ fn sync_fact(intent: bool) -> Outcome {
                     message: "取不到当前 exe 路径，计划任务未重建".to_string(),
                 };
             }
-            if tasks::ps_register_task(&exe, intent) {
+            if register(exe, intent) {
                 Outcome {
                     effective: intent,
                     deferred: false,
@@ -103,6 +104,16 @@ fn sync_fact(intent: bool) -> Outcome {
             }
         }
     }
+}
+
+/// 按当前通道把意图同步成事实（任务带/不带 onlogon 触发器）。
+fn sync_fact(intent: bool) -> Outcome {
+    decide(
+        channel(),
+        &current_exe_path(),
+        intent,
+        &|exe, with_trigger| tasks::ps_register_task(exe, with_trigger),
+    )
 }
 
 /// 启动时调用：用持久化意图重建运行时事实（dev / 未提权时按通道自动跳过或推迟）。
@@ -136,24 +147,71 @@ pub fn current_exe_path() -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    // 通道判定在 debug 构建下恒为 Development：这条断言同时钉住「dev 绝不注册任务」的策略。
-    #[test]
-    fn 开发构建通道不管理任务() {
-        assert_eq!(channel(), Channel::Development);
-        assert!(!Channel::Development.can_manage_task());
-        assert!(!Channel::NotElevated.can_manage_task());
-        assert!(Channel::Elevated.can_manage_task());
+    // 假注册器：记录每次调用并返回固定结果。只有提权通道会走到这里，
+    // 所以 dev / 未提权的断言里 calls 必须为空（一次都不该碰 PowerShell）。
+    fn make_register(ok: bool, calls: Rc<RefCell<Vec<(String, bool)>>>) -> impl Fn(&str, bool) -> bool {
+        move |exe, trigger| {
+            calls.borrow_mut().push((exe.to_string(), trigger));
+            ok
+        }
     }
 
     #[test]
-    fn 意图在无法落地时仍原样保留_只有建成才生效() {
-        // dev 通道：开/关意图都按用户意图落盘，且标记为未推迟（本就不需要任务）
-        let on = sync_fact(true);
+    fn 开发通道只记意图_绝不注册任务() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        for intent in [true, false] {
+            let out = decide(Channel::Development, "C:\\x.exe", intent, &make_register(true, calls.clone()));
+            assert_eq!((out.effective, out.deferred), (intent, false));
+        }
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn 未提权通道保留意图并标记推迟_同样不注册任务() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let out = decide(Channel::NotElevated, "C:\\x.exe", true, &make_register(true, calls.clone()));
+        assert_eq!((out.effective, out.deferred), (true, true));
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn 提权通道按意图注册_触发器位与意图一致() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let on = decide(Channel::Elevated, "C:\\x.exe", true, &make_register(true, calls.clone()));
         assert_eq!((on.effective, on.deferred), (true, false));
-        let off = sync_fact(false);
+        let off = decide(Channel::Elevated, "C:\\x.exe", false, &make_register(true, calls.clone()));
         assert_eq!((off.effective, off.deferred), (false, false));
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![("C:\\x.exe".to_string(), true), ("C:\\x.exe".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn 提权通道注册失败时开关回退_取不到exe路径时不注册() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let failed = decide(Channel::Elevated, "C:\\x.exe", true, &make_register(false, calls.clone()));
+        assert_eq!((failed.effective, failed.deferred), (false, false));
+        assert_eq!(calls.borrow().len(), 1);
+
+        let calls2 = Rc::new(RefCell::new(Vec::new()));
+        let no_exe = decide(Channel::Elevated, "", true, &make_register(true, calls2.clone()));
+        assert!(!no_exe.effective);
+        assert!(!no_exe.deferred);
+        assert!(calls2.borrow().is_empty());
+    }
+
+    #[test]
+    fn 当前构建通道为开发() {
+        assert_eq!(channel(), Channel::Development);
+        // 决策表与真实通道一致：dev 下 apply_intent 不推迟
+        let out = apply_intent(true);
+        assert_eq!((out.effective, out.deferred), (true, false));
     }
 
     #[test]

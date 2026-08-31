@@ -70,6 +70,7 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
     use super::*;
 
     #[test]

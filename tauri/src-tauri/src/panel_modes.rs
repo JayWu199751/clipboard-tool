@@ -477,6 +477,7 @@ impl PanelModes {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;

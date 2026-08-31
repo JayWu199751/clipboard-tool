@@ -465,6 +465,7 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
     use super::*;
     use std::sync::Mutex;
     type RemovedLog = Arc<Mutex<Vec<String>>>;
@@ -593,7 +594,7 @@ mod tests {
     #[test]
     fn 裁剪_置顶豁免_先裁普通块尾部() {
         let (mut store, _) = make_store(3, Default::default());
-        let a = record_text(&mut store, "a");
+        record_text(&mut store, "a");
         record_text(&mut store, "b");
         record_text(&mut store, "c");
         record_text(&mut store, "d"); // 裁掉普通块最旧 a → [d,c,b]

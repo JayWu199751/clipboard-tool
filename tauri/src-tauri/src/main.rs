@@ -25,6 +25,7 @@ mod click_watcher;
 mod focus_paste;
 mod history;
 mod panel_modes;
+mod poll_baseline;
 mod source_app;
 mod settings;
 mod startup;
@@ -33,6 +34,7 @@ mod tasks;
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
 use panel_modes::{FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
+use poll_baseline::{Change, PollBaseline};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -71,11 +73,8 @@ struct AppState {
     // imagePath -> dataUrl：broadcast 时读盘+base64 的永久缓存（图片文件创建后内容不变）；
     // Arc 共享给 store 的 remove_image_file 端口（删除/裁剪时同步失效）
     image_url_cache: Arc<Mutex<HashMap<String, String>>>,
-    last_text: Mutex<String>,
-    last_image_hash: Mutex<String>,
-    last_seq: Mutex<u32>,
-    // recordImage 写盘失败时置位：即使序列号未变也要重试一次轮询
-    poll_retry: AtomicBool,
+    // 「这次剪贴板算不算一次新复制」的基线（序列号短路、图片/文字基线、写盘失败重试）
+    baseline: Mutex<PollBaseline>,
     hotkeys: Mutex<HashMap<Shortcut, String>>, // Shortcut -> accel（host 注册的记录，供分发）
     data_dir: PathBuf,
     tray_icon_key: Mutex<String>,
@@ -296,22 +295,14 @@ fn clipboard_seq() -> u32 {
     unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
 
-// 轮询基线：读当前剪贴板内容，避免启动后首个轮询把"已在剪贴板里"的内容当作新复制
+// 读一次剪贴板当前内容，交给基线模块认作「已见过」（启动基线、自己写入后的同步都走这里）
 fn sync_baseline(state: &AppState) {
     let Ok(mut clip) = arboard::Clipboard::new() else { return };
-    let mut last_image_hash = state.last_image_hash.lock().unwrap();
-    let mut last_text = state.last_text.lock().unwrap();
-    match clipboard_read_image_png(&mut clip) {
-        Some(png) if !png.is_empty() => {
-            *last_image_hash = history::sha1_hex(&png);
-            *last_text = clip.get_text().map(|t| t).unwrap_or_default();
-        }
-        _ => {
-            *last_text = clip.get_text().map(|t| t).unwrap_or_default();
-            *last_image_hash = String::new();
-        }
-    }
-    *state.last_seq.lock().unwrap() = clipboard_seq();
+    let png = clipboard_read_image_png(&mut clip).filter(|bytes| !bytes.is_empty());
+    let text = clip.get_text().unwrap_or_default();
+    let mut baseline = state.baseline.lock().unwrap();
+    baseline.sync_now(png, text);
+    baseline.note_seq(clipboard_seq());
 }
 
 fn current_source_app(state: &AppState) -> Option<SourceApp> {
@@ -332,49 +323,35 @@ fn poll_once(app: &AppHandle, state: &AppState) {
         return;
     };
     poll_trace("opened");
-    if let Some(png) = clipboard_read_image_png(&mut clip) {
-        if !png.is_empty() {
-            let hash = history::sha1_hex(&png);
-            let changed = hash != *state.last_image_hash.lock().unwrap();
-            poll_trace(&format!("image len={} hash-changed={}", png.len(), changed));
-            if changed {
-                let source_app = current_source_app(state);
-                let recorded = {
-                    let mut store = state.store.lock().unwrap();
-                    let out = store.record_image(&png, source_app);
-                    out.entry.is_some()
-                };
-                if recorded {
-                    *state.last_image_hash.lock().unwrap() = hash;
-                    state.poll_retry.store(false, Ordering::SeqCst);
-                    commit(app, state);
-                } else {
-                    // 写盘失败：不动轮询基线，置重试标志，下个轮询重试
-                    state.poll_retry.store(true, Ordering::SeqCst);
-                    return;
-                }
-            }
-            *state.last_text.lock().unwrap() = clip.get_text().map(|t| t).unwrap_or_default();
+    let png = clipboard_read_image_png(&mut clip).filter(|bytes| !bytes.is_empty());
+    let text = clip.get_text().unwrap_or_default();
+
+    // 判定在基线模块内：图片优先、按内容哈希/文本比对，暂存待 confirm
+    let change = state.baseline.lock().unwrap().observe(png.clone(), text);
+    let recorded = match change {
+        Some(Change::Image { png, .. }) => {
+            poll_trace(&format!("image len={}", png.len()));
+            let source_app = current_source_app(state);
+            let mut store = state.store.lock().unwrap();
+            store.record_image(&png, source_app).entry.is_some()
+        }
+        Some(Change::Text(text)) => {
+            poll_trace(&format!("text len={}", text.len()));
+            let source_app = current_source_app(state);
+            let mut store = state.store.lock().unwrap();
+            store.record_text(&text, source_app).entry.is_some()
+        }
+        // 无新内容：仍要接受暂存的基线更新（图片未变时文字基线得跟上）
+        None => {
+            state.baseline.lock().unwrap().confirm(true);
             return;
         }
+    };
+    // 写盘失败时基线不动并置重试标志，下一轮即使序列号未变也会再试一次
+    state.baseline.lock().unwrap().confirm(recorded);
+    if recorded {
+        commit(app, state);
     }
-    let text = clip.get_text().map(|t| t).unwrap_or_default();
-    let text_changed = !text.is_empty() && text != *state.last_text.lock().unwrap();
-    poll_trace(&format!("text len={} changed={}", text.len(), text_changed));
-    if text_changed {
-        let source_app = current_source_app(state);
-        let recorded = {
-            let mut store = state.store.lock().unwrap();
-            let out = store.record_text(&text, source_app);
-            out.entry.is_some()
-        };
-        if recorded {
-            commit(app, state);
-        }
-    }
-    *state.last_text.lock().unwrap() = text;
-    *state.last_image_hash.lock().unwrap() = String::new();
-    state.poll_retry.store(false, Ordering::SeqCst);
 }
 
 fn poll_loop(app: AppHandle) {
@@ -382,9 +359,7 @@ fn poll_loop(app: AppHandle) {
         std::thread::sleep(POLL_INTERVAL);
         let state = app.state::<AppState>();
         // 序列号未变且没有待重试的写盘失败 → 本轮无需读剪贴板
-        let seq = clipboard_seq();
-        let retry_pending = state.poll_retry.load(Ordering::SeqCst);
-        if seq != 0 && !retry_pending && seq == *state.last_seq.lock().unwrap() {
+        if state.baseline.lock().unwrap().skip_unchanged(clipboard_seq()) {
             continue;
         }
         // 轮询线程要面对任意应用写入的剪贴板内容：单次异常只记录并跳过，不允许杀死轮询
@@ -392,7 +367,7 @@ fn poll_loop(app: AppHandle) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             poll_once(&app2, &state);
         }));
-        *state.last_seq.lock().unwrap() = clipboard_seq();
+        state.baseline.lock().unwrap().note_seq(clipboard_seq());
         if let Err(panic) = result {
             let msg = panic
                 .downcast_ref::<String>()
@@ -1335,10 +1310,7 @@ fn main() {
                 settings: Mutex::new(settings),
                 icon_cache: Mutex::new(icon_cache),
                 image_url_cache,
-                last_text: Mutex::new(String::new()),
-                last_image_hash: Mutex::new(String::new()),
-                last_seq: Mutex::new(0),
-                poll_retry: AtomicBool::new(false),
+                baseline: Mutex::new(PollBaseline::new()),
                 hotkeys: Mutex::new(HashMap::new()),
                 data_dir,
                 tray_icon_key: Mutex::new(String::new()),
