@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "面板窗口默认能力：核心事件监听（listen/emit）等；自定义 app 命令无需在此声明",
+  "windows": ["panel"],
+  "permissions": [
+    "core:default"
+  ]
+}

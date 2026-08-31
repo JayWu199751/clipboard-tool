@@ -1,0 +1,45 @@
+[package]
+name = "clipboard-tool"
+version = "1.0.0"
+description = "Windows 剪贴板历史工具（Tauri 重写）"
+authors = ["clipboard-tool"]
+edition = "2021"
+
+[features]
+# tauri 约定：启用后内嵌 frontendDist 资产（否则运行期指向 devUrl）
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+arboard = "3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+sha1 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
+  "Win32_System_SystemServices",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+# 不用 panic="abort"：轮询线程依赖 catch_unwind 做单轮异常隔离

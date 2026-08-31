@@ -1,0 +1,7 @@
+node_modules/
+dist/
+src-tauri/target/
+smoke-appdata/
+smoke-run*.log
+vite.log
+src-tauri/gen/

@@ -1,0 +1,29 @@
+{
+  "name": "clipboard-tool-tauri",
+  "productName": "ClipboardTool",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Windows 剪贴板历史工具（Tauri 重写）：文本/图片复制、亮暗主题、Ctrl+Shift+V 呼出面板",
+  "type": "module",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "typecheck": "tsc --noEmit",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/cli": "^2.9.6",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
+  }
+}
