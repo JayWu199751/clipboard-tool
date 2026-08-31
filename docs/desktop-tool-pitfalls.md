@@ -1,0 +1,64 @@
+# Windows 桌面工具踩坑手册
+
+> 从 clipboard-tool（Windows 剪贴板历史工具，Electron 起家后迁 Tauri，两周 40+ 次提交）的真实踩坑提炼。每条按**现象 → 根因 → 规则**组织。这些坑的共同点：运行时才暴露、报错不指认真凶、翻文档查不到——所以必须在**设计期**对照，而不是等报错再查。
+>
+> 标 [跨平台] 的条目与操作系统无关；其余均为 Windows 特有。来源：git 全量提交史、CONTEXT.md 决策档案、[UIPI-research.md](UIPI-research.md)（含主源引用）。
+
+**用法**：新桌面工具立项时让 agent 先读本文件，涉及对应领域时逐条对照设计。跨项目复用时在新仓库的 AGENTS.md 加一行指针：
+
+```
+Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设计期逐条对照，对应领域的条目逐条过。
+```
+
+## 1. 提权与 UIPI —— 设计期必须定，事后返工最大
+
+- **现象**：全局热键（底层都是 RegisterHotKey，Electron globalShortcut / Tauri global-shortcut 同源）在**管理员窗口聚焦时不触发**；SendInput 向提权窗口注入按键被 UIPI 静默拦截——SendInput 官方文档明言失败时**返回值和 GetLastError 都不指认 UIPI**，表现为"莫名失效"。这是 OS 级行为，与框架无关。
+- **根因**：UIPI 只允许向**等或更低完整性**的窗口注入输入、投递消息；低完整性进程注册的热键在提权前台面前不投递。热键侧官方文档空白，结论来自 Greenshot / PowerToys / KeePass / espanso / AHK 的共同实践。
+- **规则**：需要全局热键或模拟输入的工具，设计期就定提权模型，三选一：
+  1. **整工具提权**：exe 清单 `requireAdministrator` + 计划任务（`/rl highest` + onlogon 触发器）静默启动——UAC 同意只发生在任务创建那一刻，日常路径零弹窗。主流工具的答案，本项目终选。
+  2. **按需提权**：Ditto 模式，向提权窗口操作时弹 UAC 自提权。
+  3. **uiAccess=true**：需 Authenticode 签名 + Program Files 安全位置，官方限定辅助技术场景，个人工具不现实（KeePass 官方点名拒绝）。
+- **自举通道**：已注册计划任务但当前进程未提权时，启动即经任务静默拉起提权实例（无 UAC）；用 TokenElevation 自检，未提权时横幅提示 + 一键经任务重启。
+- **意图/事实分离**：开关类设置持久化**用户意图**；运行时事实（计划任务触发器是否真的存在）每次启动实测重建。未提权建不了 Highest 任务时，先落盘意图、等提权会话补建——否则开关"打开→重启→变回关闭"。
+- **shell 包装命令必须显式转错误**：PowerShell `Register-ScheduledTask` 报非终止错误时进程仍以 0 退出，宿主误判成功。包装脚本一律 `try/catch + -ErrorAction Stop + exit 1`，宿主只信退出码。
+- **覆盖 Windows 清单必须带上默认依赖**：自定义 manifest 替换 Tauri/VS 默认清单时丢了 Common-Controls 6 声明 → comctl32 停在 5.x，装好后启动即报"无法定位输入点 TaskDialogIndirect"。
+- **dev/release 分清单**：debug 用 `asInvoker`（避免开发期天天弹 UAC）+ 环境变量强制覆盖；release 才 `requireAdministrator`。
+- **验证方法**：把一个管理员终端（PowerShell 7）当前台、焦点落在命令行里，测热键呼出与面板键是否全部有效——这是最严苛且最常见的真实场景。
+
+## 2. Win32 互操作与辅助进程
+
+- **结构体布局是契约**：清理"未使用"的 `MOUSEINPUT` union 成员 → x64 下 `INPUT` 40→32 字节 → `SendInput` 全部返回 `ERROR_INVALID_PARAMETER(87)`，复制成功但粘贴全挂。给关键 Win32 结构体加**编译期尺寸断言**，死代码清理先过断言。
+- **stdio 行协议必须跨 chunk 缓冲**：`chunk.split('\n')` 会把跨 chunk 边界的事件静默丢掉；行切分器保留残行、拼接下一块。
+- **常驻辅助进程要有生命周期管理**：退出时统一清理，否则孤儿进程占着 exe 文件锁，重编译莫名失败。编译前先检测并清理残留进程。
+- **等待用小步轮询，别写死 Sleep**：恢复前台/焦点这类级联操作，先判断"已在原位"零操作直返；需要等就 4ms 步进轮询 + 总预算超时。写死 `Sleep(30/40)` 让每次操作白付 31–47ms。
+- **焦点粘贴的顺序契约**：呼出面板前先快照前台窗口/焦点控件；粘贴 = 快照→恢复→注入一条链路；助手失败就不隐藏面板并发错误事件——内容绝不注入错误窗口，也绝不假报成功。
+- **结果契约**：所有"复制并粘贴"入口（键盘/双击/按钮）共用同一 `{ ok, message }` 返回，错误文案单一来源。失败路径假报成功是最伤信任的 bug。
+
+## 3. 浮层面板窗口（透明、无焦点、DPI）
+
+- **WS_EX_LAYERED + WS_EX_NOACTIVATE 会吃点击**：`WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATEANDEAT`，鼠标事件被吞。hook 消息回写 LRESULT 在 Electron 43（只观察不回写）不可行；可行方案 = `focusable: true` + `showInactive` 呼出不抢焦点 + 浏览态 focus 事件延迟 blur 还焦点 + 输入态（搜索/备注/捕获）临时聚焦。把多处 setFocusable 切换收敛成这一对操作。
+- **透明窗口下 CSS 阴影/光晕不可信**：transparent 合成路径把 box-shadow 按方角栅格化（圆角四角楔出色块）；负 z-index 伪元素又透过半透明背景渗染内部。聚焦态用**描边**替代光晕；透明窗口的一切视觉结论以真机实测为准。
+- **圆角**：关系统圆角（roundedCorners:false），CSS 圆角 + per-pixel alpha 裁形；圆角外的透明区按几何计算动态 `setIgnoreMouseEvents(true, {forward:true})` 穿透。
+- **多显示器 DPI**：面板隐藏到**当前显示器**屏幕外并固定尺寸，防跨屏 DPI 漂移导致尺寸变形。
+- **托盘图标按物理像素直出**：非整数缩放（如 175%）下单一 32px 基图被系统重采样必糊。按主屏 `scaleFactor` 取 `round(16×sf)` 的恰好物理尺寸图 1:1 渲染，`display-metrics-changed` 时重选。验证方法：物理分辨率截屏 + 模板匹配比对。
+
+## 4. 前端事件与模式
+
+- **异步 listen 是 useEffect 竞态重灾区** [跨平台]：Tauri/Electron 的事件订阅返回 Promise，useEffect 的异步清理赶不上重挂载时，同一 channel 双注册——现象是"按一次上下键动两格"。用 generation 计数防重注册；键盘导航类监听依赖数组收成 `[]` 常驻、回调走 ref。
+- **订阅一律进 useEffect** [跨平台]：写在组件体里的订阅在 StrictMode 二次挂载时执行并抛错，会**中断同一 effect 里更早注册的兄弟监听器**——现象是"呼出后方向键全无响应"。
+- **输入模式用状态机，别用布尔堆**：浏览/搜索（含 IME 组合子态）/备注编辑/快捷键捕获各自成态；全局热键集合由当前模式**推导并差量注册**。散布 13 处的 register/unregister 与 5 个松散布尔就是返工信号。IME 组合期间暂停全部导航键。
+- **性能靠分段实测，不靠猜** [跨平台]：粘贴延迟 ~1s → <50ms，先写诊断脚本量每段，定位出三个根因：broadcast 对每个图片条目读盘+重编码（614ms，主因）→ 按 imagePath 缓存 dataUrl；写剪贴板后没同步轮询基线 → 粘贴内容被当作新复制重复提升；固定 Sleep（见上）。优化前先有测量。
+
+## 5. 持久化契约与工具链
+
+- **序列化键名是持久化契约**：serde 默认 snake_case 写出 `auto_start`，而共享 settings.json 的既有约定是 camelCase `autoStart` → 重载找不到键、静默回退默认值，开关"保存后重开即丢"。跨实现/跨语言共享存档时：显式 `rename_all`，加 `alias` 兼容旧档，写**往返序列化测试**。
+- **双实现并存期的最大风险在数据契约**：Electron→Tauri 迁移就在共享 settings.json 上翻车（上条）。迁移或并存时先把存档 schema 钉死成测试。
+- **vite watch 排除 `src-tauri/target`**：文件监听锁住 deps 下的 exe，dev 启动报 EBUSY。
+- **dev server 绑 127.0.0.1**：绑 0.0.0.0 会触发 Windows 防火墙授权且暴露端口。
+
+## 6. 架构与测试（防坑的正向经验）
+
+- **深模块**：同类逻辑出现第 3 份复制粘贴就收敛成唯一实现。本项目四个收敛点：历史规则（去重/置顶块/裁剪，原 ×4 处复制）→ history store 小接口；面板模式 → 状态机；辅助进程 spawn/行缓冲/JSON 请求 id+超时 → 单一 seam、各助手是薄 adapter；错误文案单一来源。
+- **纯逻辑与效果分离**：排序/去重/状态机抽成不依赖框架的纯模块，plain node 直测（本项目 35 例单测零框架 mock）；文件系统/窗口等效果经注入端口进入。
+- **mock 忠实性**：mock 的效果方法若是 no-op，断言会滑进 try/catch 回退分支**假绿**（本项目的窗口 mock 不模拟几何变化，回归静默变红后才被发现）。mock 窗口要真模拟几何与状态变化。
+- **决策档案**：每个功能动工前访谈定稿，把决策（含否决项与理由）写进 CONTEXT.md——两周后考古靠它，不用翻 diff 猜意图。
