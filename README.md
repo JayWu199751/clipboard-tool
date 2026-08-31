@@ -1,136 +1,78 @@
-# ClipboardTool —— Windows 剪贴板历史工具
+# ClipboardTool — Windows 剪贴板历史工具（Tauri 版）
 
-> 基于 **Electron + React + Vite** 的 Windows 桌面剪贴板工具：自动记录文字/图片历史，全局快捷键呼出，一键复制并粘贴回原输入框。
+> 基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面剪贴板工具：自动记录文字/图片历史，全局快捷键呼出，一键复制并粘贴回原输入框。原 Electron 实现已于 2026-08-31 删除，当前为纯 Tauri 实现；数据目录仍沿用 `%APPDATA%\ClipboardTool` 与旧版存档兼容（历史 JSON、图片、settings.json）。
 
-![亮色主题](docs/screenshots/light-theme.png)
+> 渲染层 React 代码从 Electron 版原样复用，主进程由 JavaScript 重写为 Rust（下表为历史对比，Electron 代码已移除）。
 
-## ✨ 功能特性
+## 与 Electron 版的架构差异
 
-- 📋 自动记录复制的**文字**和**图片**（轮询剪贴板、按内容自动去重，最多保留 200 条，本地持久化；同内容再复制不新增条目，只把原条目提升到最前，备注不受影响）
-- ⌨️ 全局快捷键 **Ctrl + Shift + V** 呼出面板，**呼出时不会抢占输入框焦点**（光标和输入状态保持不变）；搜索/备注编辑需要临时聚焦面板时，会先保存原窗口和焦点控件，退出后由常驻原生助手恢复
-- ⬆️⬇️ 面板显示期间，**↑ / ↓ / Enter / Esc / Del / Z / B / 空格 被全局拦截**，只作用于面板，不会误输入到原程序（搜索模式和备注编辑时让位给输入框）
-- 📌 **置顶**：点击条目上的置顶图标（或面板显示期间按 `Z`）把条目固定到列表最前；支持多条置顶、重启后保留，置顶条目优先保留、不受 200 条上限自动裁剪影响
-- 🔍 **搜索**：面板内按 `空格` 进入搜索（搜索框常驻顶栏下方、未激活时灰色禁用）；支持按正文文字、备注与来源应用（应用名/窗口标题）搜索、多词 AND 匹配、命中高亮；搜索时面板临时获得焦点以支持正常输入（含中文输入法），退出后立即归还；搜索结果中按 `Enter` 直接复制选中项并自动粘贴回原输入框（与浏览模式同一路径）
-- 📝 **备注**：选中条目后按 `B`，或点击右侧备注图标，为该条目添加/编辑长达 200 字的单行备注；备注显示在时间后，参与搜索和高亮
-- 📌 面板固定在**鼠标所在屏幕正中间**弹出
-- ⚡ **Enter** 把选中项复制回剪贴板并**自动粘贴到当前输入框**，随后面板自动关闭；粘贴失败时面板保持打开并显示错误，不会向错误的窗口注入内容
-- 🎨 支持**亮色 / 暗色 / 跟随系统**三种主题（右上角循环切换，自动记住选择，跟随系统模式下实时响应系统变化），**UI 遵循 Apple (Espana) Cathedral 设计语言：SF Pro 字族 + Canvas #f5f5f7 / Paper #ffffff 交替、无阴影 16px 卡片 + 980px 胶囊 CTA（Electric Blue #0071e3 唯一彩色）、pastel 来源图标作唯一彩色载体、毛玻璃画布与 Hairline #d6d6d6**
-- 🗑️ 单条删除（悬停按钮或按 `Del`）、一键清空历史
-- 🖱️ 系统托盘：左键/双击显示面板；右键菜单支持**开机启动**（✅/❌ 显示状态）、**更换全局快捷键**（实时显示当前组合）、退出
-- 🔄 **可自定义全局快捷键**：托盘菜单点击“更换快捷键”，在面板内直接按下新组合即可生效并持久化
-- 🚪 **点击面板外任意位置自动关闭面板**（全局低级鼠标钩子实现）
-- 🔐 **常驻管理员权限**：整个应用以管理员权限运行，管理员窗口里的面板快捷键与自动粘贴同样生效；安装的快捷方式经计划任务静默拉起，不弹 UAC
+| Electron 版 | Tauri 版 |
+|---|---|
+| `electron/main.js`（948 行编排） | `src-tauri/src/main.rs` |
+| `electron/history.js` 历史核心（纯逻辑） | `src-tauri/src/history.rs`（单测 15 例移植） |
+| `electron/panel-modes.js` 模式状态机（纯逻辑） | `src-tauri/src/panel_modes.rs`（单测 11 例移植；焦点快照从异步 JSON-RPC 变为同步 Win32 调用） |
+| `electron/native-helper.js` + **focus-paste-helper.exe** | `src-tauri/src/focus_paste.rs`（进程内 Win32，助手进程退役） |
+| **app-icon-helper.exe** | `src-tauri/src/source_app.rs`（SHGetFileInfo/ExtractAssociatedIconW） |
+| **click-watcher.exe** | `src-tauri/src/click_watcher.rs`（进程内 WH_MOUSE_LL 钩子） |
+| **task-launcher.exe** | `src-tauri/src/tasks.rs`（PowerShell Register-ScheduledTask 同款脚本） |
+| `electron/preload.js` contextBridge | `src/api.ts`（invoke/listen 适配层，`window.clipboardAPI` 接口面不变，App.tsx 零改动） |
+| 600ms 轮询（无条件 readImage+toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开，减少与其它程序的争用） |
 
-![暗色主题](docs/screenshots/dark-theme.png)
+数据目录沿用 `%APPDATA%\ClipboardTool`，与 Electron 版共享历史 JSON、图片文件与 settings.json（两版不要同时运行）。
 
-> 设计：Cathedral 白空间 + 44px 导航 + 12px 搜索 hairline + 16px 无边卡（Faded Surface hover / Electric 6% 选中）+ Quiet Dot 微文案，完整 Tokens 见 `src/styles.css :root` 与 `CONTEXT.md 设计系统`。
-
-## 🛠️ 技术栈
-
-| 依赖 | 版本（安装时最新稳定版） |
-| --- | --- |
-| Electron | 43.x |
-| React | 19.x |
-| Vite | 8.x |
-| TypeScript | 7.x |
-| electron-builder | 26.x |
-
-> 开发机需要 Node.js 20+（建议当前 LTS，如 Node 24）。
-
-## 📁 目录结构
-
-```
-clipboard-tool/
-├── electron/
-│   ├── main.js          # 主进程：窗口、全局快捷键、剪贴板轮询、历史持久化、焦点恢复/自动粘贴、托盘菜单
-│   ├── preload.js       # contextBridge 安全桥接
-├── src/
-│   ├── App.tsx          # 面板 UI：列表、键盘导航、主题、更换快捷键覆盖层
-│   ├── styles.css       # 亮/暗主题样式（CSS 变量）
-│   ├── main.tsx
-│   └── types.ts
-├── resources/           # 应用图标、托盘图标、鼠标钩子、静默启动器、焦点粘贴助手源码与构建产物
-├── installer.nsh       # NSIS 自定义脚本（快捷方式→静默启动器、卸载清理计划任务）
-├── scripts/
-│   ├── build-helper.ps1 # 构建辅助程序
-│   ├── gen-tray-icons.mjs # 按物理尺寸直出托盘图标（16/20/24/28/32，SDF 拟合 32px 原图；npm run gen:tray）
-│   ├── autostart-regression.js # 开机启动计划任务回归
-│   └── focus-paste-regression.js # 普通/搜索焦点恢复、Enter 粘贴与失败处理回归
-├── docs/
-│   └── screenshots/     # README 截图
-├── index.html
-├── vite.config.mts
-└── package.json
-```
-
-## 🚀 使用
-
-### 开发模式（热更新）
+## 开发与构建
 
 ```bash
+cd tauri
 npm install
-npm run dev
+npm run dev        # tauri dev：vite 5173 + 调试 exe（asInvoker，非提权）
+npm run test:rust  # cargo test（26 例：history 15 + panel-modes 11）
+npm run typecheck  # tsc --noEmit
+npm run build      # tauri build（NSIS）
 ```
 
-### 构建并运行（生产模式）
+### 常驻提权（requireAdministrator）与管理员窗口兼容
 
-```bash
-npm run build
-npm start
-```
+Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗口的热键投递与 `SendInput` 粘贴，导致“在管理员运行的应用中热键呼不出来 / 粘贴不进去”。Tauri 版与 Electron 版采用同一套提权方案：
 
-### 打包 Windows 安装包
+- **清单**：`build.rs` 在 `release`  profile 时默认嵌入 `requireAdministrator`（保留 PerMonitorV2 DPI 感知），无需手动设环境变量；`debug` 默认 `asInvoker` 便于开发。显式覆盖：`CLIPBOARD_TOOL_ELEVATED=0` 强制不提权 / `=1` 强制提权。
+  ```bash
+  cd tauri
+  npm run build        # release 默认提权（= 旧版 set CLIPBOARD_TOOL_ELEVATED=1 + tauri build）
+  CLIPBOARD_TOOL_ELEVATED=0 npm run build  # 强制 asInvoker（调试用）
+  ```
+- **静默拉起**：计划任务 `ClipboardToolElevated`（`/rl highest`、交互式令牌、无触发器时仅作拉起通道）。首次提权启动（会弹一次 UAC）或安装器会创建它；后续正常启动若检测到未提权且任务已存在，则**静默经任务拉起提权实例并退出当前进程，不弹 UAC**；若任务尚不存在则走 `Start-Process -Verb RunAs` 兜底（会弹 UAC，但此次即会创建任务，下次静默）。
+- **自检与提示**：启动时 `eprintln!` + `diag.log` 输出提权状态；渲染层通过 `elevation_check` 查询，未提权时面板顶部显示红色横幅“未提权 — 在管理员窗口中热键与粘贴可能失效”并提供“一键以管理员身份重启”按钮（优先任务静默，任务缺失则 UAC）；托盘菜单亦同步显示“已提权 ✅”/“以管理员身份重启 ⚠️”。
+- **开机启动**：仍为该任务的 `AtLogOn` 触发器，开关时重建任务（带/不带触发器，本体保留供静默拉起）。
 
-```bash
-npm run dist
-```
+> 调试提示：`tauri dev` 始终是 `asInvoker`，在管理员窗口中复现“热键不响应”属预期；请用 `cargo build --release` 或 `CLIPBOARD_TOOL_ELEVATED=1 cargo run --release` 的提权 exe 验证管理员场景，或在已提权 shell 中执行 `cargo run --release`。
 
-产物输出到 `release/`，NSIS 安装程序可直接安装。
+### 诊断
 
-### 回归测试
+`CLIPBOARD_TOOL_POLL_TRACE=1` 启动可输出轮询各阶段追踪日志。
 
-```bash
-npm run typecheck
-npm run test:autostart
-npm run test:focus-paste
-```
+## 实测验证记录（2026-08-31）
 
-## 🎮 操作说明
+- `cargo test` 26/26 通过；`tsc --noEmit`、`vite build` 干净。
+- 冒烟（隔离 APPDATA）：文本/图片复制均被记录（来源应用 exePath/appName/windowTitle + 图标 dataUrl 提取正常），PNG 落盘 `images/`，历史 JSON schema 与 Electron 版兼容；二启唤出面板，暗色主题/列表/选中态/来源图标/快捷键条渲染正确。
+- 真实点击/热键全流程：热键呼出、↑↓ 选择、Esc 隐藏、点击复制并粘贴（写剪贴板→焦点恢复→Ctrl+V 注入→隐藏面板，全程 <1ms）、点击面板外隐藏、剪贴板实时广播更新列表——全部通过，进程稳定。
 
-| 操作 | 效果 |
-| --- | --- |
-| `Ctrl + Shift + V` | 呼出 / 关闭面板（全局，焦点保持在原输入框） |
-| `↑` / `↓` | 选择历史项（面板显示期间由面板拦截，支持循环；搜索时作用于筛选结果） |
-| `Enter` | 复制选中项到剪贴板，关闭面板并自动粘贴回当前输入框（双击、复制按钮走同一路径） |
-| `Del` | 删除选中项（搜索模式下为输入框删字） |
-| `Z` | 置顶 / 取消置顶选中项（搜索模式下为输入框输字母 z） |
-| `B` | 添加 / 编辑选中项备注（备注编辑时输入 `b`；搜索模式下为输入框输字母 b） |
-| `空格` | 浏览模式：进入搜索；搜索模式：在查询里输入空格 |
-| `Enter`（备注编辑） | 保存备注 |
-| `Esc` | 备注编辑：取消；搜索中：退出搜索回到浏览；浏览中：关闭面板 |
-| 点击面板外 | 关闭面板（全局鼠标钩子检测） |
-| 鼠标悬停 / 双击 | 选中 / 复制并粘贴 |
-| 右上角按钮 | 循环切换主题（亮色 → 暗色 → 跟随系统）、清空历史 |
-| 托盘图标 | 左键/双击显示面板；右键菜单：开机启动、**更换快捷键**、退出 |
-| 托盘 → 更换快捷键 | 面板内弹出设置卡片，直接按下新组合键（如 `Ctrl + Alt + X`）即生效 |
+### 已修复的两个关键坑（手工搭建 Tauri 工程必读）
 
-> 面板是一个**不可激活（WS_EX_NOACTIVATE）**的置顶浮层：默认不抢走输入框焦点，全程键盘即可操作；仅按 `空格` 进入搜索或编辑备注时临时变为可聚焦以支持文字输入（含中文输入法），退出后由常驻原生助手把焦点和输入状态归还原程序。
+1. **capabilities 缺失导致事件全断**：v2 的 ACL 权限系统默认拒绝 `plugin:event|listen`，必须提供
+   `src-tauri/capabilities/default.json` 授予 `core:default`；否则自定义命令（invoke）正常而
+   所有 Rust→渲染层事件静默丢失（脚手架模板自带此文件，手工搭建容易漏）。
+2. **插件热键 API 的阻塞投递会造成跨线程死锁**：`global_shortcut().register/unregister` 内部是
+   「投递主线程 + 阻塞 recv」。若从持有自建锁的线程调用，而主线程恰在等同一把锁（如点击面板
+   触发的 Focused 事件任务），即互等卡死（表现为"点击复制并粘贴→无响应"）。解法：模式状态机
+   由专用执行线程独占（ModesExecutor），所有模式操作单向投递，主线程只读无锁原子快照。
 
-## 💾 数据存储
+### 待真机验证（与 Electron 版同类的实证项）
 
-- 历史索引（含置顶标记与备注）：`%APPDATA%\ClipboardTool\clipboard-history.json`
-- 图片文件：`%APPDATA%\ClipboardTool\images\*.png`
-- 设置（主题、自定义快捷键、开机启动意图）：`%APPDATA%\ClipboardTool\settings.json`
+- 提权构建后的裸键热键对管理员前台窗口、焦点恢复 + Ctrl+V 注入时延、托盘图标在各缩放档位的清晰度、NSIS 安装器全流程。
 
-## 📌 注意事项
+## 已知偏差（相对 Electron 版）
 
-- `Enter` / 双击 / 复制按钮触发后总是自动粘贴：主进程先通过常驻 `focus-paste-helper.exe` 恢复呼出前记录的窗口与焦点控件，再注入 `Ctrl+V`。应用整体以**管理员权限**运行（`requestedExecutionLevel: requireAdministrator`），因此即使目标程序也是管理员权限，快捷键与粘贴同样生效，无需任何开关；助手直接继承主进程的令牌，不额外弹 UAC。
-- **无 UAC 打扰**：安装创建的桌面/开始菜单快捷方式指向 `task-launcher.exe`，经计划任务 `ClipboardToolElevated`（最高权限）静默拉起主程序，不弹 UAC；开机启动同样走该任务的 `onlogon` 触发器。唯一例外：直接双击 `ClipboardTool.exe` 本体会弹一次 UAC（保证永远提权）。
-- 若 `Ctrl+Shift+V` 或面板的 `↑/↓/Enter/Esc/Del/Z/B` 与其它软件的全局快捷键冲突，注册会失败并在控制台提示，此时按键会照常进入原程序。
-- 更换快捷键时，新组合必须包含 `Ctrl` / `Alt` / `Win` 之一作为修饰键；`Esc` 可随时取消。
-- 搜索模式下 `Space` / `Z` / `Del` 让位给搜索输入框（输入空格、打字、删字），`↑↓ / Esc` 仍操作面板，`Enter` 直接复制选中项并自动粘贴回原输入框；中文输入法组合期间（如候选词选择）面板导航键会暂时全部让位给输入法。
-- 面板关闭时程序仍在后台运行（托盘图标常驻），用于持续监听剪贴板和响应全局快捷键。
-
-## 📄 License
-
-MIT
+- 托盘图标 DPI：移植了按主屏 `scaleFactor` 选恰好物理尺寸图的方案，但 Tauri 的 tray-icon 生成 HICON 路径与 Electron 不同，清晰度需真机复核。
+- 浏览态"不抢焦点"沿用 focusable + 焦点事件自动 `SetFocus(NULL)` 的模拟方案（Electron 同款），首帧激活次序需真机复核。
+- 快捷键捕获的 accelerator 由渲染层以 Electron 格式上传（`Control+Shift+V` 等），Rust 侧经 global-hotkey 解析注册，行为一致但解析器不同。

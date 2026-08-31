@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪贴板（600ms），把文字/图片历史存入 `%APPDATA%\ClipboardTool\clipboard-history.json`；渲染进程只负责面板 UI 与键盘导航。全局快捷键 `Ctrl+Shift+V` 呼出不可激活（WS_EX_NOACTIVATE）的置顶浮层面板，不抢占输入框焦点。
+Windows 剪贴板历史工具（Tauri 2 + React 19 + Rust，原 Electron 实现已于 2026-08-31 删除）。主进程轮询剪贴板（600ms），把文字/图片历史存入 `%APPDATA%\ClipboardTool\clipboard-history.json`；渲染进程只负责面板 UI 与键盘导航。全局快捷键 `Ctrl+Shift+V` 呼出不可激活（WS_EX_NOACTIVATE）的置顶浮层面板，不抢占输入框焦点。
 
 
 ## 设计系统 — Apple (Espana) Cathedral
@@ -161,6 +161,8 @@ Windows 剪贴板历史工具（Electron + React + Vite）。主进程轮询剪�
 5. **实施期验证**：提权后裸键热键在管理员前台确实生效（若意外失效 → 回退助手键盘钩子方案）；单实例锁不冲突。
 
 ## 变更日志
+
+- **移除 Electron 实现（2026-08-31）**：按用户要求删除全部 Electron 相关代码：`electron/`（5 文件）、根 `src/`（5 文件）、`scripts/`（9 文件）、`resources/`（C# 助手源码与编译产物、托盘图标）、根 `package.json`/`package-lock.json`/`vite.config.mts`/`tsconfig.json`/`index.html`/`installer.nsh`/`electron-final2.log`。Tauri 实现（`tauri/` 目录，含 `src-tauri/` Rust 主进程与 `src/` React 渲染层）为当前唯一实现；`README.md` 已重写为 Tauri 版，`CONTEXT.md` 项目概述已更新。`cargo test` 26/26、`cargo check`、`tsc --noEmit` 仍通过。
 
 - **Tauri 版开机启动持久化修复（2026-08-31）**：修复安装后开启「开机启动」后退出重开仍显示关闭的回归。根因：`Settings` 结构体 `#[derive(Serialize)]` 默认按 `auto_start`（snake_case）序列化为 `auto_start`，而 `load_settings_struct` 与 Electron 共用的 `settings.json` 约定 `autoStart`（camelCase），导致保存后重载时找不到键回退为 false，并使 `ensure_elevated_task` 每次启动都重建无触发器任务。修复：`Settings` 加 `#[serde(rename_all = "camelCase")]` 与 `alias = "auto_start"` 兼容旧存档；`save_settings` 现落盘 `autoStart`；`load_settings_struct` 优先走 `serde` 整体解析（兼顾两种键），兜底手缝逻辑额外兼容 `auto_start` 残留并归一化空 `shortcut`；`cargo test` 26/26 与序列化往返（camel/snake 互通）验证通过。
 
