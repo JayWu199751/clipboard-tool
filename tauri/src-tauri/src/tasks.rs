@@ -73,14 +73,13 @@ pub fn is_elevated() -> bool {
 }
 
 // 注册/重建计划任务：with_logon_trigger = 开机启动（AtLogOn 触发器）
+// 使用 -ErrorAction Stop + try/catch 确保失败时进程以非 0 退出，run_powershell 才能正确判 false
 pub fn ps_register_task(exe_path: &str, with_logon_trigger: bool) -> bool {
     let task_name = ELEVATED_TASK_NAME;
     let exe = exe_path.replace('\'', "''");
+    let trigger = if with_logon_trigger { " -Trigger (New-ScheduledTaskTrigger -AtLogOn)" } else { "" };
     let script = format!(
-        "$action = New-ScheduledTaskAction -Execute '{exe}'; \
-         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest; \
-         Register-ScheduledTask -TaskName '{task_name}' -Action $action -Principal $principal{} -Force | Out-Null",
-        if with_logon_trigger { " -Trigger (New-ScheduledTaskTrigger -AtLogOn)" } else { "" }
+        "try {{ $action = New-ScheduledTaskAction -Execute '{exe}'; $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest; Register-ScheduledTask -TaskName '{task_name}' -Action $action -Principal $principal{trigger} -Force -ErrorAction Stop | Out-Null; exit 0 }} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
     );
     run_powershell(&script)
 }
@@ -91,10 +90,7 @@ pub fn ps_register_task(exe_path: &str, with_logon_trigger: bool) -> bool {
 pub fn run_elevated_task() -> bool {
     let task_name = ELEVATED_TASK_NAME;
     let script = format!(
-        "$s = New-Object -ComObject Schedule.Service; \
-         $s.Connect(); \
-         $t = $s.GetFolder('\\').GetTask('{task_name}'); \
-         $t.Run($null)"
+        "try {{ $s = New-Object -ComObject Schedule.Service; $s.Connect(); $t = $s.GetFolder('\\').GetTask('{task_name}'); $t.Run($null); exit 0 }} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
     );
     run_powershell(&script)
 }
