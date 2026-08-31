@@ -328,7 +328,7 @@ function App() {
       searchInputRef.current?.blur();
     });
     window.clipboardAPI.onFocusError(setFocusError);
-  }, [handleNoteEditExit, openNoteEditor]);
+  }, []);
 
   // 更换快捷键：主进程进入捕获模式后显示覆盖层
   useEffect(() => {

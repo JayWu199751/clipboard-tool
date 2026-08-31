@@ -8,14 +8,22 @@ type AnyCb = (...args: any[]) => void;
 
 // 与 preload.js 的 removeAllListeners 语义对齐：同一事件重复注册时先解绑旧的。
 const unlisteners = new Map<string, UnlistenFn[]>();
+const channelGen = new Map<string, number>();
 
 function onEvent(channel: string, cb: AnyCb, map?: (payload: any) => any[]): void {
+  const gen = (channelGen.get(channel) ?? 0) + 1;
+  channelGen.set(channel, gen);
   void (async () => {
     for (const un of unlisteners.get(channel) ?? []) un();
     unlisteners.set(channel, []);
     const un = await listen<any>(channel, (event) => {
       cb(...(map ? map(event.payload) : [event.payload]));
     });
+    // 若期间已有更新的注册，此次监听作废
+    if (channelGen.get(channel) !== gen) {
+      un();
+      return;
+    }
     if (!unlisteners.has(channel)) {
       un();
       return;
