@@ -3894,3 +3894,27 @@ html { background: transparent !important; } body { background: transparent !imp
 @media (min-width: 1px) {
   .desktop { border-radius: var(--radius-window) !important; }
 }
+
+/* 列表内联备注输入 — 紧凑胶囊，不撑高行高 */
+.item-meta .note-input {
+  width: auto !important;
+  min-height: 0 !important;
+  height: 22px !important;
+  min-width: 90px !important;
+  max-width: 160px !important;
+  flex: 0 1 140px !important;
+  padding: 0 8px !important;
+  font-size: 11px !important;
+  line-height: 20px !important;
+  border-radius: 6px !important;
+  background: var(--color-paper) !important;
+}
+.item-meta .note-input::placeholder { color: var(--text-dim) !important; }
+.note-section .note-input {
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 8px 12px !important;
+  font-size: 12px !important;
+  flex: 1 !important;
+  max-width: none !important;
+}
