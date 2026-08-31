@@ -254,6 +254,7 @@ impl PanelModes {
     }
 
     // 输入态（搜索/备注/捕获）豁免「浏览态自动失焦」
+    #[allow(dead_code)]
     pub fn is_input_active(&self) -> bool {
         self.visible && self.mode != Mode::Browse
     }

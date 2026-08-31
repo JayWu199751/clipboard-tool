@@ -728,7 +728,7 @@ struct ModesExecutor {
 }
 
 impl ModesExecutor {
-    fn new(app: &AppHandle) -> (Self, std_mpsc::Receiver<ModesJob>) {
+    fn new(_app: &AppHandle) -> (Self, std_mpsc::Receiver<ModesJob>) {
         let (tx, rx) = std_mpsc::channel::<ModesJob>();
         (ModesExecutor { tx }, rx)
     }
@@ -1243,7 +1243,7 @@ async fn note_begin_edit(app: AppHandle, state: State<'_, AppState>, id: Option<
 }
 
 #[tauri::command]
-async fn note_end_edit(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+async fn note_end_edit(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     let _ = state.modes_exec.exec(|m, h| m.end_note_edit(h, true)).await;
     Ok(true)
 }
@@ -1275,7 +1275,7 @@ async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String)
 }
 
 #[tauri::command]
-async fn shortcut_cancel(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+async fn shortcut_cancel(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     let _ = state.modes_exec.exec(|m, h| m.cancel_shortcut_capture(h, true)).await;
     Ok(true)
 }
@@ -1292,7 +1292,7 @@ async fn search_activate(app: AppHandle, state: State<'_, AppState>) -> Result<b
 
 // 搜索：中文输入法组合中暂停面板导航键（↑↓/Enter 让给 IME 候选），组合结束恢复
 #[tauri::command]
-async fn search_set_composing(app: AppHandle, state: State<'_, AppState>, composing: bool) -> Result<bool, String> {
+async fn search_set_composing(_app: AppHandle, state: State<'_, AppState>, composing: bool) -> Result<bool, String> {
     let _ = state.modes_exec.exec(move |m, h| m.set_composing(h, composing)).await;
     Ok(true)
 }
@@ -1328,11 +1328,13 @@ async fn window_set_ignore_mouse(app: AppHandle, ignore: bool, forward: Option<b
 
 // ---------- 提权相关命令（渲染层查询与拉起） ----------
 
+#[allow(dead_code)]
 #[tauri::command]
 fn elevation_check() -> bool {
     is_elevated()
 }
 
+#[allow(dead_code)]
 #[tauri::command]
 async fn elevation_restart() -> Result<bool, String> {
     let exe = current_exe_path();

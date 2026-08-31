@@ -109,6 +109,7 @@ pub fn task_exists() -> bool {
 
 // 尝试通过已注册的计划任务静默拉起提权实例，成功返回 true（调用方应退出当前非提权进程）
 // 若任务不存在且当前已提权，则先创建任务再运行，实现首次静默通道自举
+#[allow(dead_code)]
 pub fn try_run_elevated_via_task(exe_path: &str) -> bool {
     if task_exists() {
         return run_elevated_task();
