@@ -47,7 +47,7 @@
 
 ## 渲染层地图
 
-`tauri/src/`。
+`tauri/src/` 与 `tauri/tests/`。
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
@@ -55,6 +55,7 @@
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
 | `App.tsx` | 面板 UI、主题、键盘逻辑、快捷更换覆盖层；只把命中片段画成 `<mark>` | — |
 | `styles.css` | Apple (Espana) Cathedral 设计语言的 token 落地，见 [design-system.md](design-system.md) | — |
+| `tests/navigation-visual-regression.spec.js` | mock Tauri bridge 驱动真实渲染层，回归高频方向键导航的选中框跟随 | 1 例 Playwright |
 
 ## IPC 契约
 

@@ -5,3 +5,5 @@ smoke-appdata/
 smoke-run*.log
 vite.log
 src-tauri/gen/
+test-results/
+.playwright-cli/

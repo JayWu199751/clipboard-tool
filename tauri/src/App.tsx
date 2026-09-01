@@ -378,7 +378,7 @@ function App() {
   useEffect(() => {
     listRef.current
       ?.querySelector('[data-selected="true"]')
-      ?.scrollIntoView({ block: 'nearest' });
+      ?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }, [selectedIndex, filteredEntries]);
 
   ;

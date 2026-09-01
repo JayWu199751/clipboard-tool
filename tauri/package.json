@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test:view": "node scripts/panel-view-unit.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:browser": "playwright test",
     "test": "npm run test:view && npm run test:rust"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/cli": "^2.9.6",
     "@types/react": "^19.2.18",
