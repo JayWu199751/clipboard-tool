@@ -40,7 +40,7 @@ mod tasks;
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
 use modes::Modes;
-use panel_modes::FocusTarget;
+use panel_modes::{is_repeatable_navigation, FocusTarget};
 use panel_window::{PanelWindow, PANEL_LABEL};
 use paste_chain::{CopyContent, CopyResult, PastePort};
 use poll_baseline::{Change, PollBaseline};
@@ -58,8 +58,54 @@ use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 use base64::Engine as _;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
+const NAV_REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(300);
+const NAV_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
 const TRAY_ICON_SIZES: [u32; 5] = [16, 20, 24, 28, 32];
 const TRAY_ID: &str = "main-tray";
+
+#[derive(Default)]
+struct NavigationRepeat {
+    active: Mutex<HashMap<Shortcut, Arc<AtomicBool>>>,
+}
+
+impl NavigationRepeat {
+    fn start(&self, app: AppHandle, shortcut: Shortcut, accel: String, modes: Modes) {
+        if !is_repeatable_navigation(&accel) {
+            return;
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let mut active = self.active.lock().unwrap();
+            if active.contains_key(&shortcut) {
+                return;
+            }
+            active.insert(shortcut, stop.clone());
+        }
+
+        std::thread::spawn(move || {
+            std::thread::sleep(NAV_REPEAT_INITIAL_DELAY);
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let state = app.state::<AppState>();
+                if !state.modes_visible.load(Ordering::Relaxed) {
+                    state.navigation_repeat.stop(&shortcut);
+                    break;
+                }
+                modes.dispatch_accel(&accel);
+                std::thread::sleep(NAV_REPEAT_INTERVAL);
+            }
+        });
+    }
+
+    fn stop(&self, shortcut: &Shortcut) {
+        if let Some(stop) = self.active.lock().unwrap().remove(shortcut) {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 struct AppState {
     store: Mutex<HistoryStore>,
@@ -77,6 +123,7 @@ struct AppState {
     // 「这次剪贴板算不算一次新复制」的基线（序列号短路、图片/文字基线、写盘失败重试）
     baseline: Mutex<PollBaseline>,
     hotkeys: Mutex<HashMap<Shortcut, String>>, // Shortcut -> accel（host 注册的记录，供分发）
+    navigation_repeat: NavigationRepeat,
     data_dir: PathBuf,
     tray_icon_key: Mutex<String>,
 }
@@ -827,12 +874,21 @@ fn main() {
         )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
-                    let state = app.state::<AppState>();
-                    let accel = state.hotkeys.lock().unwrap().get(shortcut).cloned();
-                    if let Some(accel) = accel {
-                        state.modes.dispatch_accel(&accel);
+                let state = app.state::<AppState>();
+                match event.state() {
+                    ShortcutState::Pressed => {
+                        let accel = state.hotkeys.lock().unwrap().get(shortcut).cloned();
+                        if let Some(accel) = accel {
+                            state.modes.dispatch_accel(&accel);
+                            state.navigation_repeat.start(
+                                app.clone(),
+                                *shortcut,
+                                accel,
+                                state.modes.clone(),
+                            );
+                        }
                     }
+                    ShortcutState::Released => state.navigation_repeat.stop(shortcut),
                 }
             }).build(),
         )
@@ -898,6 +954,7 @@ fn main() {
                 image_url_cache,
                 baseline: Mutex::new(PollBaseline::new()),
                 hotkeys: Mutex::new(HashMap::new()),
+                navigation_repeat: NavigationRepeat::default(),
                 data_dir,
                 tray_icon_key: Mutex::new(String::new()),
             });

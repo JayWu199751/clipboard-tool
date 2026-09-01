@@ -16,6 +16,7 @@
 | `modes-executor` | 唯一持有 `PanelModes` 与效果宿主 `Host`；唯一允许调用热键 register/unregister | 把 `&mut PanelModes` 交出去（类型是 module 私有） |
 | 命令线程（tokio worker，`async #[tauri::command]`） | 向 `Modes` 投递具名操作并 `.await` 回执；跑慢的 Win32 粘贴注入 | 持有 store 锁的同时 await 模式回执 |
 | 回调线程（热键 / 鼠标钩子 / 托盘 / 单实例 / 窗口事件） | 向 `Modes` 投递具名操作，**不等待**（忽略返回值不影响投递） | 阻塞：回调必须立即返回 |
+| 方向键重复线程 | `Up` / `Down` 按住期间按定时器重复投递 `dispatch_accel`；只读 `modes_visible`，面板隐藏后停止 | 持有模式状态、等待模式回执 |
 | 轮询线程（600ms） | 读剪贴板、判定新复制、写盘广播；单次异常经 `catch_unwind` 只跳过本轮 | 被任何模式锁拖住 |
 
 两条附带约束：窗口几何与样式变更必须投递主线程执行（这条现在由 `panel_window.rs` 的实现内部承担，调用方只管动作）；`store` 锁与模式状态绝不交叉持有。
@@ -26,9 +27,9 @@
 
 | module | 职责（唯一归属） | interface | 单测 |
 |---|---|---|---|
-| `main.rs` | 效果编排：剪贴板读写、持久化与广播、托盘、热键分发、IPC 注册、`AppState` | — | — |
+| `main.rs` | 效果编排：剪贴板读写、持久化与广播、托盘、热键分发与方向键重复、IPC 注册、`AppState` | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
-| `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32） | `show` `hide` `on_nav_action` `begin_search` `end_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` | 11 |
+| `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32） | `show` `hide` `on_nav_action` `begin_search` `end_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` `is_repeatable_navigation` | 12 |
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主 | `spawn` + 15 个具名操作（见下） | — |
 | `panel_window.rs` | 面板几何、焦点、鼠标穿透；主线程投递与 DIP 换算 | `show_at_cursor` `park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`；纯函数 `centered` `parked` `contains_point` | 4 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 写盘失败重试标志 | `observe` `confirm` `skip_unchanged` `note_seq` `sync_now` | 7 |

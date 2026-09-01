@@ -4,7 +4,7 @@
 
 ## Consequences
 
-- 每条规则只有一个可断言的地方，纯逻辑部分不碰 tauri / Win32，所以 58 例 Rust 单测与 14 例 node 单测全部零框架 mock 直跑。
+- 每条规则只有一个可断言的地方，纯逻辑部分不碰 tauri / Win32，所以 59 例 Rust 单测与 14 例 node 单测全部零框架 mock 直跑。
 - 端口用函数签名或 trait 注入（`history.rs` 的 `HistoryStoreBuilder`、`panel_modes.rs` 的 `ModesHost`、`paste_chain.rs` 的 `PastePort`、`startup.rs` 的 `decide(...register)`），生产 adapter 与测试 adapter 各一份；seam 不成立时宁可把端口加宽，也不要在 module 里直接调效果。
 - 同类逻辑出现第三份复制粘贴就该收敛成 module，这是本仓库的既有做法，六个深化候选都源于此。
 - 判断新代码该写在哪：先问「这是判定还是效果」。判定进 module 并配单测，效果进 `main.rs`。

@@ -10,7 +10,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 | 键 | 浏览态 | 搜索态 |
 |---|---|---|
-| `↑` `↓` | 选择 | 在筛选结果里选择 |
+| `↑` `↓` | 选择（长按连续移动） | 在筛选结果里选择（长按连续移动） |
 | `Enter` / 双击 / 复制按钮 | 复制并粘贴 | 同左 |
 | `Esc` | 隐藏面板并归还焦点 | 先退回浏览态 |
 | `空格` | 进入搜索 | 输入空格 |
@@ -79,10 +79,10 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 14 例
-npm run test:rust   # cargo test —— 58 例
+npm run test:rust   # cargo test —— 59 例
 ```
 
-72 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 11 / paste_chain 9 / poll_baseline 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 14。
+73 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 14。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -114,6 +114,7 @@ npm run test:rust   # cargo test —— 58 例
 ## 待真机验证
 
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
+- 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。

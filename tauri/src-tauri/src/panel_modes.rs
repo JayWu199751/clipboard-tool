@@ -72,6 +72,11 @@ pub const NAV_SHORTCUTS: [(&str, NavAction, bool); 8] = [
     ("Space", NavAction::Search, false),
 ];
 
+// Windows 全局热键关闭了系统自动重复，只有上下方向键需要由应用自行重复投递。
+pub fn is_repeatable_navigation(accel: &str) -> bool {
+    matches!(accel, "Up" | "Down")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Browse,
@@ -797,5 +802,14 @@ mod tests {
         for (accel, _, _) in NAV_SHORTCUTS {
             assert!(h.host.registered.borrow().contains_key(accel), "{accel}");
         }
+    }
+
+    #[test]
+    fn 只有上下方向键进入按住重复_其他动作保持一次触发() {
+        assert!(is_repeatable_navigation("Up"));
+        assert!(is_repeatable_navigation("Down"));
+        assert!(!is_repeatable_navigation("Enter"));
+        assert!(!is_repeatable_navigation("Esc"));
+        assert!(!is_repeatable_navigation("Control+Up"));
     }
 }
