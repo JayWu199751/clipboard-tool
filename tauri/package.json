@@ -14,7 +14,8 @@
     "test:view": "node scripts/panel-view-unit.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:browser": "playwright test",
-    "test": "npm run test:view && npm run test:rust"
+    "test": "npm run test:view && npm run test:rust",
+    "gen:tray": "node scripts/gen-tray-icons.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

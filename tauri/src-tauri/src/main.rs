@@ -451,8 +451,8 @@ fn panel(app: &AppHandle) -> PanelWindow {
 
 
 fn tray_icon_image(dark_theme: bool, scale: f64) -> Option<tauri::image::Image<'static>> {
-    // 与 main.js 相同：按主屏 scaleFactor 选「恰好 round(16*scale) 物理像素」的单一尺寸图，
-    // HICON 1:1 渲染零重采样（深色任务栏用白色图标，浅色用黑色图标）
+    // 按主屏 scaleFactor 选「恰好 round(16*scale) 物理像素」的单一尺寸图，HICON 1:1 渲染
+    // 零重采样（深色任务栏用白色图标，浅色用黑色图标）。这套阶梯图由 gen:tray 解析直出。
     let target = (16.0 * scale).round() as i32;
     let size = *TRAY_ICON_SIZES
         .iter()

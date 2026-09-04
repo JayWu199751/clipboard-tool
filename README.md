@@ -35,12 +35,15 @@ npm run dev        # vite + 调试 exe（asInvoker，不提权）
 npm run build      # release：NSIS 安装包，默认嵌入 requireAdministrator
 npm run test       # 全部单测
 npm run typecheck  # tsc --noEmit
+npm run gen:tray   # 重新生成托盘图标阶梯图（改过图标后必跑）
 ```
 
 产物：
 
 - 可执行文件 `tauri/src-tauri/target/release/clipboard-tool.exe`
 - 安装包 `tauri/src-tauri/target/release/bundle/nsis/ClipboardTool_<version>_x64-setup.exe`（perMachine 安装）
+
+托盘图标不是一张图缩放出来的：`src-tauri/icons/tray/` 下 16/20/24/28/32 五档 × 亮暗两套，加上两张 32px 基图共 12 张，主进程按主屏 `scaleFactor` 取恰好物理尺寸的那张交给 HICON。`gen:tray` 用参数化 SDF 在每个尺寸上各自解析求值直出，绝不做重采样；几何参数是拿 32px 基图坐标下降拟合出来的（`--fit` 可重跑），落盘后逐张回读自校。换图形的手顺写在 [scripts/gen-tray-icons.mjs](tauri/scripts/gen-tray-icons.mjs) 的文件头。
 
 ## 提权与管理员窗口
 
