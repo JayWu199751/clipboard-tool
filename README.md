@@ -111,7 +111,7 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 | [docs/architecture.md](docs/architecture.md) | 改主进程前必读：线程模型与死锁防线、module 清单、IPC 契约 |
 | [docs/adr/](docs/adr/) | 8 条难回退的决策与被否决的方案；想推翻任何一条先看对应 ADR |
 | [docs/changelog.md](docs/changelog.md) | 每次改动的动机、取舍与行数/例数变化 |
-| [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、Do / Dont |
+| [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、动效与减少动态、组件映射、Do / Don't |
 | [docs/desktop-tool-pitfalls.md](docs/desktop-tool-pitfalls.md) | Windows 桌面工具的通用坑，跨项目复用 |
 | [docs/UIPI-research.md](docs/UIPI-research.md) | 提权结论的主源调研与未验证清单 |
 | [AGENTS.md](AGENTS.md) | 给 agent 的仓库约定：语言、行尾、验证命令、红线 |

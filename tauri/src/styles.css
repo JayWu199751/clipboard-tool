@@ -2722,12 +2722,10 @@ html[data-theme="dark"] .kbd {
 
 /* ==================================================================
    Apple Design 覆盖层 — 修复审查出的不规范项
-   对应规范章节：§1 Response · §3 Interruptibility · §4 Springs
-                 §7 Spatial · §11 Frame · §12 Materials
-                 §14 Reduced · §15 Typography · §16 Craft
+   下面各层注释里「」括起的是 docs/design-system.md 的小节名，改视觉先读那份
    ================================================================== */
 
-/* 0) 排印：尺寸相关 tracking / leading（§15） */
+/* 0) 排印：尺寸相关 tracking / leading（「排版」） */
 .titlebar-center span:first-child { font-size:13px !important; font-weight:680 !important; letter-spacing:-0.012em !important; }
 .titlebar-center span:last-child { font-size:10px !important; letter-spacing:0.04em !important; font-variant-numeric: tabular-nums; }
 .content-header h1 { font-size:19px !important; line-height:1.15 !important; letter-spacing:-0.022em !important; font-weight:720 !important; font-optical-sizing:auto; }
@@ -2736,7 +2734,7 @@ html[data-theme="dark"] .kbd {
 .item-meta { letter-spacing:0.015em !important; font-variant-numeric: tabular-nums; }
 .history-heading { letter-spacing:0.06em !important; }
 
-/* 1) 材质：消除 light-on-light 堆叠，窗口单层 blur，子层去 blur (§12) */
+/* 1) 材质：消除 light-on-light 堆叠，窗口单层 blur，子层去 blur（「组件映射」） */
 .app-window {
   background: var(--window-bg) !important;
   backdrop-filter: blur(28px) saturate(160%) !important;
@@ -2762,7 +2760,7 @@ html[data-theme="dark"] .titlebar {
 .content, .history-panel { background: transparent !important; backdrop-filter: none !important; }
 .sidebar { display:none !important; }
 
-/* 2) 卡片：合成层友好，仅 transform / opacity / filter 走弹簧 (§11) */
+/* 2) 卡片：合成层友好，仅 transform / opacity / filter 走弹簧（「动效与减少动态」） */
 .history-item {
   border-radius: var(--radius-card) !important;
   background: var(--surface) !important;
@@ -2791,7 +2789,7 @@ html[data-theme="dark"] .titlebar {
 html[data-theme="dark"] .history-item { border-color: rgba(255,255,255,0.07) !important; }
 html[data-theme="dark"] .history-item:hover { border-color: rgba(255,255,255,0.12) !important; }
 
-/* 3) 详情：弹簧进出，对称路径，材质化，可中断 (§3 §4 §7 §12) */
+/* 3) 详情：弹簧进出，对称路径，材质化，可中断（「动效与减少动态」） */
 .detail-panel {
   border-radius: 0 !important;
   background: var(--detail-bg) !important;
@@ -2811,7 +2809,7 @@ html[data-theme="dark"] .history-item:hover { border-color: rgba(255,255,255,0.1
 }
 .resize-handle { display:none !important; }
 
-/* 4) Toast：弹簧 + blur 物化 + 缩放 (§12) */
+/* 4) Toast：弹簧 + blur 物化 + 缩放（「动效与减少动态」） */
 .toast {
   border-radius: 16px !important;
   border: 0.5px solid rgba(255,255,255,0.16) !important;
@@ -2833,7 +2831,7 @@ html[data-theme="dark"] .history-item:hover { border-color: rgba(255,255,255,0.1
 }
 html[data-theme="dark"] .toast { background: rgba(44,44,46,0.88) !important; }
 
-/* 5) 遮罩 / 卡片：blur 半径同步动画，物化 (§12) */
+/* 5) 遮罩 / 卡片：blur 半径同步动画，物化（「动效与减少动态」） */
 .sheet-backdrop {
   backdrop-filter: blur(0px) !important;
   -webkit-backdrop-filter: blur(0px) !important;
@@ -2869,7 +2867,7 @@ html[data-theme="dark"] .toast { background: rgba(44,44,46,0.88) !important; }
   to   { transform: scale(1); opacity:1; filter: blur(0); }
 }
 
-/* 6) 搜索：焦点时微发光，禁用态按压反馈 (§1) */
+/* 6) 搜索：焦点时微发光，禁用态按压反馈（「组件映射」） */
 .search-field {
   border-radius: 10px !important;
   border: 0.5px solid var(--line) !important;
@@ -2886,7 +2884,7 @@ html[data-theme="dark"] .toast { background: rgba(44,44,46,0.88) !important; }
 html[data-theme="dark"] .search-field { background: rgba(58,58,60,0.72) !important; border-color: rgba(255,255,255,0.09) !important; }
 html[data-theme="dark"] .search-field:focus-within { background: rgba(72,72,74,0.88) !important; }
 
-/* 7) 滚动边缘：用 mask 替代硬分割线 (§12  Scroll edge effects) */
+/* 7) 滚动边缘：用 mask 替代硬分割线（「组件映射」列表滚动边缘） */
 .history-list {
   scrollbar-width: none !important;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 10px, black calc(100% - 10px), transparent 100%) !important;
@@ -2902,7 +2900,7 @@ html[data-theme="dark"] .search-field:focus-within { background: rgba(72,72,74,0
 .history-scrollbar { top: 26px !important; right: -10px !important; }
 .history-scrollbar-thumb { border-radius: var(--radius-pill) !important; }
 
-/* 8) 操作按钮：2x2 网格，hover 才展开其余三枚，降低噪音 (§16 Simplicity) */
+/* 8) 操作按钮：2x2 网格，hover 才展开其余三枚，降低噪音（「Do / Don't 执行」） */
 .item-actions .icon-button {
   will-change: transform, opacity !important;
   transition: transform var(--micro), opacity var(--micro), background var(--micro), border-color var(--micro), color var(--micro) !important;
@@ -2921,7 +2919,7 @@ html[data-theme="dark"] .search-field:focus-within { background: rgba(72,72,74,0
 html[data-theme="dark"] .shortcut-bar { background: rgba(44,44,46,0.52) !important; box-shadow: inset 0 1px 0 rgba(255,255,255,0.06) !important; }
 .shortcut kbd { border-radius:5px !important; border:0.5px solid var(--line-strong) !important; box-shadow: 0 1px 2px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9) !important; letter-spacing:0.02em !important; }
 
-/* 10) 按钮簇：悬浮抬升 1px，按压回弹 (§1 §4) */
+/* 10) 按钮簇：悬浮抬升 1px，按压回弹（「动效与减少动态」） */
 .tool-button, .soft-button, .detail-action { will-change: transform !important; transition: background var(--micro), color var(--micro), border-color var(--micro), transform var(--micro), box-shadow var(--micro) !important; }
 .tool-button:hover, .detail-action:hover { transform: translateY(-1px); }
 .tool-button:active, .detail-action:active { transform: scale(0.97) !important; }
@@ -2929,7 +2927,7 @@ html[data-theme="dark"] .shortcut-bar { background: rgba(44,44,46,0.52) !importa
 /* 11) 图标描边统一 1.75，符合 SF Symbols 细腻度 */
 .icon { stroke-width: 1.75 !important; }
 
-/* 12) 降低透明度 / 减少动态 彻底覆盖（§14） */
+/* 12) 降低透明度 / 减少动态 彻底覆盖（「动效与减少动态」） */
 @media (prefers-reduced-transparency: reduce) {
   .app-window, .titlebar, .content, .detail-panel, .history-item, .capture-sheet, .shortcut-card, .toast, .shortcut-bar, .search-field, .preview-surface, .file-detail {
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
@@ -2962,7 +2960,7 @@ html[data-theme="dark"] .shortcut-bar { background: rgba(44,44,46,0.52) !importa
   html[data-theme="dark"] .history-item { border-color: rgba(255,255,255,0.22) !important; }
 }
 
-/* 13) vibrancy：深色文字加粗 + 字距微增，保证在磨砂上可读 (§12) */
+/* 13) vibrancy：深色文字加粗 + 字距微增，保证在磨砂上可读（「组件映射」） */
 html[data-theme="dark"] .item-preview { color: rgba(245,245,247,0.94) !important; font-weight: 480 !important; }
 html[data-theme="dark"] .content-header h1, html[data-theme="dark"] .detail-header h2 { font-weight: 700 !important; letter-spacing: -0.017em !important; }
 
@@ -3486,7 +3484,7 @@ html[data-theme="dark"] .history-heading { color: rgba(235,235,245,0.42) !import
 
 /* History list - cathedral gap */
 .history-list {
-  /* 顶部/底部留白需大于滚动边缘 10px 渐隐遮罩，避免首尾卡片被遮罩淡出 */
+  /* 顶部/底部留白需大于滚动边缘 10px 渐隐遮罩，避免首尾卡片被遮罩淡出（「组件映射」列表滚动边缘） */
   padding: 12px 0 12px !important;
   /* 上面那点留白只在全程 scrollTop=0 时才管用：键盘导航靠 scrollIntoView({block:'nearest'})
      保持选中项可见，而 nearest 只认滚动口边缘，会把留白当多余空间滚掉，首尾卡片就贴进渐隐里。

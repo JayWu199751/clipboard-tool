@@ -41,6 +41,7 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 - **圆角**：关系统圆角（roundedCorners:false），CSS 圆角 + per-pixel alpha 裁形；圆角外的透明区按几何计算动态 `setIgnoreMouseEvents(true, {forward:true})` 穿透。
 - **多显示器 DPI**：面板隐藏到**当前显示器**屏幕外并固定尺寸，防跨屏 DPI 漂移导致尺寸变形。
 - **托盘图标按物理像素直出**：非整数缩放（如 175%）下单一 32px 基图被系统重采样必糊。按主屏 `scaleFactor` 取 `round(16×sf)` 的恰好物理尺寸图 1:1 渲染，`display-metrics-changed` 时重选。验证方法：物理分辨率截屏 + 模板匹配比对。
+- **滚动边缘渐隐遮罩会被 `scrollIntoView` 滚掉** [跨平台]：列表用 `padding` 让出一段 mask 渐隐区（免得首尾卡片被硬切），再用 `scrollIntoView({block:'nearest'})` 保持选中项可见——`nearest` 只认滚动口的原始边缘，会把这段留白当多余空间滚掉，于是选中首项时卡片顶部正好淡进遮罩，看着像被一道阴影压住。修法不是手算 `scrollTop`，而是用 `scroll-padding` 把同一段留白声明成可视区，让判定与留白同源、由浏览器执行。附带教训：靠注释维系的视觉约束（「留白需大于渐隐宽度」原本就写在 CSS 注释里）挡不住下一次改动，能收进同一个属性的就别留给注释。
 
 ## 4. 前端事件与模式
 

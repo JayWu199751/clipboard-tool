@@ -8,3 +8,4 @@
 - 端口用函数签名或 trait 注入（`history.rs` 的 `HistoryStoreBuilder`、`panel_modes.rs` 的 `ModesHost`、`paste_chain.rs` 的 `PastePort`、`startup.rs` 的 `decide(...register)`），生产 adapter 与测试 adapter 各一份；seam 不成立时宁可把端口加宽，也不要在 module 里直接调效果。
 - 同类逻辑出现第三份复制粘贴就该收敛成 module，这是本仓库的既有做法，六个深化候选都源于此。
 - 判断新代码该写在哪：先问「这是判定还是效果」。判定进 module 并配单测，效果进 `main.rs`。
+- 判定也可以住在样式表里，条件是执行它的是浏览器，而且它能被端到端断言。「什么算可视区」就是这种判定：`styles.css` 的 `scroll-padding` 声明它，`scrollIntoView({block:'nearest'})` 执行它，Playwright 的几何断言守它。把它搬进 TS 手算 `scrollTop` 等于同一条判定复制第二份，上一版就是这么把首尾卡片滚进渐隐遮罩的。所以「判定进 module」的前提是这条判定需要被纯单测直接断言；不需要时，就近放在执行它的那一层。

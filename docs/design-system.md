@@ -33,15 +33,22 @@
 - 基准 4px，密度 comfortable；卡片 16px（小密度）/ 28px（大卡），按钮 980px/999px 胶囊，输入 12px，窗口 20px
 - Section 间距由 Canvas/Paper 交替完成，不用分割线或阴影
 
+**动效与减少动态**
+- 只有 `transform` / `opacity` / `filter` 参与动画，几何属性不动，卡片因此能待在合成层里
+- 进出用对称路径：进入与退出共用同一组弹簧参数，中途可中断，重复触发不排队
+- 悬浮反馈是 1px 抬升加按压回弹，不放大、不改色相；Toast 与详情面板靠 blur 半径同步变化物化
+- 系统「减少动态效果」与「降低透明度」两条设置下，过渡与 blur 全部彻底关闭，不留残余动画
+
 **组件映射（clipboard-tool 落地）**
 - 全局窗：Canvas 半透明毛玻璃（blur 28px saturate 180%），Paper 卡片无边无影，靠画布交替区分
 - 标题栏：44px 导航条，Faded Surface 毛玻璃（blur 20px）
 - 搜索框：Paper 底 + Hairline，聚焦时 Electric Blue 0.14 4px 环
 - 列表卡：Paper 底，默认 transparent 边，悬停 Faded Surface，选中 Electric Blue 6% + 1px 18% 内描边，深色模式对应 #2c2c2e/#3a3a3c
+- 列表滚动边缘：上下各 10px 的 mask 渐隐代替硬分割线（分区不用实线，见「间距与圆角」）。首尾卡片与滚动口边缘的留白必须大于这 10px，且要用同源的 `scroll-padding` 把这段留白声明成可视区；只靠 `padding` 不够，`scrollIntoView({block:'nearest'})` 会把留白当多余空间滚掉，卡片顶部就淡成一道阴影。
 - 来源图标：按 appName 映射 pastel finish（notes/figma/safari 等），作唯一彩色载体，UI 其余保持单色
 - 底部快捷条：Canvas 毛玻璃 + kbd 白底 Hairline 胶囊，Quiet Dot 标注
 - 按钮：实心胶囊仅 Electric Blue 一处，其余 Ghost 胶囊（transparent + Hairline），Do: 单区最多一枚实心 CTA
 
-**Do / DonDont 执行**
+**Do / Don't 执行**
 - Do: 交替 #ffffff/#f5f5f7 形成节奏、28px/16px 圆角、980px 胶囊、17px 级跟踪 -0.022em、numr 数字
 - Dont: 无阴影（仅选中 1px 内描边）、无彩色点缀（除 Electric/Link Blue 与产品图）、标题不小于 12px 感知、不用实线分割、圆角不小于 8px、UI 面无渐变、字重不低于 400/600、链接无底盒、段落不居中
