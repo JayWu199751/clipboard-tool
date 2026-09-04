@@ -185,7 +185,7 @@ impl PanelWindow {
     }
 
     /// 把焦点还给原程序（仅当面板当前持有焦点时）。
-    /// Electron 的 win.blur() 等价于 SetFocus(NULL)，且必须在窗口归属线程调用。
+    /// 归还焦点即 SetFocus(NULL)，且必须在窗口归属线程调用。
     pub fn release_focus(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {

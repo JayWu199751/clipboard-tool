@@ -2,7 +2,7 @@
 
 Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+Shift+V` 呼出一个不抢焦点的置顶浮层，选中即把内容粘贴回你原来打字的输入框。
 
-技术栈 **Tauri 2 + React 19 + Rust**。原 Electron 实现已于 2026-08-31 删除，当前是唯一实现；存档沿用 Electron 版契约，老用户换实现不丢历史（两版不要同时运行）。
+技术栈 **Tauri 2 + React 19 + Rust**。存档 schema 与键名是已经写在用户磁盘上的既成契约，改动必须兼容旧档（[ADR-0007](docs/adr/0007-storage-key-contract.md)）。
 
 ## 操作
 
@@ -60,9 +60,9 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 
 | 文件 | 内容 |
 |---|---|
-| `clipboard-history.json` | 历史条目（含置顶、备注、来源应用），schema 与 Electron 版共享 |
+| `clipboard-history.json` | 历史条目（含置顶、备注、来源应用），schema 是持久化契约，改动须兼容旧档 |
 | `images/` | 图片条目的 PNG，文件名是条目 id；内容哈希只用于判定条目身份，不进文件名 |
-| `settings.json` | `autoStart` / `shortcut`，camelCase 键名（与 Electron 版共享同一份） |
+| `settings.json` | `autoStart` / `shortcut`，camelCase 键名不可改，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
 | `diag.log` / `panic.log` | 诊断日志 / release 崩溃落点，见下节 |
 
 ## 诊断
@@ -99,7 +99,7 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 | 普通窗口里呼出键也没反应 | 该键被其它程序占用；用托盘「更换快捷键」重设，注册失败会写 stderr |
 | 内容进了剪贴板但没粘贴进输入框 | 看 `diag.log` 的失败阶段：`restore` 是没找回原窗口，`paste` 是找回来了但注入失败；此时面板保持显示是刻意的（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)） |
 | 粘贴后列表闪一下、同内容记成两条 | 轮询基线没同步，即 `paste_chain` 的落位一步没做到 |
-| 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-reuse-electron-storage-contract.md) |
+| 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
 | 渲染层收不到任何事件但命令正常 | `src-tauri/capabilities/default.json` 缺 `core:default`：v2 的 ACL 默认拒绝 `plugin:event\|listen`，脚手架模板自带此文件，手工搭建容易漏 |
 | 托盘图标发糊 | 非整数缩放下必须按主屏 `scaleFactor` 取恰好物理尺寸的图，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
 
@@ -113,7 +113,7 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 | [docs/changelog.md](docs/changelog.md) | 每次改动的动机、取舍与行数/例数变化 |
 | [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、动效与减少动态、组件映射、Do / Don't |
 | [docs/desktop-tool-pitfalls.md](docs/desktop-tool-pitfalls.md) | Windows 桌面工具的通用坑，跨项目复用 |
-| [docs/UIPI-research.md](docs/UIPI-research.md) | 提权结论的主源调研与未验证清单 |
+| [docs/UIPI-research.md](docs/UIPI-research.md) | 提权结论的主源调研与未验证清单（一次性调研存档，保持原样不改写） |
 | [AGENTS.md](AGENTS.md) | 给 agent 的仓库约定：语言、行尾、验证命令、红线 |
 
 ## 待真机验证
@@ -125,4 +125,4 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。
 
-相对 Electron 版的已知偏差记在 [docs/architecture.md](docs/architecture.md) 末节。
+自动化测不到的实现细节另见 [docs/architecture.md](docs/architecture.md) 末节「待真机复核」。

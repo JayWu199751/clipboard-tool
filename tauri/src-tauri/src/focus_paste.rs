@@ -1,7 +1,7 @@
-// 焦点快照 / 焦点恢复 / Ctrl+V 注入：resources/focus-paste-helper.cs 的进程内移植。
-// 原实现是常驻 C# 助手进程（stdin/stdout JSON 协议）；Rust 版直接在主进程调用 Win32，
-// 助手进程、JSON-RPC seam（electron/native-helper.js）与其超时/生命周期管理整体退役。
-// 行为语义与 C# 版逐段对齐（含 4ms 步进轮询、两级激活级联、AttachThreadInput）。
+// 焦点快照 / 焦点恢复 / Ctrl+V 注入：在主进程内直接调用 Win32，因此没有外部助手进程，
+// 也就没有跨进程协议的超时与生命周期管理。
+// 4ms 步进轮询、两级激活级联、AttachThreadInput 都是 Win32 焦点恢复的必要步骤，
+// 改动前先读 docs/desktop-tool-pitfalls.md 第 2 节。
 
 use crate::panel_modes::FocusTarget;
 use std::thread;

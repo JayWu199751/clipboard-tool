@@ -2,16 +2,15 @@
 // 纯逻辑 module：不依赖 tauri / Win32。模式状态、转换级联、全局热键集合的推导与差量应用
 // 全部收在本 module 的 interface 之后；窗口焦点、渲染层通知、焦点快照等效果经 host 注入。
 //
-// 与 Electron 版（electron/panel-modes.js）的差异只有一处：JS 里 captureFocus 是到助手
-// 进程的异步 JSON-RPC，Rust 里是进程内同步 Win32 调用（focus_paste::snapshot），
-// 因此整个状态机从 async 变为同步，行为语义不变。
+// 焦点快照走进程内同步 Win32 调用（focus_paste::snapshot），状态机因此没有异步等待点，
+// 四态转换与热键差量全部可以直接单测。
 //
-// 设计要点（沿用原版）：
+// 设计要点：
 // - 全局快捷键（呼出键 + 面板导航键）由「当前模式」唯一推导：desired_keys() 给出目标集合，
 //   apply_hotkeys() 与已注册集合做差量同步。模式转换不再各自手写 register/unregister。
 // - 焦点快照（FocusTarget）的生命周期归本 module：呼出/进入输入态前确保有快照，
 //   退出输入态归还焦点（快照保留，同一次呼出内复用），隐藏面板时消费快照并清空。
-// - 渲染层仍通过原有 panel:key / panel:shown / shortcut:capture-* 事件感知模式变化（协议不变）。
+// - 渲染层经 panel:key / panel:shown / shortcut:capture-* 事件感知模式变化。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -60,7 +59,7 @@ pub enum HotkeyAction {
 
 // 面板导航键：[accelerator, action, 是否在搜索模式下继续拦截]。
 // 搜索模式里 Space/Z/Del/B 让位给搜索输入框，↑↓/Enter/Esc 保持面板语义。
-// accelerator 字符串沿用 Electron 版（测试与协议对齐），宿主负责转成插件可注册的 Shortcut。
+// accelerator 字符串是渲染层与主进程共用的协议格式（Control+Shift+V 等），宿主负责转成插件可注册的 Shortcut。
 pub const NAV_SHORTCUTS: [(&str, NavAction, bool); 8] = [
     ("Up", NavAction::Up, true),
     ("Down", NavAction::Down, true),

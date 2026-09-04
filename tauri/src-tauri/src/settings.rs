@@ -1,7 +1,7 @@
 // 设置存档 settings.json：读写与键名契约的唯一归属。
 //
-// 键名契约（踩坑手册第 5 条，此处翻过一次车）：数据目录与已删除的 Electron 版共享，
-// 存档约定是 camelCase（autoStart）；serde 默认按 snake_case 写出 auto_start，
+// 键名契约（踩坑手册第 5 条，此处翻过一次车）：老用户手上的存档约定是 camelCase（autoStart），
+// 键名一改就是存档破坏；serde 默认按 snake_case 写出 auto_start，
 // 重载时找不到键便静默回退默认值，表现为「开机启动打开 → 重启 → 变回关闭」。
 // 因此这里显式 rename_all = camelCase，并保留 alias = "auto_start" 兼容误写的旧档，
 // 由下面的往返测试把契约钉死。

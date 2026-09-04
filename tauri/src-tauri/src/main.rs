@@ -10,12 +10,12 @@
 //   paste_chain    复制并粘贴链路的五步顺序与结果文案
 // 剩下的编排职责：剪贴板读写、持久化与广播、托盘、全局热键分发、IPC 命令。
 //
-// 与 Electron 版的结构差异：
-// - 4 个 C# 助手进程（focus-paste / app-icon / click-watcher / task-launcher）全部退役，
-//   对应逻辑成为本进程内的模块（focus_paste / source_app / click_watcher / tasks）。
-// - 面板模式状态机（panel_modes）经 modes::ModesHost 注入效果；焦点快照从异步 JSON-RPC
-//   变为同步 Win32 调用。
-// - 数据目录沿用 %APPDATA%\ClipboardTool，与 Electron 版共享历史 JSON 与图片文件。
+// 结构要点：
+// - 焦点快照、来源应用图标、全局点击监听、计划任务拉起全部住在本进程内
+//   （focus_paste / source_app / click_watcher / tasks），没有外部助手进程。
+// - 面板模式状态机（panel_modes）经 modes::ModesHost 注入效果；焦点快照是同步 Win32 调用。
+// - 数据目录固定在 %APPDATA%\ClipboardTool，历史 JSON 与图片文件都落在里面，
+//   键名契约见 ADR-0007。
 //
 // 线程模型（死锁防线的核心，改动前必读）：见 modes module 顶部注释。
 // 一句话：PanelModes 由 modes::Modes 独占的执行线程持有，本文件只通过 AppState::modes
@@ -172,7 +172,7 @@ struct ShortcutCaptureStartPayload {
     current: String,
 }
 
-// ---------- 数据目录（与 Electron 版共享：%APPDATA%\ClipboardTool） ----------
+// ---------- 数据目录（%APPDATA%\ClipboardTool，存档契约见 ADR-0007） ----------
 
 fn data_dir() -> PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
@@ -303,7 +303,7 @@ fn commit(app: &AppHandle, state: &AppState) {
 
 // ---------- 剪贴板效果 ----------
 
-// 读剪贴板图片并编码 PNG（与 Electron clipboard.readImage().toPNG() 对齐）
+// 读剪贴板图片并编码为 PNG 字节
 fn clipboard_read_image_png(clip: &mut arboard::Clipboard) -> Option<Vec<u8>> {
     let img = clip.get_image().ok()?;
     let mut buf = image::RgbaImage::new(img.width as u32, img.height as u32);
@@ -337,7 +337,7 @@ fn write_clipboard_image_file(path: &str) -> bool {
 
 // 剪贴板序列号：Win32 全局计数器，任何写剪贴板操作都会 +1。
 // 读取不需要打开剪贴板——用它短路未变化的轮询，既省 CPU 又减少与其他程序的
-// 剪贴板打开争用（Electron 版每 600ms 无条件 readImage+toPNG，此处为改进项）。
+// 否则每 600ms 都要无条件读一次剪贴板图片并编码 PNG。
 fn clipboard_seq() -> u32 {
     unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
@@ -553,7 +553,7 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         .icon(icon)
         .tooltip("剪贴板工具")
         .menu(&menu)
-        // 左键点击呼出面板（与 Electron tray.on('click') 一致），菜单走右键
+        // 左键点击呼出面板，菜单走右键
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => {
@@ -864,7 +864,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(
-            // 单实例：第二次启动 → 呼出面板（与 Electron second-instance 一致）。必须最先注册。
+            // 单实例：第二次启动 → 呼出面板。必须最先注册。
             tauri_plugin_single_instance::Builder::new()
                 .callback(|app, _args, _cwd| {
                     let state = app.state::<AppState>();

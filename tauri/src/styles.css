@@ -2375,7 +2375,7 @@
   
 
 
-/* ===== Electron 适配补丁 — 背景已隐藏，只留剪切板界面 ===== */
+/* ===== 透明背景适配 — 背景已隐藏，只留剪切板界面 ===== */
 /* html,body,#root 的 transparent 已在文件顶部定义，此处仅保留 #root 布局与旧类名兼容 */
 #root {
   display: block;
@@ -3899,7 +3899,7 @@ html[data-theme="dark"] .shortcut-bar { border-top-color: rgba(255,255,255,0.06)
 .titlebar { border-radius: calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) 0 0 !important; }
 .shortcut-bar { border-radius: 0 0 calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) !important; }
 
-html { background: transparent !important; } body { background: transparent !important; } /* Electron per-pixel alpha: keep transparent */
+html { background: transparent !important; } body { background: transparent !important; } /* 逐像素透明：窗口背景必须保持 transparent */
 #root { background: transparent !important;
 }
 @media (min-width: 1px) {

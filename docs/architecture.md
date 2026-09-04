@@ -87,27 +87,11 @@
 
 Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `commit()` = `persist()`（写 `clipboard-history.json`）+ `broadcast()`（图片条目转 dataUrl 后 emit `clipboard:updated`）。渲染层不直接改数组，只发命令、听事件。图片落盘 `images/`，dataUrl 按 `imagePath` 永久缓存（文件创建后内容不变），删除/裁剪时经注入端口同步失效。
 
-## 从 Electron 迁移的对照
+轮询线程每 600ms 跑一次，先用 `GetClipboardSequenceNumber` 短路未变化的轮次——序列号没动就不打开剪贴板，也就不必先读图片再编码 PNG。
 
-| Electron 版 | Tauri 版 |
-|---|---|
-| `electron/main.js`（948 行编排） | `src-tauri/src/main.rs`（1008 行，规则全部外移后） |
-| `electron/history.js` | `src-tauri/src/history.rs` |
-| `electron/panel-modes.js` | `src-tauri/src/panel_modes.rs` + `modes.rs` |
-| `electron/native-helper.js` + **focus-paste-helper.exe** / **app-icon-helper.exe** / **click-watcher.exe** / **task-launcher.exe** | 四个 C# 助手进程全部退役，成为进程内模块 `focus_paste.rs` / `source_app.rs` / `click_watcher.rs` / `tasks.rs`；因此不再有 `native-helper` 这条 seam |
-| `main.js` 的 `clipboard:copy` 五步链路（含 `focus-paste-regression.js` 整模块回归） | `src-tauri/src/paste_chain.rs` |
-| `main.js` 内的轮询基线（lastText / lastImageHash / 重试标志） | `src-tauri/src/poll_baseline.rs` |
-| `main.js` 的面板窗口管理 | `src-tauri/src/panel_window.rs` |
-| `main.js` 的提权 / 开机启动分支 | `src-tauri/src/startup.rs` |
-| `main.js` 的 settings 读写 | `src-tauri/src/settings.rs` |
-| `electron/preload.js` contextBridge | `src/api.ts`（接口面不变，`App.tsx` 零改动） |
-| `App.tsx` 内的搜索过滤 / 高亮 / 选中项算式 | `src/panelView.ts` |
-| 600ms 轮询（无条件 readImage + toPNG） | 同 600ms 轮询 + `GetClipboardSequenceNumber` 短路（未变化时零剪贴板打开） |
+## 待真机复核
 
-Electron 实现已于 2026-08-31 删除，Tauri 版是唯一实现。
+两条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
 
-## 已知偏差（相对 Electron 版）
-
-- 托盘图标 DPI：移植了按主屏 `scaleFactor` 选恰好物理尺寸图的方案，但 Tauri 的 tray-icon 生成 HICON 的路径与 Electron 不同，清晰度需真机复核。
-- 浏览态「不抢焦点」沿用 `focusable: true` + 焦点事件自动 `SetFocus(NULL)` 的模拟方案（Electron 同款），首帧激活次序需真机复核。
-- 呼出键的 accelerator 由渲染层以 Electron 格式上传（`Control+Shift+V` 等），Rust 侧经 global-hotkey 解析注册，行为一致但解析器不同。
+- **托盘图标清晰度**：按主屏 `scaleFactor` 取恰好物理尺寸的图 1:1 渲染，但最终 HICON 由 tray-icon 的生成路径决定，非整数缩放下是否仍糊必须眼看。
+- **浏览态不抢焦点**：靠 `focusable: true` 加焦点事件自动 `SetFocus(NULL)` 模拟，首帧激活次序需眼看。

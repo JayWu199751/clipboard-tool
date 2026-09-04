@@ -1,6 +1,6 @@
 # Windows 桌面工具踩坑手册
 
-> 从 clipboard-tool（Windows 剪贴板历史工具，Electron 起家后迁 Tauri，两周 40+ 次提交）的真实踩坑提炼。每条按**现象 → 根因 → 规则**组织。这些坑的共同点：运行时才暴露、报错不指认真凶、翻文档查不到——所以必须在**设计期**对照，而不是等报错再查。
+> 从 clipboard-tool（Windows 剪贴板历史工具，Tauri 2 + Rust，两周 40+ 次提交）的真实踩坑提炼。每条按**现象 → 根因 → 规则**组织。这些坑的共同点：运行时才暴露、报错不指认真凶、翻文档查不到——所以必须在**设计期**对照，而不是等报错再查。
 >
 > 标 [跨平台] 的条目与操作系统无关；其余均为 Windows 特有。来源：git 全量提交史、[adr/](adr/) 决策档案、[UIPI-research.md](UIPI-research.md)（含主源引用）。
 
@@ -12,7 +12,7 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 
 ## 1. 提权与 UIPI —— 设计期必须定，事后返工最大
 
-- **现象**：全局热键（底层都是 RegisterHotKey，Electron globalShortcut / Tauri global-shortcut 同源）在**管理员窗口聚焦时不触发**；SendInput 向提权窗口注入按键被 UIPI 静默拦截——SendInput 官方文档明言失败时**返回值和 GetLastError 都不指认 UIPI**，表现为"莫名失效"。这是 OS 级行为，与框架无关。
+- **现象**：全局热键（底层都是 RegisterHotKey，各家框架同源）在**管理员窗口聚焦时不触发**；SendInput 向提权窗口注入按键被 UIPI 静默拦截——SendInput 官方文档明言失败时**返回值和 GetLastError 都不指认 UIPI**，表现为"莫名失效"。这是 OS 级行为，与框架无关。
 - **根因**：UIPI 只允许向**等或更低完整性**的窗口注入输入、投递消息；低完整性进程注册的热键在提权前台面前不投递。热键侧官方文档空白，结论来自 Greenshot / PowerToys / KeePass / espanso / AHK 的共同实践。
 - **规则**：需要全局热键或模拟输入的工具，设计期就定提权模型，三选一：
   1. **整工具提权**：exe 清单 `requireAdministrator` + 计划任务（`/rl highest` + onlogon 触发器）静默启动——UAC 同意只发生在任务创建那一刻，日常路径零弹窗。主流工具的答案，本项目终选。
@@ -36,7 +36,7 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 
 ## 3. 浮层面板窗口（透明、无焦点、DPI）
 
-- **WS_EX_LAYERED + WS_EX_NOACTIVATE 会吃点击**：`WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATEANDEAT`，鼠标事件被吞。hook 消息回写 LRESULT 在 Electron 43（只观察不回写）不可行；可行方案 = `focusable: true` + `showInactive` 呼出不抢焦点 + 浏览态 focus 事件延迟 blur 还焦点 + 输入态（搜索/备注/捕获）临时聚焦。把多处 setFocusable 切换收敛成这一对操作。
+- **WS_EX_LAYERED + WS_EX_NOACTIVATE 会吃点击**：`WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATEANDEAT`，鼠标事件被吞。框架侧只观察 hook 消息、不回写 LRESULT，所以没法在 hook 里把点击吃掉；可行方案 = `focusable: true` + 呼出时用不抢焦点的显示方式 + 浏览态 focus 事件延迟 blur 还焦点 + 输入态（搜索/备注/捕获）临时聚焦。把多处 setFocusable 切换收敛成这一对操作。
 - **透明窗口下 CSS 阴影/光晕不可信**：transparent 合成路径把 box-shadow 按方角栅格化（圆角四角楔出色块）；负 z-index 伪元素又透过半透明背景渗染内部。聚焦态用**描边**替代光晕；透明窗口的一切视觉结论以真机实测为准。
 - **圆角**：关系统圆角（roundedCorners:false），CSS 圆角 + per-pixel alpha 裁形；圆角外的透明区按几何计算动态 `setIgnoreMouseEvents(true, {forward:true})` 穿透。
 - **多显示器 DPI**：面板隐藏到**当前显示器**屏幕外并固定尺寸，防跨屏 DPI 漂移导致尺寸变形。
@@ -45,7 +45,7 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 
 ## 4. 前端事件与模式
 
-- **异步 listen 是 useEffect 竞态重灾区** [跨平台]：Tauri/Electron 的事件订阅返回 Promise，useEffect 的异步清理赶不上重挂载时，同一 channel 双注册——现象是"按一次上下键动两格"。用 generation 计数防重注册；键盘导航类监听依赖数组收成 `[]` 常驻、回调走 ref。
+- **异步 listen 是 useEffect 竞态重灾区** [跨平台]：事件订阅（Tauri 的 `listen`）返回 Promise，useEffect 的异步清理赶不上重挂载时，同一 channel 双注册——现象是"按一次上下键动两格"。用 generation 计数防重注册；键盘导航类监听依赖数组收成 `[]` 常驻、回调走 ref。
 - **订阅一律进 useEffect** [跨平台]：写在组件体里的订阅在 StrictMode 二次挂载时执行并抛错，会**中断同一 effect 里更早注册的兄弟监听器**——现象是"呼出后方向键全无响应"。
 - **输入模式用状态机，别用布尔堆**：浏览/搜索（含 IME 组合子态）/备注编辑/快捷键捕获各自成态；全局热键集合由当前模式**推导并差量注册**。散布 13 处的 register/unregister 与 5 个松散布尔就是返工信号。IME 组合期间暂停全部导航键。
 - **性能靠分段实测，不靠猜** [跨平台]：粘贴延迟 ~1s → <50ms，先写诊断脚本量每段，定位出三个根因：broadcast 对每个图片条目读盘+重编码（614ms，主因）→ 按 imagePath 缓存 dataUrl；写剪贴板后没同步轮询基线 → 粘贴内容被当作新复制重复提升；固定 Sleep（见上）。优化前先有测量。
@@ -53,7 +53,7 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 ## 5. 持久化契约与工具链
 
 - **序列化键名是持久化契约**：serde 默认 snake_case 写出 `auto_start`，而共享 settings.json 的既有约定是 camelCase `autoStart` → 重载找不到键、静默回退默认值，开关"保存后重开即丢"。跨实现/跨语言共享存档时：显式 `rename_all`，加 `alias` 兼容旧档，写**往返序列化测试**。
-- **双实现并存期的最大风险在数据契约**：Electron→Tauri 迁移就在共享 settings.json 上翻车（上条）。迁移或并存时先把存档 schema 钉死成测试。
+- **换实现时最大风险在数据契约**：本项目的存档翻车就发生在共享 settings.json 的键名上（上条）。迁移或并存时先把存档 schema 钉死成测试。
 - **vite watch 排除 `src-tauri/target`**：文件监听锁住 deps 下的 exe，dev 启动报 EBUSY。
 - **dev server 绑 127.0.0.1**：绑 0.0.0.0 会触发 Windows 防火墙授权且暴露端口。
 - **Tauri v2 capabilities 缺失导致事件全断**：v2 的 ACL 默认拒绝 `plugin:event|listen`，必须提供 `src-tauri/capabilities/default.json` 授予 `core:default`；否则自定义命令（invoke）全部正常，而 Rust→渲染层的事件**静默丢失**——一半通道通一半通道不通，最难往权限上想。脚手架模板自带此文件，手工搭建容易漏。
@@ -67,6 +67,6 @@ Windows 桌面工具的已知坑：读 <路径>/desktop-tool-pitfalls.md，设�
 - **靠注释维系的约束，换成类型或可见性**：「绝不从主线程碰模式」写在编排文件顶部八行注释里，仍然差点被违反。改成把状态机的可变引用设为 module 私有、外部只暴露具名操作之后，非法调用直接编译不过。注释挡不住下一次顺手改。
 - **具名 interface 取代闭包投递**：18 处各自 `clone handle`、各自决定布尔参数怎么传的投递点，收成 15 个具名方法后，「粘贴成功后不再重复恢复焦点」从注释里的 `// restoreFocus: false` 变成方法名 `hide_after_paste`。名字是免费的文档，布尔参数是。
 - **一条链路没有 seam 就没法测**：复制并粘贴的五步顺序散在命令函数里时，没有任何测试能断言它。加一个端口 trait、配一个记录调用顺序的假实现，顺序与文案立刻变成可断言的东西——这是让链路可测的最小代价。
-- **删实现时先看谁在守它**：删掉 Electron 那套代码时，挂在它上面的整模块回归脚本一起消失，那条粘贴链路当场裸奔。删代码要检查它的守护测试有没有等价物，没有就先补。
+- **删实现时先看谁在守它**：删掉一套旧实现时，挂在它上面的整模块回归脚本会一起消失，那条粘贴链路当场裸奔。删代码要检查它的守护测试有没有等价物，没有就先补。
 - **文档会腐烂**：删掉一个实现之后，词汇表与架构文档还在描述已经不存在的文件，而且读起来毫无异样。文档同步是每次改动的一部分，不是收尾时的可选项。
 - **决策档案**：每个功能动工前访谈定稿，把决策（含否决项与理由）写成 ADR 记在 `docs/adr/`，词汇记在 `CONTEXT.md`——两周后考古靠它们，不用翻 diff 猜意图。想推翻某条决策的人，至少会先看到它否决过什么。

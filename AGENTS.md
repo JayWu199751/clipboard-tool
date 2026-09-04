@@ -12,7 +12,7 @@
 - 新增模式操作只在 `modes.rs` 加具名方法，不要在调用方拼闭包投递；`PanelModes` 不出 module。
 - 新代码先判「这是判定还是效果」：判定进 module 并配单测，效果进 `main.rs`（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。
 - 粘贴链路的一步都不能换序（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)），改前先跑 `paste_chain` 那 9 例。
-- 不碰 `%APPDATA%\ClipboardTool` 的存档键名契约（[ADR-0007](docs/adr/0007-reuse-electron-storage-contract.md)）。
+- 不碰 `%APPDATA%\ClipboardTool` 的存档键名契约（[ADR-0007](docs/adr/0007-storage-key-contract.md)）。
 
 ## 完成的判据
 

@@ -1,7 +1,7 @@
 // 构建脚本：
 // - 默认（开发）嵌入 Tauri 默认清单（asInvoker），便于非提权调试。
-// - 设 CLIPBOARD_TOOL_ELEVATED=1 时嵌入 requireAdministrator 清单（对应 Electron 版
-//   打包产物的常驻提权设计）：热键与 SendInput 不被 UIPI 拦截，管理员前台照常工作。
+// - 设 CLIPBOARD_TOOL_ELEVATED=1 时嵌入 requireAdministrator 清单（常驻提权设计，
+//   见 ADR-0001）：热键与 SendInput 不被 UIPI 拦截，管理员前台照常工作。
 //   打包发布用 `set CLIPBOARD_TOOL_ELEVATED=1` + `tauri build`。
 //   注意：清单替换需保留 PerMonitorV2 DPI 感知，否则坐标换算全部失准。
 //   关键：必须保留 Common-Controls 6 依赖，否则 comctl32 5.x 没有 TaskDialogIndirect，

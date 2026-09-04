@@ -124,7 +124,7 @@ _Avoid_: 期望值、实际值
 ### 存档与契约
 
 **存档**：
-`%APPDATA%\ClipboardTool` 下的全部用户数据：历史 JSON、`images/`、`settings.json`。沿用 Electron 版契约，两版不要同时运行。
+`%APPDATA%\ClipboardTool` 下的全部用户数据：历史 JSON、`images/`、`settings.json`。schema 与键名是已经写在用户磁盘上的既成契约，改动必须兼容旧档。
 
 **键名契约**：
-`settings.json` 用 camelCase 键名，因为这份存档与 Electron 版共享；序列化键名一改就是存档破坏。
+`settings.json` 用 camelCase 键名（`autoStart`）；序列化键名一改就是存档破坏，读取端要留旧键兼容。

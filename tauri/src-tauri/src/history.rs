@@ -4,8 +4,6 @@
 // image_file_exists）；持久化与 broadcast 由调用方（main.rs）完成，不属于本 module。
 // 领域规则出处：ADR-0003（条目身份只由内容决定）、ADR-0004（置顶块与普通块）、
 // CONTEXT.md「备注」「落位」。
-// Rust 移植自 electron/history.js（测试用例同步移植自 scripts/history-unit.js；
-// 对象同一性断言在 Rust 中改为按 id 的 find 断言，行为语义不变）。
 
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -458,7 +456,7 @@ impl HistoryStore {
     }
 
     // 持久化投影：entry 结构体的 serde 序列化即投影（text/imagePath 按类型互斥省略，
-    // 与 Electron 版 clipboard-history.json 的文件 schema 兼容）。
+    // 与既有 clipboard-history.json 的 schema 兼容，键名契约见 ADR-0007）。
     pub fn to_json(&self) -> Vec<Entry> {
         self.entries.clone()
     }
@@ -718,8 +716,8 @@ mod tests {
 
     #[test]
     fn 序列化只投影已知字段() {
-        // Electron 版 toJSON 对文本条目投影 { id, type, text, createdAt, sourceApp, pinned,
-        // pinnedAt, note }（imagePath 仅图片条目持有）；serde 的 skip_serializing_if 保持同构。
+        // 存档对文本条目只投影 { id, type, text, createdAt, sourceApp, pinned,
+        // pinnedAt, note }（imagePath 仅图片条目持有）；serde 的 skip_serializing_if 保证这一点。
         let (mut store, _) = make_store(200, Default::default());
         let entry = store.record_text("t", Some(SourceApp { app_name: "app".into(), ..Default::default() })).entry.unwrap();
         {

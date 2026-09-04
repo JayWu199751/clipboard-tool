@@ -1,5 +1,5 @@
-// Tauri IPC 适配层：实现 window.clipboardAPI（与 Electron preload.js 同一接口面）。
-// 渲染层 App.tsx 无需改动；invoke 参数名用 camelCase，与 Rust 命令的 serde rename 对齐。
+// Tauri IPC 适配层：实现 window.clipboardAPI，渲染层只认这一个接口面。
+// invoke 参数名用 camelCase，与 Rust 命令的 serde rename 对齐。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { ClipboardEntry } from './types';

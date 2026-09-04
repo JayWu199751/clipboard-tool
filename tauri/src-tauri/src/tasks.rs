@@ -6,8 +6,7 @@
 // 用 PowerShell Register-ScheduledTask 注册/重建任务：
 // schtasks /create 强制要求 /sc 触发器，无法表达"仅作静默拉起通道（无触发器）"，
 // Register-ScheduledTask 支持无触发器注册；-Force 覆盖重建。
-// 注意：这段注册脚本与已删除的 Electron 版 main.js psRegisterTask 同源，任务名 / Principal
-// 变更需与安装器（快捷方式指向）一起核对。
+// 注意：任务名 / Principal 是对外的启动契约，变更需与安装器（快捷方式指向）一起核对。
 
 use base64::Engine as _;
 use std::os::windows::process::CommandExt;
@@ -70,7 +69,7 @@ pub fn ps_register_task(exe_path: &str, with_logon_trigger: bool) -> bool {
 
 // 静默拉起：任务存在则经 Schedule.Service COM 运行（PowerShell 一行式，免 COM 绑定）；
 // 任务缺失返回 false，由调用方兜底（提权 shell 下直接创建；否则弹 UAC 直启）。
-// 对应 Electron 版 task-launcher.exe 的运行通道；当前入口由安装器/快捷方式承担，保留备用。
+// 当前入口由安装器/快捷方式承担，这条运行通道保留备用。
 pub fn run_elevated_task() -> bool {
     let task_name = ELEVATED_TASK_NAME;
     let script = format!(

@@ -1,11 +1,9 @@
 // 复制并粘贴链路的唯一归属：五步顺序与结果文案。
 //
-// 为什么需要这条 seam：Electron 版靠 scripts/focus-paste-regression.js 整模块回归守住
-// 「取内容 → 写剪贴板 → 落位 → 恢复焦点 → 注入 Ctrl+V → 隐藏面板」这条链，该脚本随
-// Electron 一起删除后目前无等价物。顺序错一步就是「粘贴进错误窗口」或「列表闪一下」
-// 这类只有真机才暴露的缺陷。现在链路本身不碰 arboard / Win32 / tauri：效果全部经
-// PastePort 注入，生产 adapter 用真实现（main.rs），测试 adapter 记录调用顺序
-// （本 module 底部），顺序与文案第一次变成可断言的东西。
+// 为什么需要这条 seam：「取内容 → 写剪贴板 → 落位 → 恢复焦点 → 注入 Ctrl+V → 隐藏面板」
+// 这条链顺序错一步就是「粘贴进错误窗口」或「列表闪一下」这类只有真机才暴露的缺陷。
+// 链路本身不碰 arboard / Win32 / tauri：效果全部经 PastePort 注入，生产 adapter 用真实现
+// （main.rs），测试 adapter 记录调用顺序（本 module 底部），顺序与文案因此可断言。
 //
 // 顺序契约（测试逐条断言，改动前先看它们）：
 //   content_of → write_clipboard → settle_after_copy → focus_target
