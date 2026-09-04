@@ -1,65 +1,8 @@
 import { test, expect } from '@playwright/test';
-
-const entries = Array.from({ length: 60 }, (_, index) => ({
-  id: `entry-${index}`,
-  type: 'text',
-  text: `entry ${index}`,
-  createdAt: index,
-  sourceApp: null,
-  pinned: false,
-  pinnedAt: 0,
-  note: '',
-}));
+import { FADE_INSET, installPanelHarness, makeEntries } from './panel-harness.js';
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript((history) => {
-    const callbacks = new Map();
-    const listeners = new Map();
-    let nextId = 1;
-
-    const removeListener = (event, id) => {
-      const registered = listeners.get(event) ?? [];
-      const index = registered.indexOf(id);
-      if (index >= 0) registered.splice(index, 1);
-    };
-
-    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-      unregisterListener(event, id) {
-        removeListener(event, id);
-      },
-    };
-    window.__TAURI_INTERNALS__ = {
-      transformCallback(callback) {
-        const id = nextId++;
-        callbacks.set(id, callback);
-        return id;
-      },
-      unregisterCallback(id) {
-        callbacks.delete(id);
-      },
-      invoke(command, args) {
-        if (command === 'clipboard_get') return Promise.resolve(history);
-        if (command === 'plugin:event|listen') {
-          const registered = listeners.get(args.event) ?? [];
-          registered.push(args.handler);
-          listeners.set(args.event, registered);
-          if (args.event === 'panel:key') window.__panelKeyReady = true;
-          return Promise.resolve(args.handler);
-        }
-        if (command === 'plugin:event|unlisten') {
-          removeListener(args.event, args.eventId);
-          callbacks.delete(args.eventId);
-          return Promise.resolve();
-        }
-        return Promise.resolve(true);
-      },
-    };
-    window.__emitPanelKey = (action) => {
-      for (const id of [...(listeners.get('panel:key') ?? [])]) {
-        callbacks.get(id)?.({ payload: { action, noteEntryId: null } });
-      }
-    };
-  }, entries);
+  await installPanelHarness(page, makeEntries(60));
 });
 
 test('长按上下方向键期间选中框与快速移动保持同步', async ({ page }) => {
@@ -67,7 +10,8 @@ test('长按上下方向键期间选中框与快速移动保持同步', async ({
   await page.waitForFunction(() => document.querySelectorAll('.history-item').length === 60);
   await page.waitForFunction(() => window.__panelKeyReady === true);
 
-  const result = await page.evaluate(async () => {
+  // page.evaluate 在浏览器里执行，Node 侧的常量要靠参数传进去。
+  const result = await page.evaluate(async (fadeInset) => {
     const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
     const list = document.querySelector('.history-list');
     list.scrollTo({ top: 0, behavior: 'auto' });
@@ -78,8 +22,11 @@ test('长按上下方向键期间选中框与快速移动保持同步', async ({
       const selectedRect = selected?.getBoundingClientRect();
       const runningAnimations = [...document.querySelectorAll('.history-item')]
         .reduce((count, item) => count + item.getAnimations().filter((animation) => animation.playState === 'running').length, 0);
+      // 可视区要再让开上下各 fadeInset：贴到滚动口边缘等于被渐隐遮罩盖住，
+      // 按原始盒子判定会把这种「贴边」误判成可见。
       const visible = selectedRect
-        ? selectedRect.top >= listRect.top - 1 && selectedRect.bottom <= listRect.bottom + 1
+        ? selectedRect.top >= listRect.top + fadeInset - 1
+          && selectedRect.bottom <= listRect.bottom - fadeInset + 1
         : false;
       return {
         index: [...document.querySelectorAll('.history-item')].indexOf(selected),
@@ -104,7 +51,7 @@ test('长按上下方向键期间选中框与快速移动保持同步', async ({
     };
 
     return { down: await move('down'), up: await move('up') };
-  });
+  }, FADE_INSET);
 
   for (const direction of ['down', 'up']) {
     const samples = result[direction].samples;

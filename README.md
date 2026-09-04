@@ -20,6 +20,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 - 中文输入法组合期间面板导航键全部暂停，不会误跳选中项。
 - 长按 `↑` / `↓` 时选中框与列表滚动即时跟随，不被输入重复速度甩开。
+- 键盘导航把选中项滚到列表边缘时，滚到的是渐隐遮罩内侧，首尾卡片不会被淡成一道阴影；回到第一项时列表也回到呼出时的位置。
 - 搜索匹配正文、备注与来源应用（应用名 / 窗口标题 / 可执行文件路径），空格分词多词 AND、大小写不敏感、命中片段高亮；结果保持原顺序，不做匹配度排序。
 - 点击面板外任意处即隐藏；置顶条目固定在最前的置顶块里，新复制插在置顶块之后。
 
@@ -81,12 +82,12 @@ cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 14 例
 npm run test:rust   # cargo test —— 59 例
-npm run test:browser # Playwright UI 回归 —— 1 例（首次需 npx playwright install chromium）
+npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwright install chromium）
 ```
 
 73 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 14。
 
-`test:browser` 使用 mock Tauri bridge 驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步；它不并入纯模块测试的 73 例统计。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 73 例统计。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -119,6 +120,7 @@ npm run test:browser # Playwright UI 回归 —— 1 例（首次需 npx playwri
 
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
+- 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部不被渐隐遮罩压住（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。

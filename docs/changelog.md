@@ -4,6 +4,8 @@
 >
 > 早期条目里的「本文档」指迁移前承载这份日志的 [CONTEXT.md](../CONTEXT.md)；条目提到的 `electron/`、`scripts/`、`resources/` 已随 2026-08-31 删除 Electron 实现一并移除，按历史读。
 
+- **列表首尾卡片被渐隐遮罩盖住（2026-09-05）**：呼出面板后按下键把列表滚走，再按上键回到第一项，首项顶部会被列表顶部的渐隐遮罩压住一道阴影，继续按上键也不再复位。根因由 Playwright 量出：`.history-list` 用 `padding: 12px 0` 加首项 `margin-top: 2px` 预留 14px，正是为了躲开 `mask-image` 的 10px 渐隐（`styles.css` 里这条意图本来有注释），但「保持选中项可见」用的是 `scrollIntoView({block:'nearest'})`，它只认滚动口的原始边缘，会把这 14px 当成多余空间滚掉——回到首项时 `scrollTop` 停在 14、顶边空隙从 14px 变 0px；底边同病，选中末项时底边空隙从 12px 变 0px。修法是把「什么算可视区」交回 CSS：`scroll-padding-top: 14px` / `scroll-padding-bottom: 12px` 与预留留白同源，`nearest` 从此不再抹平它，判定与效果各归其位，`App.tsx` 一行未改。上一提交新增的 `navigation-visual-regression.spec.js` 之所以漏过，是它的 `visible` 写作 `selectedRect.top >= listRect.top - 1`，把「贴到滚动口边缘」当成可见，而这恰恰就是症状；现按渐隐宽度收紧，实测把 `scroll-padding` 撤掉即变红。测试：新增 `tests/panel-harness.js`（三条浏览器用例共用的 mock bridge 与 `FADE_INSET`）与 `tests/first-item-top-clip.spec.js` 2 例，`test:browser` 1 → 3 例，纯模块 73 例不变；`styles.css` +6 行、`panel-harness.js` +71、`first-item-top-clip.spec.js` +74、`navigation-visual-regression.spec.js` +9/-62。未改变 IPC、模式状态机或粘贴链路。
+
 
 - **长按方向键视觉跟手（2026-09-02）**：上一轮加入每 50ms 的方向键重复投递后，`App.tsx` 每次选中变化仍经 `scrollIntoView` 的 `smooth` 滚动，加上卡片 160ms 的背景/边框过渡，导致选中框和列表视口持续追赶输入。现在列表导航使用 `behavior: 'instant'`，列表不再启用平滑滚动，选中态只保留非导航所需的位移动画；减少动态效果设置下也取消卡片过渡；新增 1 例 Playwright 回归，按 50ms 间隔连续发送上下动作，逐次断言选中项在可视区内且无残留动画。新增 `test:browser`，未改变 IPC、模式状态机或粘贴链路；本次渲染层代码变更为 `App.tsx` +1/-1 行、`styles.css` +11/-4 行（含补齐文件末尾换行），新增测试与配置 135 行。
 

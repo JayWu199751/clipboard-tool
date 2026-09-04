@@ -53,9 +53,11 @@
 |---|---|---|
 | `panelView.ts` | 搜索过滤、命中高亮片段、选中项落位的纯函数 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt`；14 例 plain node |
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
-| `App.tsx` | 面板 UI、主题、键盘逻辑、快捷更换覆盖层；只把命中片段画成 `<mark>` | — |
-| `styles.css` | Apple (Espana) Cathedral 设计语言的 token 落地，见 [design-system.md](design-system.md) | — |
-| `tests/navigation-visual-regression.spec.js` | mock Tauri bridge 驱动真实渲染层，回归高频方向键导航的选中框跟随 | 1 例 Playwright |
+| `App.tsx` | 面板 UI、主题、键盘逻辑、快捷更换覆盖层；只把命中片段画成 `<mark>`。「保持选中项可见」只负责滚，判定交给 `styles.css` 的 `scroll-padding` | 由 `first-item-top-clip.spec.js` 守 |
+| `styles.css` | Apple (Espana) Cathedral 设计语言的 token 落地，见 [design-system.md](design-system.md)；列表滚动边缘的「可视区」也由它定义：`padding` 让开 10px 渐隐遮罩，`scroll-padding` 把同一段留白声明成 `scrollIntoView` 的可视区，两者同源 | — |
+| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量 | — |
+| `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随 | 1 例 Playwright |
+| `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被渐隐遮罩盖住 | 2 例 Playwright |
 
 ## IPC 契约
 

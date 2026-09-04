@@ -3488,6 +3488,12 @@ html[data-theme="dark"] .history-heading { color: rgba(235,235,245,0.42) !import
 .history-list {
   /* 顶部/底部留白需大于滚动边缘 10px 渐隐遮罩，避免首尾卡片被遮罩淡出 */
   padding: 12px 0 12px !important;
+  /* 上面那点留白只在全程 scrollTop=0 时才管用：键盘导航靠 scrollIntoView({block:'nearest'})
+     保持选中项可见，而 nearest 只认滚动口边缘，会把留白当多余空间滚掉，首尾卡片就贴进渐隐里。
+     scroll-padding 把留白声明成可视区的一部分，「贴边」判定与留白同源，两者不再互相抵消。
+     顶部 14px = padding-top 12px + 首项 margin-top 2px；底部 12px = padding-bottom。 */
+  scroll-padding-top: 14px !important;
+  scroll-padding-bottom: 12px !important;
   gap: 0 !important;
   display: flex !important;
   flex-direction: column !important;
