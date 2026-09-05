@@ -79,14 +79,34 @@
       display: none !important;
     }
 
+    /* ===== 窗口框架 — 单一权威定义 ====================================
+       此前散落 fix3~fix6 / Cathedral / Unified 等 8 层 !important 覆盖，2026-09 收敛至此。
+       改间距/边框/圆角只改这里。契约：
+       1. 窗口即卡片：panel 窗口（decorations:false + transparent）物理边缘与 .desktop 重合，
+          .app-window 铺满 .desktop。
+       2. 抗锯齿内边距：Windows 透明窗口按 per-pixel alpha 裁切，0.5px 边框压在物理边缘时
+          右/下各被裁 0.5~1px、圆角显方硬（原 fix6 结论）。故 .desktop padding 上/左 0、
+          右/下 1px，边框必须完全落在窗口内；.app-window 圆角取 --radius-window - 2px 同心。
+       3. 逐像素透明：html/body/#root 背景必须保持 transparent，圆角外才自动穿透。
+       4. 圆角联动：.titlebar/.shortcut-bar 圆角随 --radius-window 内缩 2px。
+       故意不带 !important：文件尾的 prefers-reduced-transparency 覆盖层必须能赢过这里。 */
     html,
     body {
       width: 100%;
       height: 100%;
+      min-height: 100vh;
       margin: 0;
+      overflow: hidden;
     }
 
     html, body, #root { background: transparent; }
+
+    #root {
+      display: block;
+      width: 100%;
+      height: 100vh;
+      min-height: 100vh;
+    }
     body {
       overflow: hidden;
       color: var(--text);
@@ -141,36 +161,53 @@
     .desktop {
       position: relative;
       display: grid;
-      place-items: center;
+      place-items: stretch;
+      box-sizing: border-box;
       width: 100%;
       height: 100%;
-      /* 0 距离：窗口即卡片，移除 16px 透明边，卡片边框与应用边框重合，圆角外 per-pixel alpha 仍自动穿透 */
-      padding: 0;
+      min-height: 100vh;
+      /* 右/下 1px：给 0.5px 边框留抗锯齿空间，见文件头「窗口框架」契约 2 */
+      padding: 0 1px 1px 0;
+      background: var(--window-bg);
+      border-radius: var(--radius-window);
       overflow: hidden;
-      background: transparent;
     }
 
     .app-window {
       position: relative;
       display: flex;
       flex-direction: column;
+      box-sizing: border-box;
       width: 100%;
       height: 100%;
-      max-width: none;
-      max-height: none;
+      max-width: 100%;
+      max-height: 100%;
       min-height: 0;
+      margin: 0;
+      padding: 0;
       overflow: hidden;
-      border: 0.5px solid rgba(255,255,255,0.72);
-      border-radius: var(--radius-window);
+      /* Hairline 是唯一允许的边框色（docs/design-system.md）；深色主题见下方覆盖 */
+      border: 0.5px solid rgba(214, 214, 214, 0.9);
+      border-radius: calc(var(--radius-window) - 2px);
       background: var(--window-bg);
       box-shadow: var(--shadow-window);
-      -webkit-backdrop-filter: blur(28px) saturate(155%);
-      backdrop-filter: blur(28px) saturate(155%);
-      contain: paint;
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      backdrop-filter: blur(28px) saturate(180%);
+    }
+
+    html[data-theme="dark"] .app-window {
+      background: rgba(28, 28, 30, 0.82);
+      border: none;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    /* 圆角联动（契约 4） */
+    .shortcut-bar {
+      border-radius: 0 0 calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px);
     }
 
     .titlebar {
-  border-radius: calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) 0 0 !important;
+      border-radius: calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) 0 0;
   overflow: hidden !important;
       position: relative;
       z-index: 5;
@@ -1864,18 +1901,6 @@
     }
 
     @media (max-width: 980px) {
-      .desktop {
-        padding: 16px;
-        background: transparent;
-      }
-
-      .app-window {
-        width: calc(100% - 32px);
-        height: calc(100% - 32px);
-        max-width: 418px;
-        max-height: 823px;
-      }
-
       .sidebar {
         flex-basis: 76px;
         padding-right: 8px;
@@ -1910,22 +1935,6 @@
     }
 
     @media (max-width: 760px) {
-      .desktop {
-        display: block;
-        padding: 0;
-        background: transparent;
-      }
-
-      .app-window {
-        width: calc(100% - 32px);
-        height: calc(100% - 32px);
-        max-width: 418px;
-        max-height: 823px;
-        min-height: 0;
-        border: 0;
-        border-radius: 8px;
-      }
-
       .titlebar {
         min-height: 49px;
         padding: 0 11px;
@@ -2025,15 +2034,6 @@
       .detail-back.is-visible {
         display: inline-flex;
       }
-    }
-
-    /* 卡片填满窗口 — 透明窗口下保持 CSS 圆角与阴影，由主定义统一控制，此处不再重置 */
-    .desktop {
-      /* 继承主定义的 16px 透明边，窄屏亦保留以展示圆角 */
-    }
-
-    .app-window {
-      /* 继承主定义的 calc(100%-32px) 与 12px 圆角，保持透明窗口形状 */
     }
 
     .titlebar {
@@ -2312,12 +2312,6 @@
     }
 
     @media (prefers-reduced-transparency: reduce) {
-      .app-window {
-        background: #f8f9fa !important;
-        -webkit-backdrop-filter: none !important;
-        backdrop-filter: none !important;
-      }
-
       .titlebar,
       .sidebar,
       .content,
@@ -2375,12 +2369,6 @@
   
 
 
-/* ===== 透明背景适配 — 背景已隐藏，只留剪切板界面 ===== */
-/* html,body,#root 的 transparent 已在文件顶部定义，此处仅保留 #root 布局与旧类名兼容 */
-#root {
-  display: block;
-  min-height: 100vh;
-}
 /* 兼容旧 .app 类名，若残留则隐藏 */
 .app { display: none; }
 
@@ -2734,15 +2722,8 @@ html[data-theme="dark"] .kbd {
 .item-meta { letter-spacing:0.015em !important; font-variant-numeric: tabular-nums; }
 .history-heading { letter-spacing:0.06em !important; }
 
-/* 1) 材质：消除 light-on-light 堆叠，窗口单层 blur，子层去 blur（「组件映射」） */
-.app-window {
-  background: var(--window-bg) !important;
-  backdrop-filter: blur(28px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
-  border: 0.5px solid rgba(255,255,255,0.72) !important;
-  box-shadow: var(--shadow-window) !important;
-  border-radius: var(--radius-window) !important;
-}
+/* 1) 材质：消除 light-on-light 堆叠，窗口单层 blur，子层去 blur（「组件映射」）
+   （.app-window 的框架声明已收敛到文件头「窗口框架」权威定义） */
 .titlebar {
   background: var(--titlebar-bg) !important;
   backdrop-filter: none !important;
@@ -3020,13 +3001,7 @@ html[data-theme="dark"] .note-input { background: rgba(58,58,60,0.72); border-co
 }
 
 
-/* ===== 透明窗口：CSS 圆角已在 .desktop/.app-window 主定义中完成 ===== */
-/* 主定义已更新：desktop 0  padding、app-window 100% 与窗口重合、0 距离 */
-/* 此处仅保留主题相关的细微覆盖，无 !important，避免轰炸 */
-html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10); }
-/* 透明窗口下已全局 transparent，无需重复声明 */
-
-
+/* ===== 透明窗口：CSS 圆角与透明链已在文件头「窗口框架」权威定义中完成 ===== */
 
 /* fix: 移除卡片外部阴影 — 卡片仅保留边框与背景，去除外部阴影以符合 Apple 极简材质 */
 /* fix2: 移除窗口外部阴影 — 呼出式面板本身不再投射外部阴影，保持与桌面完全融合 */
@@ -3039,37 +3014,6 @@ html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10); }
 .history-item.is-selected {
   box-shadow: inset 0 0 0 0.5px rgba(0,122,255,0.20) !important;
 }
-.app-window,
-.app-window:hover,
-html[data-theme="dark"] .app-window {
-  box-shadow: none !important;
-}
-/* fix3: 真正的界面紧贴卡片四边框 — 外层窗口与卡片0距离，内层内容贴边无留白 */
-.desktop { padding: 0 !important; display: grid !important; place-items: stretch !important; width: 100% !important; height: 100% !important; overflow: hidden !important; }
-.app-window {
-  padding: 0 !important;
-  width: 100% !important;
-  height: 100% !important; max-width: none !important; max-height: none !important; margin: 0 !important; border-radius: 32px !important; overflow: hidden !important; }
-@media (max-width: 980px) {
-  .desktop { padding: 0 !important; }
-  .app-window { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; margin: 0 !important; }
-}
-@media (max-width: 760px) {
-  .desktop { padding: 0 !important; display: grid !important; place-items: stretch !important; }
-  .app-window { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; border-radius: 32px !important; margin: 0 !important; border: 0.5px solid rgba(255,255,255,0.72) !important; }
-}
-html[data-theme="dark"] .app-window { border-color: rgba(255,255,255,0.10) !important; }
-
-/* fix3b: 修正桌面与卡片高度真正占满视口，消除底部留白 */
-#root { height: 100vh !important; min-height: 100vh !important; display: block !important; }
-html, body { height: 100vh !important; min-height: 100vh !important; }
-.desktop { height: 100vh !important; min-height: 100vh !important; }
-.app-window { height: 100vh !important; min-height: 100vh !important; max-height: 100vh !important; }
-.content { flex: 1 1 auto !important; min-height: 0 !important; }
-.content-layout { flex: 1 1 auto !important; min-height: 0 !important; }
-.history-panel { flex: 1 1 auto !important; min-height: 0 !important; }
-.history-list { flex: 1 1 auto !important; min-height: 0 !important; }
-
 /* fix3-inner: 恢复列表卡片圆角与到边框的间距（12px留白），外层仍0距离贴合卡片四边 */
 .card-top { padding: 12px 12px 12px !important; margin: 0 !important; }
 .card-search { padding: 0 !important; }
@@ -3081,48 +3025,9 @@ html[data-theme="dark"] .card-search .search-field { box-shadow: inset 0 0 0 1px
 .history-list { padding: 0 0 4px !important; margin: 0 !important; }
 .history-item { margin: 0 0 8px !important; border-radius: 16px !important; border: 0.5px solid var(--line) !important; border-bottom: 0.5px solid var(--line) !important; }
 .history-item:last-child { margin-bottom: 0 !important; border-bottom: 0.5px solid var(--line) !important; }
-.shortcut-bar { border-radius: 0 0 32px 32px !important; margin: 0 !important; }
-.titlebar { border-radius: 32px 32px 0 0 !important; margin: 0 !important; }
 
 
 
-/* ===== fix4: 最外层父容器尺寸由内容撑开 — 按需求将外层从 100%/100vh 强制拉伸改为由内容决定 ===== */
-/* 覆盖 fix3/fix3b 的 100vh/100% 强制撑满，改由内容撑开，消除真实界面边框与卡片边框的视觉间距 */
-html, body {
-  width: auto !important;
-  height: auto !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  overflow: visible !important;
-}
-#root {
-  width: fit-content !important;
-  height: fit-content !important;
-  min-height: 0 !important;
-  min-width: 0 !important;
-  display: block !important;
-}
-.desktop {
-  width: fit-content !important;
-  height: fit-content !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  display: block !important;
-  place-items: initial !important;
-  overflow: visible !important;
-  padding: 0 !important;
-}
-.app-window {
-  width: 418px !important;
-  height: fit-content !important;
-  min-height: 0 !important;
-  max-width: 418px !important;
-  max-height: min(823px, 100vh) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin: 0 !important;
-  overflow: hidden !important;
-}
 /* 内部容器不再 flex:1 强制撑满，改由内容高度决定 */
 .content {
   flex: 0 0 auto !important;
@@ -3160,55 +3065,8 @@ html, body {
   width: 100% !important;
 }
 /* 响应式覆盖：窄屏同样由内容撑开 */
-@media (max-width: 980px) {
-  .desktop { width: fit-content !important; height: fit-content !important; padding: 0 !important; }
-  .app-window { width: 418px !important; max-width: 418px !important; height: fit-content !important; }
-}
-@media (max-width: 760px) {
-  .desktop { width: fit-content !important; height: fit-content !important; display: block !important; }
-  .app-window { width: 100vw !important; max-width: 418px !important; height: fit-content !important; }
-}
 
 
-
-/* ===== fix5: 真实窗口尺寸下卡片占满剩余空间 — 修正 fix4 导致纵向未填满的问题 ===== */
-/* 原因：fix4 将最外层改为 fit-content 后，内部 flex:0 0 auto + max-height:520 导致 history-list 被限高，窗口固定 418x823 时下方留空 */
-/* 策略：外层恢复 100%/100vh 占满真实窗口（图像尺寸=真实界面），内部 flex:1 撑满，横向保留 12px 留白恢复卡片与边框间距（修复贴边问题），纵向填满剩余空间 */
-html, body {
-  width: 100% !important;
-  height: 100% !important;
-  min-width: 0 !important;
-  min-height: 100vh !important;
-  overflow: hidden !important;
-}
-#root {
-  width: 100% !important;
-  height: 100vh !important;
-  min-width: 0 !important;
-  min-height: 100vh !important;
-  display: block !important;
-}
-.desktop {
-  width: 100% !important;
-  height: 100vh !important;
-  min-width: 0 !important;
-  min-height: 100vh !important;
-  display: grid !important;
-  place-items: stretch !important;
-  overflow: hidden !important;
-  padding: 0 !important;
-}
-.app-window {
-  width: 100% !important;
-  height: 100vh !important;
-  min-height: 0 !important;
-  max-width: none !important;
-  max-height: 100vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin: 0 !important;
-  overflow: hidden !important;
-}
 .content {
   flex: 1 1 auto !important;
   height: auto !important;
@@ -3266,14 +3124,6 @@ html, body {
   border-radius: 16px !important;
 }
 .history-item:last-child { margin-bottom: 0 !important; }
-@media (max-width: 980px) {
-  .desktop { width: 100% !important; height: 100% !important; padding: 0 !important; }
-  .app-window { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important; }
-}
-@media (max-width: 760px) {
-  .desktop { width: 100% !important; height: 100% !important; display: grid !important; place-items: stretch !important; }
-  .app-window { width: 100% !important; max-width: none !important; height: 100% !important; }
-}
 /* fix: 移除「今天」标题的背景色 — 按需求去掉 sticky 渐变蒙层，保持完全透明 */
 .history-heading {
   background: transparent !important;
@@ -3282,42 +3132,6 @@ html, body {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
-}
-/* fix6: 修复底部/右侧边框被“割掉”、圆角衔接生硬 — 给 0.5px 边框留出抗锯齿空间 */
-
-/* 原因：fix3/fix5 把 .desktop padding 置 0、.app-window 设为 100%/100vh 贴满窗口，0.5px 边框恰好压在窗口物理边缘，Windows 透明窗口 per-pixel alpha 裁切 + 半像素抗锯齿导致右/下各 0.5~1px 被裁，圆角因此显方硬 */
-
-/* 策略：外层保留 2px 透明内边距，让边框完全落在窗口内；边框改用 inset 1px 描边更锐利；移除 contain:paint 避免额外裁切 */
-.desktop {
-  padding: 2px !important;
-  box-sizing: border-box !important;
-}
-.app-window {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
-  box-sizing: border-box !important;
-  /* 0.5px 在 Windows 缩放下会半像素模糊，改用 inset 1px 实线更清晰且不外溢 */
-  border: none !important;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.72), inset 0 0 0 1px rgba(255,255,255,0.12) !important;
-  contain: none !important;
-}
-html[data-theme="dark"] .app-window {
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.04) !important;
-}
-.titlebar {
-  border-radius: 32px 32px 0 0 !important;
-  /* 标题栏底部分割线仍保留，但不再与窗口边框重叠 */
-}
-.shortcut-bar {
-  border-radius: 0 0 32px 32px !important;
-}
-@media (max-width: 980px) {
-  .desktop { padding: 2px !important; }
-}
-@media (max-width: 760px) {
-  .desktop { padding: 2px !important; }
 }
 /* fix: 修复首个复制项顶部被阴影覆盖 — 不动列表本身，仅下移首个卡片 */
 .history-list .history-item:first-child {
@@ -3329,26 +3143,7 @@ html[data-theme="dark"] .app-window {
    Cathedral of white space · SF Pro · Hairlines only · Pill CTAs
    ========================================================= */
 
-/* Global typography cathedral tuning */
-html, body, #root { background: transparent; }
 body { font-family: var(--font-text); font-feature-settings: "ss01" 1, "case" 1, "numr" 1; }
-
-/* App window - frosted cathedral glass, hairline only, no shadow */
-.app-window {
-  background: var(--window-bg) !important;
-  border: none !important;
-  box-shadow: inset 0 0 0 1px rgba(214,214,214,0.9) !important;
-  border-radius: var(--radius-window) !important;
-  box-shadow: none !important;
-  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
-  backdrop-filter: blur(28px) saturate(180%) !important;
-  contain: none !important;
-}
-html[data-theme="dark"] .app-window {
-  background: rgba(28,28,30,0.82) !important;
-  border: 0.5px solid rgba(255,255,255,0.08) !important;
-  box-shadow: none !important;
-}
 
 /* Titlebar - 44px Apple global nav, frosted */
 .titlebar {
@@ -3776,10 +3571,6 @@ html[data-theme="dark"] .history-scrollbar-thumb { background: rgba(235,235,245,
 /* Hairline dividers only - remove any heavy borders */
 .content, .sidebar { border-color: rgba(214,214,214,0.55) !important; }
 
-/* Desktop outer padding to preserve window hairline anti-alias */
-.desktop { padding: 8px !important; }
-.app-window { max-width: 100% !important; max-height: 100% !important; }
-
 /* Focus ring Electric Blue */
 button:focus-visible, input:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--color-electric-blue) !important;
@@ -3825,31 +3616,12 @@ html[data-theme="dark"] .item-icon.source-file { --source-bg-a: rgba(135,86,201,
 .card-search .search-field input:focus-visible { outline: none !important; }
 .card-search .search-field:focus-within input { outline: none !important; }
 
-/* Unified radius + anti-crop: desktop 20px outer, app-window 18px inner with 2px transparent inset to prevent 0.5px edge clipping */
-.desktop {
-  padding: 0 1px 1px 0 !important;
-  background: var(--window-bg) !important;
-  border-radius: var(--radius-window) !important;
-  overflow: hidden !important;
-  box-sizing: border-box !important;
-}
-.app-window {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
-  border-radius: calc(var(--radius-window) - 2px) !important;
-  overflow: hidden !important;
-  border: 0.5px solid rgba(214,214,214,0.9) !important;
-}
-html[data-theme="dark"] .app-window { border: none !important; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08) !important; }
 
 /* Soft kbd in shortcut bar spacing fix - wrap */
 .shortcut-bar { flex-wrap: nowrap !important; overflow-x: auto !important; scrollbar-width: none !important; }
 .shortcut-bar::-webkit-scrollbar { display: none !important; }
 
 /* Canvas vs Paper rhythm - borderless cards on canvas */
-.app-window { background: var(--window-bg) !important; }
 .history-item {
   border: 1px solid transparent !important;
   background: var(--color-paper) !important;
@@ -3896,15 +3668,6 @@ html[data-theme="dark"] .shortcut-bar { border-top-color: rgba(255,255,255,0.06)
 
 .item-main { min-width: 0 !important; overflow: hidden !important; padding-right: 4px !important; }
 
-.titlebar { border-radius: calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) 0 0 !important; }
-.shortcut-bar { border-radius: 0 0 calc(var(--radius-window) - 2px) calc(var(--radius-window) - 2px) !important; }
-
-html { background: transparent !important; } body { background: transparent !important; } /* 逐像素透明：窗口背景必须保持 transparent */
-#root { background: transparent !important;
-}
-@media (min-width: 1px) {
-  .desktop { border-radius: var(--radius-window) !important; }
-}
 
 /* 列表内联备注输入 — 20px 紧凑胶囊，修复底部边框被裁 */
 .item-meta .note-input {
