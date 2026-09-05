@@ -3,9 +3,10 @@ import { installPanelHarness, makeEntries } from './panel-harness.js';
 import { decodePNG } from '../scripts/gen-tray-icons.mjs';
 
 // 暗色模式下 .app-window 的高亮描边是 1px border（styles.css「窗口框架」权威定义）。
-// 用户真机反馈过：四边的视觉宽度不一样。两个根因都已修——.desktop 的 padding 贴边时
+// 用户真机反馈过：四边的视觉宽度不一样。根因有二，均已修——.desktop 的 padding 贴边时
 // 描边被透明窗口 per-pixel alpha 裁淡（分数缩放下由分辨率媒体查询强制 1/dppx 内边距），
-// 以及 Chromium 把绘制矩形逐边取整到整数设备像素（边宽同归一成 1/dppx 消除分数部分）。
+// 以及 Chromium 把绘制矩形逐边取整到整数设备像素（border-width 的分数值会被归一成整数
+// CSS px，150% 下 0.6667px→1px，「归一描边宽度」是死路；等宽靠 padding 对齐盒边缘相位）。
 // 本用例截图解码后纯图像扫描：先用 alpha 通道找卡片包围盒，再沿每条边把「亮度高出背景的
 // 覆盖量」积分成表观宽度（设备像素），断言四边极差足够小。量前把 .app-window 的子元素整体
 // 隐藏——标题栏/内容区/快捷条的背景透明度各不相同，会把描边按边不同程度地盖暗，不隐藏就
