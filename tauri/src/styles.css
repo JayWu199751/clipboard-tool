@@ -85,11 +85,12 @@
        1. 窗口即卡片：panel 窗口（decorations:false + transparent）物理边缘与 .desktop 重合，
           .app-window 铺满 .desktop。
        2. 抗锯齿内边距：Windows 透明窗口按 per-pixel alpha 裁切，描边压在物理边缘的那条边
-          会被裁淡甚至消失（2026-09-05 真机反馈）。故 .desktop 四边各留约 1px（分数缩放下
-          由下方分辨率媒体查询归一成恰 1 设备像素），描边必须完全落在窗口内；
-          .app-window 圆角取 --radius-window - 2px 与外层同心。
-          描边一律用 border，不用 inset box-shadow——阴影矩形被逐边独立取整，更不可控。
-       3. 逐像素透明：html/body/#root 背景必须保持 transparent，圆角外才自动穿透。
+          在分数缩放下会被裁淡甚至消失（2026-09-05 真机反馈）。基础 padding 由界面需求决定
+          （当前 0 = 贴边，整数 DPR 下描边恰落整数设备像素、无裁切）；分数缩放下由分辨率
+          媒体查询强制 1/dppx 内边距让描边完全落在窗口内。描边一律用 border，不用
+          inset box-shadow——阴影矩形被逐边独立取整，更不可控。
+       3. 逐像素透明：html/body/#root/.desktop 背景全部 transparent——材质只由 .app-window
+          承担，.desktop 只做圆角裁切与（分数缩放下的）抗锯齿留边，圆角外自动穿透。
        4. 圆角联动：.titlebar/.shortcut-bar 圆角随 --radius-window 内缩 2px。
        故意不带 !important：文件尾的 prefers-reduced-transparency 覆盖层必须能赢过这里。 */
     html,
@@ -168,9 +169,10 @@
       width: 100%;
       height: 100%;
       min-height: 100vh;
-      /* 四边各 1px：描边不得贴窗口物理边缘，见文件头「窗口框架」契约 2 */
-      padding: 1px;
-      background: var(--window-bg);
+      /* 贴边由界面需求决定（当前 0）；分数缩放下由下方媒体查询强制 1 设备像素内边距
+         防描边被窗口物理边缘裁切，见文件头「窗口框架」契约 2 */
+      padding: 0;
+      background: transparent;
       border-radius: var(--radius-window);
       overflow: hidden;
     }

@@ -2,14 +2,15 @@ import { test, expect } from '@playwright/test';
 import { installPanelHarness, makeEntries } from './panel-harness.js';
 import { decodePNG } from '../scripts/gen-tray-icons.mjs';
 
-// 暗色模式下 .app-window 的高亮描边是 inset box-shadow 1px（styles.css「窗口框架」权威定义）。
-// 用户真机反馈：四边的视觉宽度不一样。根因在 .desktop 的 padding：描边压在窗口物理边缘的
-// 那条边会被透明窗口的 per-pixel alpha 裁淡（原 padding「上/左 0、右/下 1px」时上/左不可见），
-// 收敛后的契约 2 要求四边各留 1px 让描边完全落在窗口内。
+// 暗色模式下 .app-window 的高亮描边是 1px border（styles.css「窗口框架」权威定义）。
+// 用户真机反馈过：四边的视觉宽度不一样。两个根因都已修——.desktop 的 padding 贴边时
+// 描边被透明窗口 per-pixel alpha 裁淡（分数缩放下由分辨率媒体查询强制 1/dppx 内边距），
+// 以及 Chromium 把绘制矩形逐边取整到整数设备像素（边宽同归一成 1/dppx 消除分数部分）。
 // 本用例截图解码后纯图像扫描：先用 alpha 通道找卡片包围盒，再沿每条边把「亮度高出背景的
 // 覆盖量」积分成表观宽度（设备像素），断言四边极差足够小。量前把 .app-window 的子元素整体
 // 隐藏——标题栏/内容区/快捷条的背景透明度各不相同，会把描边按边不同程度地盖暗，不隐藏就
-// 量出的是「子元素透出程度」而非描边几何。覆盖率之和把抗锯齿半像素如实计入，这是
+// 量出的是「子元素透出程度」而非描边几何。覆盖率按预乘红色积分（.desktop 透明后描边的
+// 抗锯齿过渡像素落在透明区上，直通 alpha 的红通道不随覆盖率变暗），这是
 // getBoundingClientRect 给不出的信息，所以判定留在浏览器里（ADR-0008：执行者是浏览器且能
 // 被端到端断言）。截图必须 omitBackground——默认白垫会把半透明边缘垫亮成假描边。
 
@@ -59,17 +60,21 @@ function cardBounds(png) {
 function edgeWidth(png, card, edge, segment) {
   const horizontal = edge === 'top' || edge === 'bottom';
   const inwardSign = edge === 'top' || edge === 'left' ? 1 : -1;
-  const redAt = (x, y) => {
+  // 预乘红色通道：桌面透明后描边的抗锯齿过渡像素落在透明区上，直通 alpha 的红通道
+  // 不随覆盖率变暗（半覆盖像素仍是满描边色），会把过渡带宽计成满格导致四边虚高且不等；
+  // 预乘后透明区为 0、覆盖率的亮度贡献与几何覆盖成正比，两种背景下口径一致。
+  const premulAt = (x, y) => {
     x = Math.round(x); y = Math.round(y);
     if (x < 0 || y < 0 || x >= png.width || y >= png.height) return 0;
-    return png.data[(y * png.width + x) * 4];
+    const i = (y * png.width + x) * 4;
+    return (png.data[i] * png.data[i + 3]) / 255;
   };
   const vAt = (u, offset) => {
     const pos = edge === 'top' ? card.y0 + offset
       : edge === 'bottom' ? card.y1 - 1 + offset
       : edge === 'left' ? card.x0 + offset
       : card.x1 - 1 + offset;
-    return horizontal ? redAt(u, pos) : redAt(pos, u);
+    return horizontal ? premulAt(u, pos) : premulAt(pos, u);
   };
   const widths = [];
   for (let u = segment.from; u < segment.to; u += 2) {
