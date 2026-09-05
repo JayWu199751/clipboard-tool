@@ -116,6 +116,7 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 | [docs/changelog.md](docs/changelog.md) | 每次改动的动机、取舍与行数/例数变化 |
 | [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、动效与减少动态、组件映射、Do / Don't |
 | [docs/desktop-tool-pitfalls.md](docs/desktop-tool-pitfalls.md) | Windows 桌面工具的通用坑，跨项目复用 |
+| [docs/reimplementation-prompt.md](docs/reimplementation-prompt.md) | 用其他框架重新实现时的自包含导出规格（平台无关 prompt，快照文档） |
 | [docs/UIPI-research.md](docs/UIPI-research.md) | 提权结论的主源调研与未验证清单（一次性调研存档，保持原样不改写） |
 | [AGENTS.md](AGENTS.md) | 给 agent 的仓库约定：语言、行尾、验证命令、红线 |
 
