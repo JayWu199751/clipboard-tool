@@ -87,8 +87,9 @@
           inset box-shadow——阴影矩形被逐边独立取整，更不可控。描边是框架唯一的亮线：
           贴它内侧不得再画 1px 高光（标题栏 inset 0 1px 0 曾叠出「第二层边框」），
           子层也不得加 backdrop-filter（边缘重采样会把描边亮度渗进内侧 1~2 设备像素）。
-       3. 逐像素透明：html/body/#root/.desktop 背景全部 transparent——材质只由 .app-window
-          承担，.desktop 只做圆角裁切与（分数缩放下的）抗锯齿留边，圆角外自动穿透。
+       3. 圆角外穿透：html/body/#root 背景保持 transparent；顶层材质 var(--window-bg) 铺在
+          .desktop 上（2026-09-06 恢复，撤销 caf1be7 的顶层透明化），.desktop 同时承担
+          圆角裁切与（分数缩放下的）抗锯齿留边，圆角外仍自动穿透。
        4. 圆角联动：.titlebar/.shortcut-bar 圆角随 --radius-window 内缩 2px。
        故意不带 !important：文件尾的 prefers-reduced-transparency 覆盖层必须能赢过这里。 */
     html,
@@ -163,7 +164,7 @@
       /* 贴边由界面需求决定（当前 0）；分数缩放下由下方媒体查询强制 1 设备像素内边距
          防描边被窗口物理边缘裁切，见文件头「窗口框架」契约 2 */
       padding: 0;
-      background: transparent;
+      background: var(--window-bg);
       border-radius: var(--radius-window);
       overflow: hidden;
     }
