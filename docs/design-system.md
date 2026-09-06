@@ -23,13 +23,13 @@
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；边框描边用真 1px 实线 `--window-ring`（中灰 #757575，亮暗同值，阴影矩形逐边取整不可控所以不用 inset shadow），`resolution` 媒体查询在所有缩放档位（含 100%/200% 整数档）给 `.desktop` 留恰好 1-2 个设备像素——描边永不贴窗口物理边缘，真机实证贴边列会被 surface 取整裁掉。
+**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；边框描边用真 1px 实线 `--window-ring`（中灰 #757575，亮暗同值，阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
 
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。
 - 卡片：meta 行 = 仅图标的类型 chip · 来源 · 时间 ·（可选）图钉 ·（可选）内联备注，单行省略号；文字卡 3 行 clamp；图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）；hover/选中浮现「复制」胶囊。
 - 备注编辑：meta 行内联输入框（Enter 保存 / Esc 取消 / 失焦保存），`.card:has(.note-input) .card__meta { padding-right: 76px }` 避让复制胶囊。
-- 页脚：左「N 条」，右 chip 组（选择 / 复制 / 置顶 / 备注 / 删除 / 隐藏，一组一枚 chip，↑↓ 并排同枚）——**全部由 `keyboard.ts` 注册表生成**，禁止写死键名；搜索键住搜索井，呼出键归托盘与覆盖层，418px 窗口放得下且不压扁（`flex: none` 护栏）。
+- 页脚：左「N 条」，右 chip 组（选择 / 复制 / 置顶 / 备注 / 删除 / 隐藏，一组一枚 chip，↑↓ 并排同枚；组距 8px、组内 4px——真机字体比 headless 宽，密度按真机留余量）——**全部由 `keyboard.ts` 注册表生成**，禁止写死键名；搜索键住搜索井，呼出键归托盘与覆盖层，418px 窗口放得下且不压扁（`flex: none` 护栏）。
 - toast：底部居中胶囊栈，成功绿勾 / 删除红叉 + 「撤销」动作（6s）；`aria-live`。
 - 列表滚动条：自绘 4px 细条（`--scroll-thumb`），住在右侧 16px 留白内（right 5px），滚动后约 1s 自动隐藏；原生条在 `.cards` 上隐藏——真机经典滚动条占布局宽度，会把卡片右缘到边框垫出「留白 + 条宽」的不对称。
 - 快捷键捕获覆盖层：原应用功能保留，HUD 皮肤（token 面 + 胶囊按钮）。

@@ -66,26 +66,11 @@ body {
      与滚动几何按帧缩放（window-ring / navigation 两条回归的测量都会被污染）。 */
 }
 
-/* 四边各留恰好 1 个设备像素，让描边完全不贴窗口物理边缘
-   （透明窗口按 per-pixel alpha 裁切，贴边缘的描边会被裁淡甚至整列丢失——
-   真机实证：100% 缩放下右缘描边没了，正是描边占住 surface 最后一列、
-   而 418×scale 取整后 surface 少一列时被裁掉；「整数 DPR 天然精确」是旧假设，已推翻）。
-   描边宽度只能用整数 CSS 像素：Chromium 会把 border-width 的分数值归一成整数 CSS px；
-   四边等宽由 padding 对齐盒边缘相位来保。>200% 的非整数缩放罕见，未覆盖。 */
-@media (max-resolution: 1.1dppx) {
-  .desktop { padding: 1px; }
-}
-@media (min-resolution: 1.2dppx) and (max-resolution: 1.4dppx) {
-  .desktop { padding: 0.8px; }
-}
-@media (min-resolution: 1.4dppx) and (max-resolution: 1.7dppx) {
-  .desktop { padding: 0.6667px; }
-}
-@media (min-resolution: 1.7dppx) and (max-resolution: 1.9dppx) {
-  .desktop { padding: 0.5714px; }
-}
-@media (min-resolution: 1.9dppx) and (max-resolution: 2.1dppx) {
-  /* 200% 下 0.5px 实测左右取整不对称（左留 2 设备像素、右仍贴边），用 1px = 2 设备像素 */
+/* 四边一律留 1 CSS px（不是 1 设备像素）：真机 175% 实证，设备像素级的「恰好」
+   不可信——Chromium 把 1px 边框在分数缩放下取整成 1 设备列，左缘向内取整保得住，
+   右缘向外取整就整列滚出 surface（右描边消失的真因）。留足 1 CSS px 后，
+   无论取整方向如何，描边都完整落在 surface 内；1 CSS px 的透明缝肉眼不可辨。 */
+.desktop { padding: 1px; }.5px 实测左右取整不对称（左留 2 设备像素、右仍贴边），用 1px = 2 设备像素 */
   .desktop { padding: 1px; }
 }
 
@@ -349,8 +334,8 @@ p { font-weight: inherit; font-size: inherit; }
   user-select: none;
   min-width: 0; overflow: hidden; white-space: nowrap;
 }
-.hud-footer .hints { margin-left: auto; display: flex; align-items: center; gap: var(--space-3); }
-.hud-footer .hints span { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.hud-footer .hints { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); } /* 返修 6：真机字体比 headless 宽，12px 组距会把页脚撑溢出，收进 8px */
+.hud-footer .hints span { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 /* 溢出时宁可裁掉也不压扁：chip 与计数被 flex-shrink 挤瘦就是「间距不均匀」的来路 */
 .hud-footer #status-count { flex: none; }
 .hud-footer .kbd { height: 16px; font-size: 9.5px; border-bottom-width: 1px; }

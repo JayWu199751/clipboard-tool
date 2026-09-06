@@ -63,7 +63,7 @@
 | `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
 | `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
-| `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与全档位缩放留边、`.app-window` 1px 中灰实线描边 `--window-ring`——壳层机制原样保留，描边强度与留边契约 2026-09-08 两次返修）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 14px | — |
+| `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与 1 CSS px 一律留边、`.app-window` 1px 中灰实线描边 `--window-ring`——壳层机制原样保留，描边强度与留边契约 2026-09-08 两次返修）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 14px | — |
 | `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
