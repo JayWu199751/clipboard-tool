@@ -1,10 +1,12 @@
-// 面板视图规则：搜索过滤、命中高亮、选中项落位。
+// 面板视图规则：搜索过滤、命中高亮、选中项落位，外加五条原先住在组件里的判定
+// （圆角外穿透、来源配色档位、相对时间、按键码映射、滚动条几何）。
 // 纯逻辑、不依赖 React 与 Tauri，可被 scripts/panel-view-unit.mjs 用 plain node 直测。
-// 这里承载的是 README「操作」与 ADR-0004 定下的三条规则：
+// 这里承载 README「操作」与 ADR-0004 定下的三条规则：
 //   匹配规则（大小写不敏感、空格分词多词 AND、正文+备注+来源应用五字段）
 //   结果排序（保持原始顺序，不做匹配度排序）
 //   选中项（每次查询变化重置到第一个匹配项；列表变短时拉回有效范围）
-// 渲染层只负责把结果画出来，规则不再散落在组件里。
+// 以及 ADR-0008 的一条判据：能脱离 DOM 与 React 断言的，都是判定，都住在这里。
+// 渲染层只负责读 DOM、调判定、把结果画出来。
 
 import type { ClipboardEntry } from './types';
 
@@ -92,4 +94,107 @@ export function moveIndex(index: number, length: number, direction: NavDirection
 export function entryAt(entries: ClipboardEntry[], index: number): ClipboardEntry | null {
   if (index < 0 || index >= entries.length) return null;
   return entries[index] ?? null;
+}
+
+// ---------- 以下五条同样与 React / DOM 无关，只是原先住在 App.tsx 里 ----------
+
+// 面板窗口矩形（CSS 像素，来自 getBoundingClientRect）。
+export interface WindowRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+// 圆角外穿透：矩形之外、或落在四角圆弧之外，鼠标都应穿透到下层窗口。
+// radius 由调用方从样式表读出后传入 —— 圆角的单一真源是 --radius-window，
+// 这里再写一个数就是第四份复制（上一轮深化点名的正是这条漂移）。
+export function shouldIgnoreMouse(
+  x: number,
+  y: number,
+  rect: WindowRect,
+  radius: number,
+): boolean {
+  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return true;
+  // 浏览器把 border-radius 收敛到不超过短边一半，这里同口径，半径抄大了也不会把整窗判成穿透
+  const r = Math.max(0, Math.min(radius, (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2));
+  // 只有横纵同时落进某个角才需要判弧；落在直边带上的点一律算窗口内
+  const cx = x < rect.left + r ? rect.left + r : x > rect.right - r ? rect.right - r : null;
+  const cy = y < rect.top + r ? rect.top + r : y > rect.bottom - r ? rect.bottom - r : null;
+  if (cx === null || cy === null) return false;
+  const dx = x - cx;
+  const dy = y - cy;
+  return dx * dx + dy * dy > r * r;
+}
+
+// 来源应用名 → 图标配色档位（styles.css 的 .source-* 类名）。顺序即优先级。
+const SOURCE_TONES: ReadonlyArray<readonly [string[], string]> = [
+  [['备忘录', '便签', 'notes'], 'source-notes'],
+  [['figma'], 'source-figma'],
+  [['safari', '浏览器', 'browser', 'chrome', 'edge'], 'source-safari'],
+  [['pages'], 'source-pages'],
+  [['访达', 'finder', 'explorer'], 'source-finder'],
+  [['预览', 'preview'], 'source-preview'],
+  [['文本编辑', 'textedit', 'notepad'], 'source-textedit'],
+  [['终端', 'terminal', 'powershell', 'cmd'], 'source-terminal'],
+  [['截图', 'screenshot', 'snip'], 'source-screenshot'],
+  [['代码', 'code', 'vscode', 'xcode'], 'source-code'],
+];
+
+export function sourceTone(appName?: string): string {
+  const name = (appName || '').toLowerCase();
+  for (const [keywords, tone] of SOURCE_TONES) {
+    if (keywords.some((keyword) => name.includes(keyword))) return tone;
+  }
+  return 'source-icon';
+}
+
+// 相对时间四段阈值：一分钟内「刚刚」，一小时内按分钟，一天内按小时，再往前给日期。
+// now 由调用方传入（渲染层用 Date.now()），阈值边界因此可以直接单测。
+export function formatTime(ts: number, now: number): string {
+  const diff = now - ts;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// DOM 按键 code（KeyV / Digit1 / F5 / ArrowUp 等）→ accelerator 主键，无法映射返回 null。
+export function accelKeyFromCode(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3); // 字母 A-Z
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5); // 数字 0-9
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code; // F1-F24
+  const map: Record<string, string> = {
+    Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace',
+    Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
+    PageUp: 'PageUp', PageDown: 'PageDown',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  };
+  return map[code] ?? null;
+}
+
+// 自绘滚动条 thumb 的几何：高度按可视比例、不小于 MIN_THUMB_HEIGHT，位置线性映射到滚动进度。
+export interface ScrollbarThumb {
+  visible: boolean;
+  top: number;
+  height: number;
+}
+
+export const MIN_THUMB_HEIGHT = 28;
+
+export function scrollbarThumb(
+  scrollTop: number,
+  clientHeight: number,
+  scrollHeight: number,
+): ScrollbarThumb {
+  if (scrollHeight <= clientHeight) {
+    return { visible: false, top: 0, height: MIN_THUMB_HEIGHT };
+  }
+  const height = Math.max(MIN_THUMB_HEIGHT, clientHeight * (clientHeight / scrollHeight));
+  const maxTop = clientHeight - height;
+  const maxScroll = scrollHeight - clientHeight;
+  const top = maxScroll > 0 ? (scrollTop / maxScroll) * maxTop : 0;
+  return { visible: true, top, height };
 }

@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ClipboardEntry } from './types';
-import { clampIndex, entryAt, filterEntries, highlight, moveIndex } from './panelView';
+import {
+  accelKeyFromCode,
+  clampIndex,
+  entryAt,
+  filterEntries,
+  formatTime,
+  highlight,
+  MIN_THUMB_HEIGHT,
+  moveIndex,
+  scrollbarThumb,
+  shouldIgnoreMouse,
+  sourceTone,
+  type ScrollbarThumb,
+} from './panelView';
 
 type Theme = 'light' | 'dark' | 'system';
 type FocusError = { stage: string; reason: string; message: string };
@@ -18,30 +31,6 @@ function getInitialTheme(): Theme {
 function resolveTheme(theme: Theme): 'light' | 'dark' {
   if (theme === 'system') return darkModeMedia.matches ? 'dark' : 'light';
   return theme;
-}
-
-// 把 DOM 按键 code（KeyV / Digit1 / F5 / ArrowUp 等）转成 accelerator 主键，无法映射返回 null
-function codeToKey(code: string): string | null {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);       // 字母 A-Z
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);     // 数字 0-9
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;  // F1-F24
-  const map: Record<string, string> = {
-    Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace',
-    Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
-    PageUp: 'PageUp', PageDown: 'PageDown',
-    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
-  };
-  return map[code] ?? null;
-}
-
-function formatTime(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // 命中片段渲染：匹配规则在 panelView.highlight，这里只负责把命中片段画成 <mark>
@@ -67,7 +56,6 @@ function IconClipboard(){return(<svg className="icon" viewBox="0 0 24 24" aria-h
 function IconSun(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx={12} cy={12} r={4}/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>);}
 function IconMoon(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>);}
 function IconAuto(){return(<svg className="icon" style={{width:15,height:15}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx={12} cy={12} r={9}/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" opacity={0.35}/></svg>);}
-function getSourceTone(appName?: string){const n=(appName||"").toLowerCase();if(n.includes("备忘录")||n.includes("便签")||n.includes("notes"))return"source-notes";if(n.includes("figma"))return"source-figma";if(n.includes("safari")||n.includes("浏览器")||n.includes("browser")||n.includes("chrome")||n.includes("edge"))return"source-safari";if(n.includes("pages"))return"source-pages";if(n.includes("访达")||n.includes("finder")||n.includes("explorer"))return"source-finder";if(n.includes("预览")||n.includes("preview"))return"source-preview";if(n.includes("文本编辑")||n.includes("textedit")||n.includes("notepad"))return"source-textedit";if(n.includes("终端")||n.includes("terminal")||n.includes("powershell")||n.includes("cmd"))return"source-terminal";if(n.includes("截图")||n.includes("screenshot")||n.includes("snip"))return"source-screenshot";if(n.includes("代码")||n.includes("code")||n.includes("vscode")||n.includes("xcode"))return"source-code";return"source-icon";}
 
 function App() {
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
@@ -283,7 +271,7 @@ function App() {
       if (e.altKey) mods.push('Alt');
       if (e.shiftKey) mods.push('Shift');
       if (e.metaKey) mods.push('Super');
-      const mainKey = codeToKey(e.code);
+      const mainKey = accelKeyFromCode(e.code);
       if (!mainKey) return; // 忽略无法映射的按键（如单独按修饰键）
       // 全局快捷键必须至少包含 Ctrl / Alt / Win 之一，避免误设
       if (!mods.some((m) => m !== 'Shift')) {
@@ -314,60 +302,46 @@ function App() {
     if (searchActiveRef.current) setSelectedIndex(0);
   }, [query]);
 
-  // 透明窗口点击穿透：0 距离（窗口即卡片） + 12px 圆角外应穿透到下层窗口
+  // 透明窗口点击穿透：窗口矩形之外、以及圆角弧之外的像素都应穿透到下层窗口。
+  // 判定在 panelView.shouldIgnoreMouse；圆角的单一真源是样式表（.desktop 的 border-radius，
+  // 也就是 --radius-window），这里只读不写 —— 手抄一个数就是第四份复制，且已经漂过（停在 12px）。
   useEffect(() => {
     const desktop = document.querySelector('.desktop') as HTMLElement | null;
-    const appWindow = document.querySelector('.app-window') as HTMLElement | null;
-    if (!desktop || !appWindow) return;
+    if (!desktop) return;
     let lastIgnore: boolean | null = null;
-    const R = 12; // --radius-window
+    let radius = 0;
+    // 半径只在挂载与窗口尺寸变化时读：mousemove 每次触发都读会反复强制样式重算
+    const readRadius = () => {
+      const value = Number.parseFloat(getComputedStyle(desktop).borderTopLeftRadius);
+      radius = Number.isFinite(value) ? value : 0;
+    };
     const update = (e: MouseEvent) => {
-      const rect = appWindow.getBoundingClientRect();
-      const x = e.clientX;
-      const y = e.clientY;
-      let shouldIgnore = x < rect.left || x > rect.right || y < rect.top || y > rect.bottom;
-      if (!shouldIgnore) {
-        const inTopLeft = x < rect.left + R && y < rect.top + R;
-        const inTopRight = x > rect.right - R && y < rect.top + R;
-        const inBottomLeft = x < rect.left + R && y > rect.bottom - R;
-        const inBottomRight = x > rect.right - R && y > rect.bottom - R;
-        if (inTopLeft) {
-          const dx = x - (rect.left + R);
-          const dy = y - (rect.top + R);
-          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
-        } else if (inTopRight) {
-          const dx = x - (rect.right - R);
-          const dy = y - (rect.top + R);
-          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
-        } else if (inBottomLeft) {
-          const dx = x - (rect.left + R);
-          const dy = y - (rect.bottom - R);
-          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
-        } else if (inBottomRight) {
-          const dx = x - (rect.right - R);
-          const dy = y - (rect.bottom - R);
-          if (dx * dx + dy * dy > R * R) shouldIgnore = true;
-        }
-      }
-      if (shouldIgnore !== lastIgnore) {
-        lastIgnore = shouldIgnore;
-        // @ts-ignore
-        (window as any).clipboardAPI?.setIgnoreMouse?.(shouldIgnore, true);
-      }
+      const shouldIgnore = shouldIgnoreMouse(
+        e.clientX,
+        e.clientY,
+        desktop.getBoundingClientRect(),
+        radius,
+      );
+      if (shouldIgnore === lastIgnore) return;
+      lastIgnore = shouldIgnore;
+      void window.clipboardAPI?.setIgnoreMouse?.(shouldIgnore, true);
     };
     const onLeave = () => {
       if (lastIgnore !== true) {
         lastIgnore = true;
-        (window as any).clipboardAPI?.setIgnoreMouse?.(true, true);
+        void window.clipboardAPI?.setIgnoreMouse?.(true, true);
       }
     };
     const onEnter = (e: MouseEvent) => update(e);
+    readRadius();
+    window.addEventListener('resize', readRadius);
     desktop.addEventListener('mousemove', update);
     desktop.addEventListener('mouseenter', onEnter);
     desktop.addEventListener('mouseleave', onLeave);
     // 初始状态设为不忽略，确保面板内可点击
-    (window as any).clipboardAPI?.setIgnoreMouse?.(false, true);
+    void window.clipboardAPI?.setIgnoreMouse?.(false, true);
     return () => {
+      window.removeEventListener('resize', readRadius);
       desktop.removeEventListener('mousemove', update);
       desktop.removeEventListener('mouseenter', onEnter);
       desktop.removeEventListener('mouseleave', onLeave);
@@ -388,7 +362,7 @@ function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [toast, setToast] = useState<{text: string; actionLabel?: string; onAction?: () => void} | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const [scrollState, setScrollState] = useState({ visible: false, top: 0, height: 28 });
+  const [scrollState, setScrollState] = useState<ScrollbarThumb>({ visible: false, top: 0, height: MIN_THUMB_HEIGHT });
   const showToast = useCallback((text: string, actionLabel?: string, onAction?: () => void) => {
     setToast({ text, actionLabel, onAction });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -400,13 +374,12 @@ function App() {
     let hideTimer: number | null = null;
     const update = () => {
       const { scrollTop, scrollHeight, clientHeight } = el;
-      if (scrollHeight <= clientHeight) { setScrollState({ visible: false, top: 0, height: 28 }); return; }
-      const visibleRatio = clientHeight / scrollHeight;
-      const thumbH = Math.max(28, clientHeight * visibleRatio);
-      const maxTop = clientHeight - thumbH;
-      const maxScroll = scrollHeight - clientHeight;
-      const top = maxScroll > 0 ? (scrollTop / maxScroll) * maxTop : 0;
-      setScrollState({ visible: true, top, height: thumbH });
+      // thumb 几何判定在 panelView.scrollbarThumb，这里只管接线与到点自动隐藏
+      if (scrollHeight <= clientHeight) {
+        setScrollState({ visible: false, top: 0, height: MIN_THUMB_HEIGHT });
+        return;
+      }
+      setScrollState(scrollbarThumb(scrollTop, clientHeight, scrollHeight));
       if (hideTimer) window.clearTimeout(hideTimer);
       hideTimer = window.setTimeout(() => setScrollState((s) => ({ ...s, visible: false })), 900);
     };
@@ -463,16 +436,16 @@ function App() {
                   ) : (
                     filteredEntries.map((entry,i)=>{
                       const isSelected=i===selectedIndex;
-                      const sourceTone=getSourceTone(entry.sourceApp?.appName);
+                      const tone = sourceTone(entry.sourceApp?.appName);
                       const previewText=(entry.text??"").trim();
                       return(
                         <div key={entry.id} role="option" aria-selected={isSelected} data-selected={isSelected?"true":"false"} className={`history-item${isSelected?" is-selected":""}`} onClick={()=>setSelectedIndex(i)} onDoubleClick={()=>handleCopy(entry.id)}>
-                          <div className={`item-icon source-icon ${sourceTone} type-${entry.type}`} title={entry.sourceApp? `${entry.sourceApp.appName} — ${entry.sourceApp.windowTitle || entry.sourceApp.exePath}`:undefined} onClick={(e)=>{e.stopPropagation();openDetail(i);}} role="button" tabIndex={0} aria-label="查看详情">
+                          <div className={`item-icon source-icon ${tone} type-${entry.type}`} title={entry.sourceApp? `${entry.sourceApp.appName} — ${entry.sourceApp.windowTitle || entry.sourceApp.exePath}`:undefined} onClick={(e)=>{e.stopPropagation();openDetail(i);}} role="button" tabIndex={0} aria-label="查看详情">
                             {entry.sourceApp?.iconDataUrl ? (<img src={entry.sourceApp.iconDataUrl} alt={entry.sourceApp.appName} style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:10}} draggable={false}/>) : entry.type==="image" ? (<IconImage/>) : (<span style={{fontSize:11,fontWeight:700}}><IconClipboard/></span>)}
                           </div>
                           <div className="item-main" onClick={(e)=>{e.stopPropagation();openDetail(i);}}>
                             {entry.type==="text" ? (<div className={`item-preview ${!previewText?"is-empty":""}`} title={entry.text}>{previewText ? (searchActive? renderHighlight(previewText,query):previewText) : "（空内容）"}</div>) : (<div className="item-preview is-image"><div className="image-wrap"><img src={entry.dataUrl} alt="剪贴板图片" draggable={false} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:8}}/></div></div>)}
-                            <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt)}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? renderHighlight(entry.note,query):entry.note}</span></>) : null}</div>
+                            <div className="item-meta"><span className="item-time" style={{fontVariantNumeric:"tabular-nums"}}>{formatTime(entry.createdAt, Date.now())}</span>{entry.pinned && <><span className="meta-separator">·</span><span style={{color:"var(--accent)",fontWeight:600}}>已置顶</span></>}{noteEdit?.id===entry.id ? (<><span className="meta-separator">·</span><input ref={noteEdit?.id===entry.id ? (noteInputRef as any) : undefined} className="note-input" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注" spellCheck={false} onChange={(e)=>{if(!noteEdit) return; const next={...noteEdit,draft:e.target.value}; noteEditRef.current=next; setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault(); finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} onClick={(e)=>e.stopPropagation()} aria-label="备注输入框" /></>) : entry.note ? (<><span className="meta-separator">·</span><span className="item-note" title={entry.note} onClick={(e)=>{e.stopPropagation(); handleBeginNoteEdit(i,entry.id);}} style={{cursor:"pointer"}}>{searchActive? renderHighlight(entry.note,query):entry.note}</span></>) : null}</div>
                           </div>
                           <div className="item-actions">
                             <button type="button" className="icon-button" data-tooltip={entry.pinned?"取消置顶":"置顶"} data-action="pin" aria-label={entry.pinned?"取消置顶":"置顶"} onClick={(e)=>{e.stopPropagation();handlePin(entry.id);}}><IconPin filled={entry.pinned}/></button>
@@ -505,7 +478,7 @@ function App() {
                       {selectedEntry.sourceApp && (<div className="file-detail source-block"><div className="source-label">来源</div><div className="source-row">{selectedEntry.sourceApp.iconDataUrl ? <img src={selectedEntry.sourceApp.iconDataUrl} alt="" className="source-icon-img" draggable={false}/> : <span className="item-icon source-icon source-icon--sm"><IconClipboard/></span>}<div className="source-meta"><div className="source-appname">{selectedEntry.sourceApp.appName}</div><div className="source-subtitle">{selectedEntry.sourceApp.windowTitle || selectedEntry.sourceApp.exePath}</div></div></div></div>)}
                       <div className="note-section"><div className="note-label">备注</div>{noteEdit?.id===selectedEntry.id ? (<input ref={detailNoteRef as any} className="note-input note-input--detail" value={noteEdit.draft} maxLength={MAX_NOTE_LENGTH} placeholder="添加备注，回车保存 · Esc 取消" spellCheck={false} onChange={(e)=>{const next={...noteEdit,draft:e.target.value};noteEditRef.current=next;setNoteEdit(next);}} onKeyDown={(e)=>{if(e.key==="Escape"){e.preventDefault();finishNoteEditing(true);} else if(e.key==="Enter" && !e.nativeEvent.isComposing){e.preventDefault(); finishNoteEditing(false);}}} onBlur={()=>{ if(!cancelNoteBlurRef.current) finishNoteEditing(false); }} aria-label="备注输入框" autoFocus />) : (<div onClick={()=>handleBeginNoteEdit(selectedIndex,selectedEntry.id)} className={`note-card ${selectedEntry.note ? "has-note" : ""}`}>{selectedEntry.note || "点击添加备注…"}</div>)}
                       </div>
-                      <div className="detail-meta">{formatTime(selectedEntry.createdAt)} · {new Date(selectedEntry.createdAt).toLocaleString("zh-CN")}</div>
+                      <div className="detail-meta">{formatTime(selectedEntry.createdAt, Date.now())} · {new Date(selectedEntry.createdAt).toLocaleString("zh-CN")}</div>
                     </div>
                   </>
                 ) : (<div className="detail-empty"><div className="empty-icon">◎</div><div className="empty-text">未选择条目</div></div>)}

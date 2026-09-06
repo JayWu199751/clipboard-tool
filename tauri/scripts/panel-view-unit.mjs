@@ -2,12 +2,17 @@
 // 运行：npm run test:view（Node >= 22.18 原生剥离 TS 类型）
 
 import {
-  filterEntries,
-  highlight,
-  spansToText,
+  accelKeyFromCode,
   clampIndex,
-  moveIndex,
   entryAt,
+  filterEntries,
+  formatTime,
+  highlight,
+  moveIndex,
+  scrollbarThumb,
+  shouldIgnoreMouse,
+  sourceTone,
+  spansToText,
 } from '../src/panelView.ts';
 
 let passed = 0;
@@ -154,6 +159,175 @@ test('entryAt_越界与空列表返回 null_不抛异常', () => {
   eq(entryAt(list, 9), null);
   eq(entryAt(list, -1), null);
   eq(entryAt([], 0), null);
+});
+
+// ---------- 圆角外穿透 ----------
+
+// 面板窗口的实际尺寸（418×823 CSS 像素），圆角取样式表的 20px
+const PANEL = { left: 0, top: 0, right: 418, bottom: 823 };
+const R = 20;
+
+test('穿透_矩形四边之外一律穿透', () => {
+  assert(shouldIgnoreMouse(-1, 400, PANEL, R));
+  assert(shouldIgnoreMouse(419, 400, PANEL, R));
+  assert(shouldIgnoreMouse(200, -1, PANEL, R));
+  assert(shouldIgnoreMouse(200, 824, PANEL, R));
+});
+
+test('穿透_直边带内不穿透_贴边点算窗口内', () => {
+  assert(!shouldIgnoreMouse(209, 1, PANEL, R));
+  assert(!shouldIgnoreMouse(1, 400, PANEL, R));
+  assert(!shouldIgnoreMouse(417, 400, PANEL, R));
+  assert(!shouldIgnoreMouse(209, 823, PANEL, R));
+});
+
+test('穿透_四角弧内保留_弧外穿透', () => {
+  // 左上圆心 (20,20)：(6,6) 距心 ≈19.8 保留，(5,5) 距心 ≈21.2 穿透
+  assert(!shouldIgnoreMouse(6, 6, PANEL, R));
+  assert(shouldIgnoreMouse(5, 5, PANEL, R));
+  // 右上圆心 (398,20)
+  assert(!shouldIgnoreMouse(410, 5, PANEL, R));
+  assert(shouldIgnoreMouse(413, 5, PANEL, R));
+  // 左下圆心 (20,803)
+  assert(!shouldIgnoreMouse(6, 817, PANEL, R));
+  assert(shouldIgnoreMouse(5, 818, PANEL, R));
+  // 右下圆心 (398,803)
+  assert(!shouldIgnoreMouse(412, 817, PANEL, R));
+  assert(shouldIgnoreMouse(413, 818, PANEL, R));
+});
+
+test('穿透_只有单轴进角带时不判弧', () => {
+  assert(!shouldIgnoreMouse(5, 400, PANEL, R)); // 靠左缘但纵向居中
+  assert(!shouldIgnoreMouse(200, 5, PANEL, R)); // 靠顶缘但横向居中
+});
+
+test('穿透_半径为零时只按矩形判定', () => {
+  assert(!shouldIgnoreMouse(1, 1, PANEL, 0));
+  assert(!shouldIgnoreMouse(0, 0, PANEL, 0));
+  assert(shouldIgnoreMouse(-1, -1, PANEL, 0));
+});
+
+test('穿透_半径超过短边一半时按浏览器口径收敛', () => {
+  const small = { left: 0, top: 0, right: 10, bottom: 10 };
+  // 收敛成 r=5 的内切圆：圆心 (5,5) 保留，角点 (0,0) 穿透
+  assert(!shouldIgnoreMouse(5, 5, small, 20));
+  assert(shouldIgnoreMouse(0, 0, small, 20));
+  // 负半径同样收敛为 0，不改变矩形判定
+  assert(!shouldIgnoreMouse(1, 1, small, -8));
+});
+
+// ---------- 来源配色档位 ----------
+
+test('来源配色_十档关键字各自命中', () => {
+  eq(sourceTone('备忘录'), 'source-notes');
+  eq(sourceTone('Figma'), 'source-figma');
+  eq(sourceTone('Google Chrome'), 'source-safari');
+  eq(sourceTone('Pages'), 'source-pages');
+  eq(sourceTone('访达'), 'source-finder');
+  eq(sourceTone('预览'), 'source-preview');
+  eq(sourceTone('文本编辑'), 'source-textedit');
+  eq(sourceTone('WindowsTerminal'), 'source-terminal');
+  eq(sourceTone('PixPin 截图'), 'source-screenshot');
+  eq(sourceTone('Visual Studio Code'), 'source-code');
+});
+
+test('来源配色_大小写归一与子串命中', () => {
+  eq(sourceTone('GOOGLE CHROME'), 'source-safari');
+  eq(sourceTone('Microsoft Edge'), 'source-safari');
+  eq(sourceTone('powershell.exe'), 'source-terminal');
+});
+
+test('来源配色_未知与空名回落兜底档', () => {
+  eq(sourceTone(undefined), 'source-icon');
+  eq(sourceTone(''), 'source-icon');
+  eq(sourceTone('WeChat'), 'source-icon');
+});
+
+test('来源配色_表内顺序即优先级', () => {
+  // 同时含「终端」与「代码」，靠前的终端档胜出
+  eq(sourceTone('代码终端'), 'source-terminal');
+});
+
+// ---------- 相对时间 ----------
+
+const MINUTE = 60_000;
+const HOUR = 3_600_000;
+const DAY = 86_400_000;
+
+test('相对时间_一分钟内为刚刚_未来时间戳同档', () => {
+  eq(formatTime(1000, 1000), '刚刚');
+  eq(formatTime(0, MINUTE - 1), '刚刚');
+  eq(formatTime(5000, 1000), '刚刚');
+});
+
+test('相对时间_分钟档与小时档的阈值边界', () => {
+  eq(formatTime(0, MINUTE), '1 分钟前');
+  eq(formatTime(0, HOUR - 1), '59 分钟前');
+  eq(formatTime(0, HOUR), '1 小时前');
+  eq(formatTime(0, DAY - 1), '23 小时前');
+});
+
+test('相对时间_跨天后给日期与时分_个位补零', () => {
+  const ts = Date.parse('2026-09-05T08:09:00');
+  eq(formatTime(ts, ts + DAY), '9月5日 08:09');
+});
+
+test('相对时间_月份与日期不补零_小时分钟补零', () => {
+  const ts = Date.parse('2026-01-02T03:04:00');
+  eq(formatTime(ts, ts + DAY), '1月2日 03:04');
+});
+
+// ---------- 按键码映射 ----------
+
+test('按键码_字母与数字取本体_越界形态不映射', () => {
+  eq(accelKeyFromCode('KeyV'), 'V');
+  eq(accelKeyFromCode('Digit1'), '1');
+  eq(accelKeyFromCode('KeyAA'), null);
+  eq(accelKeyFromCode('Digit10'), null);
+});
+
+test('按键码_F1到F24原样返回_F0与F25不映射', () => {
+  eq(accelKeyFromCode('F1'), 'F1');
+  eq(accelKeyFromCode('F9'), 'F9');
+  eq(accelKeyFromCode('F10'), 'F10');
+  eq(accelKeyFromCode('F24'), 'F24');
+  eq(accelKeyFromCode('F25'), null);
+  eq(accelKeyFromCode('F0'), null);
+});
+
+test('按键码_功能键与方向键按表转换', () => {
+  eq(accelKeyFromCode('ArrowUp'), 'Up');
+  eq(accelKeyFromCode('ArrowDown'), 'Down');
+  eq(accelKeyFromCode('ArrowLeft'), 'Left');
+  eq(accelKeyFromCode('ArrowRight'), 'Right');
+  eq(accelKeyFromCode('Space'), 'Space');
+  eq(accelKeyFromCode('Delete'), 'Delete');
+  eq(accelKeyFromCode('PageDown'), 'PageDown');
+});
+
+test('按键码_裸修饰键与未知码返回null', () => {
+  eq(accelKeyFromCode('ControlLeft'), null);
+  eq(accelKeyFromCode('ShiftRight'), null);
+  eq(accelKeyFromCode(''), null);
+});
+
+// ---------- 滚动条几何 ----------
+
+test('滚动条_内容不超高时不可见', () => {
+  eq(scrollbarThumb(0, 600, 600), { visible: false, top: 0, height: 28 });
+  eq(scrollbarThumb(0, 600, 100), { visible: false, top: 0, height: 28 });
+});
+
+test('滚动条_thumb高度按可视比例_且不破下限', () => {
+  eq(scrollbarThumb(0, 600, 1200).height, 300);
+  eq(scrollbarThumb(0, 600, 60000).height, 28);
+});
+
+test('滚动条_top随滚动进度线性到最大位', () => {
+  eq(scrollbarThumb(0, 600, 1200).top, 0);
+  eq(scrollbarThumb(300, 600, 1200).top, 150);
+  eq(scrollbarThumb(600, 600, 1200).top, 300);
+  eq(scrollbarThumb(0, 600, 60000).visible, true);
 });
 
 console.log(`\npanelView: ${passed} passed, ${failures.length} failed`);
