@@ -16,13 +16,14 @@
 | `--accent / --accent-text / --accent-soft` | #7B77E0 / #A7A4F0 / 13% | #5D59CA / #5D59CA / 10% | 焦点环、复制胶囊、置顶图钉 |
 | `--success` / `--error` | #57C08A / #E05A52 | #2E9E68 / #C9443C | 复制闪光与 toast 勾 / 删除 toast 叉 |
 | `--type-text / --type-image` | #8FA6C9 / #57A8C0 | #4A6A96 / #2E7D96 | 卡片类型 chip（仅图标，着色走 token） |
+| `--window-ring` | #757575 | #757575 | 应用边框描边（返修 4/5 追加，非源 UI 值）：亮暗同值中灰实线，对齐系统窗口边框，两主题必须肉眼可辨 |
 | `--shadow-window/card/toast/inset` | 黑重深影 | 着色低扩散 | 层级 |
 
 **主题**：纯跟随系统，无应用内开关。index.html 内联脚本按 `prefers-color-scheme` 首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时换肤。
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；hairline 用真边框（阴影矩形逐边取整不可控），`resolution` 媒体查询在所有缩放档位（含 100%/200% 整数档）给 `.desktop` 留恰好 1-2 个设备像素——描边永不贴窗口物理边缘，真机实证贴边列会被 surface 取整裁掉。
+**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；边框描边用真 1px 实线 `--window-ring`（中灰 #757575，亮暗同值，阴影矩形逐边取整不可控所以不用 inset shadow），`resolution` 媒体查询在所有缩放档位（含 100%/200% 整数档）给 `.desktop` 留恰好 1-2 个设备像素——描边永不贴窗口物理边缘，真机实证贴边列会被 surface 取整裁掉。
 
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。

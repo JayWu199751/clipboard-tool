@@ -2,7 +2,8 @@ import { test, expect } from '@playwright/test';
 import { installPanelHarness, makeEntries } from './panel-harness.js';
 import { decodePNG } from '../scripts/gen-tray-icons.mjs';
 
-// 暗色模式下 .app-window 的高亮描边是 1px border（styles.css「窗口框架」权威定义）。
+// .app-window 的描边是 1px 实线 border --window-ring（#757575，styles.css「窗口框架」权威定义；
+// 2026-09-08 返修 4 由半透明白 hairline 改为中灰实线，亮暗同值）。
 // 用户真机反馈过：四边的视觉宽度不一样。根因有二，均已修——.desktop 的 padding 贴边时
 // 描边被透明窗口 per-pixel alpha 裁淡（分数缩放下由分辨率媒体查询强制 1/dppx 内边距），
 // 以及 Chromium 把绘制矩形逐边取整到整数设备像素（border-width 的分数值会被归一成整数
@@ -16,7 +17,7 @@ import { decodePNG } from '../scripts/gen-tray-icons.mjs';
 // 被端到端断言）。截图必须 omitBackground——默认白垫会把半透明边缘垫亮成假描边。
 
 const ITEMS = 8;
-const RING_ALPHA = 0.08; // rgba(255,255,255,0.08) 的名义 alpha
+const RING_ALPHA = 0.434; // #757575 对暗底 #0B0B0E 的等效覆盖率：(117-11)/(255-11)
 const ALPHA_ON = 16;     // alpha 高于此值视为卡片内容（窗口外是透明的）
 
 test.use({ viewport: { width: 418, height: 823 }, colorScheme: 'dark' });

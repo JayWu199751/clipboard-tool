@@ -23,6 +23,10 @@
   --border-strong:    rgba(255, 255, 255, 0.12);
   --border-selected:  rgba(123, 119, 224, 0.45);
 
+  /* 应用边框描边（用户 2026-09-08 追加，非源 UI 值）：对齐系统窗口边框的中灰实线，
+     参考截图实测亮度 ≈117；亮暗两档同值，两主题都必须肉眼可辨 */
+  --window-ring: #757575;
+
   /* Text */
   --text-primary:   #F2F2F5;
   --text-secondary: #A0A0AC;
@@ -107,6 +111,9 @@ html[data-theme="light"] {
   --border-subtle:     rgba(20, 20, 30, 0.08);
   --border-strong:     rgba(20, 20, 30, 0.16);
   --border-selected:   rgba(93, 89, 202, 0.5);
+
+  /* 亮档同值中灰：对 #F0F0F3 画布对比 ≈3.9:1，过 UI 边框 3:1 线 */
+  --window-ring: #757575;
 
   --text-primary:   #1A1A20;
   --text-secondary: #5A5A66;

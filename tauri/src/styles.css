@@ -55,16 +55,15 @@ body {
   grid-template-rows: var(--search-h) minmax(0, 1fr) var(--footer-h);
   background: var(--bg-app);
   border-radius: calc(var(--radius-window) - 2px);
-  /* hairline 用真边框而非 inset box-shadow：阴影矩形被逐边独立取整，四边宽度不可控 */
-  border: 0.5px solid rgba(214, 214, 214, 0.9);
+  /* 描边用真边框而非 inset box-shadow：阴影矩形被逐边独立取整，四边宽度不可控。
+     2026-09-08 返修 4：由半透明 hairline（暗底亮度 ~30，用户报「看不见描边」）
+     改为 --window-ring 中灰实线（参考系统窗口边框，实测亮度 ~117），亮暗同值。 */
+  border: 1px solid var(--window-ring);
   box-shadow: var(--shadow-card);
   overflow: hidden;
   /* 源 UI 的 window-in 入场动画不迁移：真实应用的显隐由原生窗口承担，
      CSS 入场只在启动离屏热身期空放一次，且 scale 变换会把 hairline 描边
      与滚动几何按帧缩放（window-ring / navigation 两条回归的测量都会被污染）。 */
-}
-html[data-theme="dark"] .app-window {
-  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* 四边各留恰好 1 个设备像素，让描边完全不贴窗口物理边缘
