@@ -360,8 +360,12 @@ impl Drop for ClipboardGuard {
 // BMP 解码器，那条路在「BI_BITFIELDS + V4/V5 头」上会把像素起点算多 12 字节，于是截图
 // 全部解失败（原因与复现见 dib module 顶部注释）。优先 CF_DIBV5，退回 CF_DIB。
 fn clipboard_read_image_png() -> Option<Vec<u8>> {
-    let clip = ClipboardGuard::open()?;
-    let dib = clip.bytes(CF_DIBV5).or_else(|| clip.bytes(CF_DIB))?;
+    // 只在取字节期间独占剪贴板：解码一张大图要几十毫秒，抱着 CloseClipboard 不放会让别的
+    // 程序在这段时间里 OpenClipboard 失败——而那正是用户刚按下 Ctrl+C 的时刻
+    let dib = {
+        let clip = ClipboardGuard::open()?;
+        clip.bytes(CF_DIBV5).or_else(|| clip.bytes(CF_DIB))?
+    };
     dib::to_png(&dib)
 }
 

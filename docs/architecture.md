@@ -90,7 +90,7 @@ Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `comm
 
 轮询线程每 600ms 跑一次，先用 `GetClipboardSequenceNumber` 短路未变化的轮次——序列号没动就不打开剪贴板，也就不必先读图片再编码 PNG。
 
-图片不走 arboard 的 `get_image`：那条路在「`BI_BITFIELDS` + V4/V5 头」上必挂（[ADR-0009](adr/0009-clipboard-image-decoded-in-house.md)）。轮询先用 Win32 自己取 `CF_DIBV5`（退回 `CF_DIB`）的原始字节交给 `dib` 解，文字仍用 arboard；两者各自独占剪贴板，先后取、不重叠持有。
+图片不走 arboard 的 `get_image`：那条路在「`BI_BITFIELDS` + V4/V5 头」上必挂（[ADR-0009](adr/0009-clipboard-image-decoded-in-house.md)）。轮询先用 Win32 自己取 `CF_DIBV5`（退回 `CF_DIB`）的原始字节交给 `dib` 解，文字仍用 arboard；两者各自独占剪贴板，先后取、不重叠持有；取字节一结束就释放守卫（`CloseClipboard`），解码在剪贴板之外进行——独占窗口若拉长到几十毫秒，正好会撞上用户刚按下 `Ctrl+C` 的时刻。
 
 ## 待真机复核
 
