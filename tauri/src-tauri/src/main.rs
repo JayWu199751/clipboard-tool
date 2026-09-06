@@ -1,6 +1,7 @@
 // ClipboardTool（Tauri 重写）主进程编排。
 // 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
 //   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
+//   clipboard      剪贴板独占窗口：打开重试、格式退让、Drop 必关、读写与序列号
 //   panel_modes    面板四态状态机 + 全局热键差量注册（纯逻辑）
 //   modes          状态机的唯一入口：独占执行线程、具名操作、效果宿主
 //   panel_window   面板几何 / 焦点 / 鼠标穿透（主线程投递与 DIP 换算都在其内部）
@@ -10,7 +11,7 @@
 //   settings       settings.json 键名契约
 //   paste_chain    复制并粘贴链路的五步顺序与结果文案
 //   tray           托盘图标尺寸阶梯、去重键、菜单文案
-// 剩下的编排职责：剪贴板读写、持久化与广播、全局热键分发、IPC 命令。
+// 剩下的编排职责：持久化与广播、全局热键分发、IPC 命令。
 //
 // 结构要点：
 // - 焦点快照、来源应用图标、全局点击监听、计划任务拉起全部住在本进程内
@@ -27,6 +28,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod click_watcher;
+mod clipboard;
 mod dib;
 mod focus_paste;
 mod history;
@@ -301,106 +303,16 @@ fn commit(app: &AppHandle, state: &AppState) {
     broadcast(app, state);
 }
 
-// ---------- 剪贴板效果 ----------
-
-// 标准剪贴板格式号，Windows 定死的两个数，不随版本变
-const CF_DIB: u32 = 8;
-const CF_DIBV5: u32 = 17;
-
-// 打开剪贴板的 RAII 守卫：OpenClipboard 之后必须 CloseClipboard，否则别的程序（包括我们
-// 自己的下一轮轮询）会一直拿不到剪贴板。放在 Drop 里关，任何提前返回都漏不掉。
-struct ClipboardGuard;
-
-impl ClipboardGuard {
-    // 剪贴板随时可能被别的程序短暂占用：小步重试，实在拿不到就放弃本轮，600ms 后还会再来
-    fn open() -> Option<Self> {
-        for attempt in 0..8 {
-            if unsafe { windows::Win32::System::DataExchange::OpenClipboard(None) }.is_ok() {
-                return Some(Self);
-            }
-            if attempt + 1 < 8 {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-        None
-    }
-
-    // 取某个格式的原始字节。返回的内存句柄归剪贴板所有，只读不动、绝不释放。
-    fn bytes(&self, format: u32) -> Option<Vec<u8>> {
-        let handle =
-            unsafe { windows::Win32::System::DataExchange::GetClipboardData(format) }.ok()?;
-        let global = windows::Win32::Foundation::HGLOBAL(handle.0);
-        let size = unsafe { windows::Win32::System::Memory::GlobalSize(global) };
-        if size == 0 {
-            return None;
-        }
-        let ptr = unsafe { windows::Win32::System::Memory::GlobalLock(global) };
-        if ptr.is_null() {
-            return None;
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, size) }.to_vec();
-        unsafe {
-            let _ = windows::Win32::System::Memory::GlobalUnlock(global);
-        }
-        (!bytes.is_empty()).then_some(bytes)
-    }
-}
-
-impl Drop for ClipboardGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = windows::Win32::System::DataExchange::CloseClipboard();
-        }
-    }
-}
-
-// 读剪贴板图片并编码为 PNG 字节。不走 arboard::get_image：它把 CF_DIBV5 直接交给 image 的
-// BMP 解码器，那条路在「BI_BITFIELDS + V4/V5 头」上会把像素起点算多 12 字节，于是截图
-// 全部解失败（原因与复现见 dib module 顶部注释）。优先 CF_DIBV5，退回 CF_DIB。
-fn clipboard_read_image_png() -> Option<Vec<u8>> {
-    // 只在取字节期间独占剪贴板：解码一张大图要几十毫秒，抱着 CloseClipboard 不放会让别的
-    // 程序在这段时间里 OpenClipboard 失败——而那正是用户刚按下 Ctrl+C 的时刻
-    let dib = {
-        let clip = ClipboardGuard::open()?;
-        clip.bytes(CF_DIBV5).or_else(|| clip.bytes(CF_DIB))?
-    };
-    dib::to_png(&dib)
-}
-
-fn write_clipboard_text(text: &str) -> bool {
-    let Ok(mut clip) = arboard::Clipboard::new() else { return false };
-    clip.set_text(text.to_string()).is_ok()
-}
-
-fn write_clipboard_image_file(path: &str) -> bool {
-    let Ok(bytes) = std::fs::read(path) else { return false };
-    let Ok(decoded) = image::load_from_memory(&bytes) else { return false };
-    let rgba = decoded.to_rgba8();
-    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-    let data = arboard::ImageData {
-        width: w,
-        height: h,
-        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
-    };
-    let Ok(mut clip) = arboard::Clipboard::new() else { return false };
-    clip.set_image(data).is_ok()
-}
-
-// 剪贴板序列号：Win32 全局计数器，任何写剪贴板操作都会 +1。
-// 读取不需要打开剪贴板——用它短路未变化的轮询，既省 CPU 又减少与其他程序的
-// 否则每 600ms 都要无条件读一次剪贴板图片并编码 PNG。
-fn clipboard_seq() -> u32 {
-    unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
-}
+// ---------- 剪贴板基线同步 ----------
+// 独占窗口与读写都在 clipboard module（OpenClipboard 重试、CF_DIBV5 → CF_DIB 退让、
+// Drop 必关、arboard 读写），这里只留「把当前内容认作已见过」这一步编排。
 
 // 读一次剪贴板当前内容，交给基线模块认作「已见过」（启动基线、自己写入后的同步都走这里）
 fn sync_baseline(state: &AppState) {
-    let png = clipboard_read_image_png().filter(|bytes| !bytes.is_empty());
-    let Ok(mut clip) = arboard::Clipboard::new() else { return };
-    let text = clip.get_text().unwrap_or_default();
+    let Some(snapshot) = clipboard::read() else { return };
     let mut baseline = state.baseline.lock().unwrap();
-    baseline.sync_now(png, text);
-    baseline.note_seq(clipboard_seq());
+    baseline.sync_now(snapshot.png, snapshot.text);
+    baseline.note_seq(clipboard::sequence());
 }
 
 fn current_source_app(state: &AppState) -> Option<SourceApp> {
@@ -416,15 +328,13 @@ fn current_source_app(state: &AppState) -> Option<SourceApp> {
 // 与 main.js pollClipboard 逐段对齐
 fn poll_once(app: &AppHandle, state: &AppState) {
     poll_trace("new");
-    // 图片与文字都要独占剪贴板，所以先后各读一次，不重叠持有；图片走自己的 Win32 读取，
-    // 原因见 clipboard_read_image_png
-    let png = clipboard_read_image_png().filter(|bytes| !bytes.is_empty());
-    let Ok(mut clip) = arboard::Clipboard::new() else {
+    // 一次读取（先图后字）由 clipboard 独占剪贴板；图片不走 arboard 的原因见该 module。
+    // 文字端口打不开 → 整轮作废，下一轮再来。
+    let Some(clipboard::Snapshot { png, text }) = clipboard::read() else {
         poll_trace("clipboard-open-failed");
         return;
     };
     poll_trace("opened");
-    let text = clip.get_text().unwrap_or_default();
 
     // 判定在基线模块内：图片优先、按内容哈希/文本比对，暂存待 confirm
     let change = state.baseline.lock().unwrap().observe(png.clone(), text);
@@ -459,7 +369,7 @@ fn poll_loop(app: AppHandle) {
         std::thread::sleep(POLL_INTERVAL);
         let state = app.state::<AppState>();
         // 序列号未变且没有待重试的写盘失败 → 本轮无需读剪贴板
-        if state.baseline.lock().unwrap().skip_unchanged(clipboard_seq()) {
+        if state.baseline.lock().unwrap().skip_unchanged(clipboard::sequence()) {
             continue;
         }
         // 轮询线程要面对任意应用写入的剪贴板内容：单次异常只记录并跳过，不允许杀死轮询
@@ -467,7 +377,7 @@ fn poll_loop(app: AppHandle) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             poll_once(&app2, &state);
         }));
-        state.baseline.lock().unwrap().note_seq(clipboard_seq());
+        state.baseline.lock().unwrap().note_seq(clipboard::sequence());
         if let Err(panic) = result {
             let msg = panic
                 .downcast_ref::<String>()
@@ -570,8 +480,8 @@ impl PastePort for Win32PastePort<'_> {
 
     fn write_clipboard(&mut self, content: &CopyContent) -> bool {
         match content {
-            CopyContent::Text(text) => write_clipboard_text(text),
-            CopyContent::Image(path) => write_clipboard_image_file(path),
+            CopyContent::Text(text) => clipboard::write_text(text),
+            CopyContent::Image(path) => clipboard::write_image_file(path),
         }
     }
 
@@ -981,46 +891,3 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-#[cfg(test)]
-mod 真机探针 {
-    #![allow(non_snake_case)]
-
-    use super::{clipboard_read_image_png, dib, ClipboardGuard, CF_DIB, CF_DIBV5};
-
-    // 依赖真机剪贴板内容，不进常规测试面。跑法：先截一张图（PixPin、Win+Shift+S 都行），然后
-    //   cargo test --bin clipboard-tool -- 真机探针 --ignored --nocapture
-    #[test]
-    #[ignore = "需要真机剪贴板里正躺着一张截图"]
-    fn 剪贴板里的截图必须读出PNG并判定为新复制() {
-        // 对照组：arboard 的 get_image 走 image 的 BMP 解码器，截图在这条路上必挂（见 dib）
-        match arboard::Clipboard::new().map(|mut c| c.get_image()) {
-            Ok(Ok(img)) => eprintln!("arboard get_image Ok: {}x{}", img.width, img.height),
-            Ok(Err(err)) => eprintln!("arboard get_image Err: {err:?}"),
-            Err(err) => eprintln!("arboard Clipboard::new Err: {err:?}"),
-        }
-
-        // 逐步报：打开剪贴板 → 取 DIB 字节 → 解码 → 端到端，哪一步断掉一眼看见
-        let guard = ClipboardGuard::open().expect("断在 OpenClipboard：剪贴板打不开");
-        let raw = guard
-            .bytes(CF_DIBV5)
-            .or_else(|| guard.bytes(CF_DIB))
-            .expect("断在取字节：剪贴板里没有 CF_DIBV5 / CF_DIB，先截一张图再跑");
-        eprintln!("第一步 OK：DIB {} 字节", raw.len());
-        let decoded = dib::to_png(&raw).expect("断在解码：dib::to_png 认不出这个 DIB");
-        eprintln!("第二步 OK：解出 PNG {} 字节", decoded.len());
-        drop(guard);
-
-        let png = clipboard_read_image_png().expect("断在端到端：clipboard_read_image_png 返回 None");
-        eprintln!("第三步 OK：clipboard_read_image_png -> {} 字节", png.len());
-
-        // 读出之后还要过基线判定，否则仍然不会进历史
-        let mut baseline = crate::poll_baseline::PollBaseline::new();
-        let change = baseline.observe(Some(png), String::new());
-        assert!(
-            matches!(change, Some(crate::poll_baseline::Change::Image { .. })),
-            "读出了 PNG 但基线没判定为新复制"
-        );
-    }
-}
-
