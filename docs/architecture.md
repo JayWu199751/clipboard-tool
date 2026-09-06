@@ -33,6 +33,7 @@
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主 | `spawn` + 15 个具名操作（见下） | — |
 | `panel_window.rs` | 面板几何、焦点、鼠标穿透；主线程投递与 DIP 换算 | `show_at_cursor` `park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`；纯函数 `centered` `parked` `contains_point` | 4 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 写盘失败重试标志 | `observe` `confirm` `skip_unchanged` `note_seq` `sync_now` | 7 |
+| `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
 | `paste_chain.rs` | 复制并粘贴链路的顺序与结果文案；失败文案的唯一映射处 | `run(&mut port, id)` + `PastePort`（7 个效果）+ `focus_error_message` | 9 |
 | `startup.rs` | 静默启动通道的三态判定、意图/事实分离、「拉起→退出」舞步 | `channel` `apply_intent` `set_auto_start` `relaunch_via_task` `relaunch_if_not_elevated` `current_exe_path`（通道决策 `decide` 与 `sync_fact` 在 module 内部，任务注册经参数注入） | 6 |
 | `settings.rs` | `settings.json` 的读写与 camelCase 键名契约、坏档兜底 | `load` `save` `parse` `Settings::default` | 6 |
@@ -89,9 +90,12 @@ Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `comm
 
 轮询线程每 600ms 跑一次，先用 `GetClipboardSequenceNumber` 短路未变化的轮次——序列号没动就不打开剪贴板，也就不必先读图片再编码 PNG。
 
+图片不走 arboard 的 `get_image`：那条路在「`BI_BITFIELDS` + V4/V5 头」上必挂（[ADR-0009](adr/0009-clipboard-image-decoded-in-house.md)）。轮询先用 Win32 自己取 `CF_DIBV5`（退回 `CF_DIB`）的原始字节交给 `dib` 解，文字仍用 arboard；两者各自独占剪贴板，先后取、不重叠持有。
+
 ## 待真机复核
 
-两条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
+三条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
 
 - **托盘图标清晰度**：按主屏 `scaleFactor` 取恰好物理尺寸的图 1:1 渲染，但最终 HICON 由 tray-icon 的生成路径决定，非整数缩放下是否仍糊必须眼看。
 - **浏览态不抢焦点**：靠 `focusable: true` 加焦点事件自动 `SetFocus(NULL)` 模拟，首帧激活次序需眼看。
+- **截图进历史**：`dib` 的解码覆盖面全部有单测钉住，但「某个截图工具到底写哪种 DIB 形状」只能真机看；断点定位用 `真机探针` 那条 `#[ignore]` 测试。

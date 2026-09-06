@@ -19,7 +19,7 @@
 `tauri/` 下三条全绿，且前两条零输出：
 
 ```bash
-npm run test                  # 73 例：node 14 + cargo 59
+npm run test                  # 80 例：node 14 + cargo 66（另有 1 例「真机探针」#[ignore]，见 README）
 npx tsc --noEmit              # 零报错
 cargo check --all-targets     # 零警告（不是零错误——警告也算不过）
 ```

@@ -22,6 +22,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 - 长按 `↑` / `↓` 时选中框与列表滚动即时跟随，不被输入重复速度甩开。
 - 键盘导航把选中项滚到列表边缘时，滚到的是渐隐遮罩内侧，首尾卡片不会被淡成一道阴影；回到第一项时列表也回到呼出时的位置。
 - 搜索匹配正文、备注与来源应用（应用名 / 窗口标题 / 可执行文件路径），空格分词多词 AND、大小写不敏感、命中片段高亮；结果保持原顺序，不做匹配度排序。
+- 图片复制与文字一样进历史（含 PixPin、`Win+Shift+S` 这类截图工具产出的位图），条目身份按图片内容判定，见 [ADR-0009](docs/adr/0009-clipboard-image-decoded-in-house.md)。
 - 点击面板外任意处即隐藏；置顶条目固定在最前的置顶块里，新复制插在置顶块之后。
 
 托盘菜单：显示剪贴板面板 / 更换快捷键 / 开机启动 / 退出。
@@ -84,13 +85,13 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 14 例
-npm run test:rust   # cargo test —— 59 例
+npm run test:rust   # cargo test —— 66 例（另有 1 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwright install chromium）
 ```
 
-73 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 14。
+80 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 14。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 73 例统计。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 80 例统计。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -130,6 +131,7 @@ npm run test:browser # Playwright UI 回归 —— 3 例（首次需 npx playwri
 - 顶层背景色恢复（2026-09-06）后：亮 / 暗主题下面板为约 95% 不透明的磨砂底，卡片四角外仍透出桌面且点击可穿透。
 - 顶部单层描边（2026-09-05 修复）：暗色顶部应只有一条亮线，不再出现紧贴其下的第二道高光线（标题栏 `inset 0 1px 0` 高光与标题栏滤镜已删）；标题栏区域观感（不再有玻璃模糊）一并确认。
 - styles.css 死规则清理（2026-09-05）后：亮 / 暗主题下列表卡片、详情覆盖层、快捷键栏、toast 与快捷键捕获浮层的观感应与清理前一致（删除的规则均匹配不到任何元素，属零渲染差异预期，仍需眼看兜底）。
+- 截图进历史（2026-09-06 修复）：重新构建后用 PixPin / `Win+Shift+S` 截一张，历史里应出现一条图片条目，缩略图与详情正常；带透明背景的截图 alpha 应保留。断在哪一步由探针报：`cargo test --bin clipboard-tool -- 真机探针 --ignored --nocapture`（在 `tauri/src-tauri/` 下跑）。
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。
