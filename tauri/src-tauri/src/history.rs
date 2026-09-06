@@ -1,7 +1,8 @@
 // 「历史」领域核心：条目身份、去重提升、置顶块排序、上限裁剪、备注。
 // 纯内存 module：不依赖 tauri / Win32，可按 interface 直接测试。
-// 文件系统效果经注入端口进入（save_image_png / hash_image_file / remove_image_file /
-// image_file_exists）；持久化与 broadcast 由调用方（main.rs）完成，不属于本 module。
+// 效果经注入端口进入：文件系统四条（Ports 的 save_image_png / hash_image_file /
+// remove_image_file / image_file_exists，四条全部必供，缺一个编译不过）与时间 / id
+// 两条（Clock，默认是真时钟与 uuid v4）；持久化与 broadcast 由调用方（main.rs）完成，不属于本 module。
 // 领域规则出处：ADR-0003（条目身份只由内容决定）、ADR-0004（置顶块与普通块）、
 // CONTEXT.md「备注」「落位」。
 
@@ -89,94 +90,36 @@ pub struct RecordOutcome {
 
 pub struct HistoryStore {
     max: usize,
-    max_note_length: usize,
     now_fn: NowFn,
     make_id: MakeIdFn,
-    save_image_png: Option<SaveImagePngFn>,
-    hash_image_file: Option<HashImageFileFn>,
-    remove_image_file: Option<RemoveImageFileFn>,
-    image_file_exists: Option<ImageFileExistsFn>,
+    ports: Ports,
     entries: Vec<Entry>,
     // 图片内容哈希缓存：entry.id -> sha1（图片文件创建后不会变化）
     image_hash_cache: HashMap<String, String>,
 }
 
-pub struct HistoryStoreBuilder {
-    max: usize,
-    max_note_length: usize,
-    now_fn: Option<NowFn>,
-    make_id: Option<MakeIdFn>,
-    save_image_png: Option<SaveImagePngFn>,
-    hash_image_file: Option<HashImageFileFn>,
-    remove_image_file: Option<RemoveImageFileFn>,
-    image_file_exists: Option<ImageFileExistsFn>,
+/// 文件系统端口：写图、取哈希、删图、判存在。四个全部必供。
+/// 它们曾写成 `Option` 配八个 setter，于是「漏配一个」不报错、只是静默降级——
+/// 漏 `hash_image_file` 会让哈希恒空、图片去重永不命中，而测试照样全绿。
+/// 现在缺一个字段就编译不过。
+pub struct Ports {
+    pub save_image_png: SaveImagePngFn,
+    pub hash_image_file: HashImageFileFn,
+    pub remove_image_file: RemoveImageFileFn,
+    pub image_file_exists: ImageFileExistsFn,
 }
 
-impl Default for HistoryStoreBuilder {
+/// 时间与 id 端口：生产用真时钟与 uuid v4，测试按需替换。
+/// 与 `Ports` 分开，是因为这两个确实有合理默认值；文件端口没有。
+#[derive(Clone)]
+pub struct Clock {
+    pub now: NowFn,
+    pub make_id: MakeIdFn,
+}
+
+impl Default for Clock {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[allow(dead_code)] // builder 的注入点为测试与未来调用方保留
-impl HistoryStoreBuilder {
-    pub fn new() -> Self {
-        HistoryStoreBuilder {
-            max: DEFAULT_MAX_HISTORY,
-            max_note_length: DEFAULT_MAX_NOTE_LENGTH,
-            now_fn: None,
-            make_id: None,
-            save_image_png: None,
-            hash_image_file: None,
-            remove_image_file: None,
-            image_file_exists: None,
-        }
-    }
-    pub fn max(mut self, max: usize) -> Self {
-        self.max = max;
-        self
-    }
-    pub fn max_note_length(mut self, n: usize) -> Self {
-        self.max_note_length = n;
-        self
-    }
-    pub fn now(mut self, f: NowFn) -> Self {
-        self.now_fn = Some(f);
-        self
-    }
-    pub fn make_id(mut self, f: MakeIdFn) -> Self {
-        self.make_id = Some(f);
-        self
-    }
-    pub fn save_image_png(mut self, f: SaveImagePngFn) -> Self {
-        self.save_image_png = Some(f);
-        self
-    }
-    pub fn hash_image_file(mut self, f: HashImageFileFn) -> Self {
-        self.hash_image_file = Some(f);
-        self
-    }
-    pub fn remove_image_file(mut self, f: RemoveImageFileFn) -> Self {
-        self.remove_image_file = Some(f);
-        self
-    }
-    pub fn image_file_exists(mut self, f: ImageFileExistsFn) -> Self {
-        self.image_file_exists = Some(f);
-        self
-    }
-    pub fn build(self) -> HistoryStore {
-        HistoryStore {
-            max: self.max,
-            max_note_length: self.max_note_length,
-            now_fn: self.now_fn.unwrap_or_else(|| Arc::new(|| now_millis())),
-            make_id: self.make_id.unwrap_or_else(|| Arc::new(|| uuid::Uuid::new_v4().to_string())),
-            save_image_png: self.save_image_png,
-            hash_image_file: self.hash_image_file,
-            remove_image_file: self.remove_image_file,
-            image_file_exists: self.image_file_exists,
-            entries: Vec::new(),
-            image_hash_cache: HashMap::new(),
-        }
+        Self { now: Arc::new(now_millis), make_id: Arc::new(|| uuid::Uuid::new_v4().to_string()) }
     }
 }
 
@@ -188,9 +131,21 @@ pub fn now_millis() -> u64 {
 }
 
 impl HistoryStore {
+    /// 唯一构造入口：上限 + 文件端口（必供）+ 时钟端口（有默认）。
+    pub fn new(max: usize, ports: Ports, clock: Clock) -> Self {
+        HistoryStore {
+            max,
+            now_fn: clock.now,
+            make_id: clock.make_id,
+            ports,
+            entries: Vec::new(),
+            image_hash_cache: HashMap::new(),
+        }
+    }
+
     pub fn normalize_note(&self, note: &str) -> String {
         let trimmed = note.trim();
-        trimmed.chars().take(self.max_note_length).collect()
+        trimmed.chars().take(DEFAULT_MAX_NOTE_LENGTH).collect()
     }
 
     pub fn find(&self, id: &str) -> Option<&Entry> {
@@ -232,7 +187,7 @@ impl HistoryStore {
             let h = match self.image_hash_cache.get(&id) {
                 Some(h) => h.clone(),
                 None => {
-                    let h = self.hash_image_file.as_ref().map(|f| f(&path)).unwrap_or_default();
+                    let h = (self.ports.hash_image_file)(&path);
                     if !h.is_empty() {
                         self.image_hash_cache.insert(id.clone(), h.clone());
                     }
@@ -278,9 +233,7 @@ impl HistoryStore {
         self.image_hash_cache.remove(&entry.id);
         if entry.entry_type == EntryType::Image {
             if let Some(path) = &entry.image_path {
-                if let Some(f) = &self.remove_image_file {
-                    f(path);
-                }
+                (self.ports.remove_image_file)(path);
             }
         }
     }
@@ -337,10 +290,8 @@ impl HistoryStore {
             match entry.entry_type {
                 EntryType::Image => {
                     let Some(path) = entry.image_path.clone() else { continue };
-                    if let Some(f) = &self.image_file_exists {
-                        if !f(&path) {
-                            continue;
-                        }
+                    if !(self.ports.image_file_exists)(&path) {
+                        continue;
                     }
                 }
                 EntryType::Text => {
@@ -398,7 +349,7 @@ impl HistoryStore {
             return RecordOutcome { entry, deduped: true, hash };
         }
         let id = (self.make_id)();
-        let image_path = self.save_image_png.as_ref().and_then(|f| f(png, &id));
+        let image_path = (self.ports.save_image_png)(png, &id);
         let Some(image_path) = image_path else {
             return RecordOutcome { entry: None, deduped: false, hash };
         };
@@ -471,39 +422,45 @@ mod tests {
 
     fn make_store(max: usize, overrides: StoreOverrides) -> (HistoryStore, RemovedLog) {
         let removed: RemovedLog = Arc::new(Mutex::new(Vec::new()));
-        let removed2 = removed.clone();
-        let mut b = HistoryStoreBuilder::new()
-            .max(max)
-            .save_image_png(Arc::new(|_png, id| Some(format!("/images/{id}.png"))))
-            .hash_image_file(Arc::new(|_p| String::new()))
-            .remove_image_file(Arc::new(move |p| removed2.lock().unwrap().push(p.to_string())));
-        if let Some(now) = overrides.now {
-            b = b.now(now);
-        }
-        if let Some(save) = overrides.save_image_png {
-            b = b.save_image_png(save);
-        }
-        if let Some(hash) = overrides.hash_image_file {
-            b = b.hash_image_file(hash);
-        }
-        if let Some(exists) = overrides.image_file_exists {
-            b = b.image_file_exists(exists);
-        }
-        (b.build(), removed)
+        let ports = Ports::fake(&removed, overrides.save, overrides.hash, overrides.exists);
+        (HistoryStore::new(max, ports, overrides.clock), removed)
     }
 
     #[derive(Default)]
     struct StoreOverrides {
-        now: Option<NowFn>,
-        save_image_png: Option<SaveImagePngFn>,
-        hash_image_file: Option<HashImageFileFn>,
-        image_file_exists: Option<ImageFileExistsFn>,
+        clock: Clock,
+        save: Option<SaveImagePngFn>,
+        hash: Option<HashImageFileFn>,
+        exists: Option<ImageFileExistsFn>,
+    }
+
+    /// 测试 adapter 的缺省形状：写盘恒成功（路径 `/images/{id}.png`）、哈希恒空（图片去重因此
+    /// 默认不命中）、文件恒存在、删文件记进日志。三个 `Option` 参数只是「把某一条换成别的形状」。
+    impl Ports {
+        fn fake(
+            removed: &RemovedLog,
+            save: Option<SaveImagePngFn>,
+            hash: Option<HashImageFileFn>,
+            exists: Option<ImageFileExistsFn>,
+        ) -> Self {
+            let removed = removed.clone();
+            Self {
+                save_image_png: save
+                    .unwrap_or_else(|| Arc::new(|_png, id| Some(format!("/images/{id}.png")))),
+                hash_image_file: hash.unwrap_or_else(|| Arc::new(|_p| String::new())),
+                remove_image_file: Arc::new(move |p| removed.lock().unwrap().push(p.to_string())),
+                image_file_exists: exists.unwrap_or_else(|| Arc::new(|_p| true)),
+            }
+        }
     }
 
     // 时间步进时钟：每次 now() 前进 10ms，让 pinnedAt/createdAt 严格可辨
-    fn stepping_clock() -> NowFn {
+    fn stepping_clock() -> Clock {
         let t = Arc::new(std::sync::atomic::AtomicU64::new(1000));
-        Arc::new(move || t.fetch_add(10, std::sync::atomic::Ordering::SeqCst) + 10)
+        Clock {
+            now: Arc::new(move || t.fetch_add(10, std::sync::atomic::Ordering::SeqCst) + 10),
+            ..Default::default()
+        }
     }
 
     fn texts(store: &HistoryStore) -> Vec<String> {
@@ -562,7 +519,7 @@ mod tests {
 
     #[test]
     fn 置顶条目去重命中_刷新pinnedAt并移到置顶块最前() {
-        let (mut store, _) = make_store(200, StoreOverrides { now: Some(stepping_clock()), ..Default::default() });
+        let (mut store, _) = make_store(200, StoreOverrides { clock: stepping_clock(), ..Default::default() });
         let a = record_text(&mut store, "a");
         let b = record_text(&mut store, "b");
         store.toggle_pin(&a.id);
@@ -577,7 +534,7 @@ mod tests {
 
     #[test]
     fn togglePin_置顶刷新pinnedAt移到块首_取消置顶回到普通块最前() {
-        let (mut store, _) = make_store(200, StoreOverrides { now: Some(stepping_clock()), ..Default::default() });
+        let (mut store, _) = make_store(200, StoreOverrides { clock: stepping_clock(), ..Default::default() });
         let a = record_text(&mut store, "a");
         record_text(&mut store, "b");
         record_text(&mut store, "c");
@@ -645,7 +602,7 @@ mod tests {
     fn recordImage写盘失败_不插入条目() {
         let (mut store, _) = make_store(
             200,
-            StoreOverrides { save_image_png: Some(Arc::new(|_png, _id| None)), ..Default::default() },
+            StoreOverrides { save: Some(Arc::new(|_png, _id| None)), ..Default::default() },
         );
         let out = store.record_image(b"x", None);
         assert!(out.entry.is_none());
@@ -656,7 +613,7 @@ mod tests {
     fn matchImageHash用注入的hashImageFile识别历史里的图片() {
         let (mut store, _) = make_store(
             200,
-            StoreOverrides { hash_image_file: Some(Arc::new(|_p| "abc123".to_string())), ..Default::default() },
+            StoreOverrides { hash: Some(Arc::new(|_p| "abc123".to_string())), ..Default::default() },
         );
         store.load(Some(vec![serde_json::json!({ "id": "1", "type": "image", "imagePath": "/images/1.png" })]));
         let idx = store.match_image_hash("abc123");
@@ -670,7 +627,7 @@ mod tests {
         let (mut store, _) = make_store(
             200,
             StoreOverrides {
-                image_file_exists: Some(Arc::new(|p| p != "/images/lost.png")),
+                exists: Some(Arc::new(|p| p != "/images/lost.png")),
                 ..Default::default()
             },
         );

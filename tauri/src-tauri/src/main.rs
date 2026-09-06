@@ -41,7 +41,7 @@ mod startup;
 mod tasks;
 mod tray;
 
-use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
+use history::{EntryType, HistoryStore, SourceApp};
 use settings::Settings;
 use modes::Modes;
 use panel_modes::{is_repeatable_navigation, FocusTarget};
@@ -817,28 +817,31 @@ fn main() {
             let cache_for_remove = image_url_cache.clone();
             let images_dir_for_save = data_dir.join("images");
 
-            let mut store: HistoryStore = HistoryStoreBuilder::new()
-                .save_image_png(Arc::new(move |png: &[u8], id: &str| {
-                    let path = images_dir_for_save.join(format!("{id}.png"));
-                    match std::fs::write(&path, png) {
-                        Ok(()) => Some(path.to_string_lossy().to_string()),
-                        Err(err) => {
-                            eprintln!("Failed to save clipboard image: {err}");
-                            None
+            // 四个文件端口必供（缺一个编译不过），时钟端口取默认（真时钟 + uuid v4）。
+            let mut store: HistoryStore = HistoryStore::new(
+                history::DEFAULT_MAX_HISTORY,
+                history::Ports {
+                    save_image_png: Arc::new(move |png: &[u8], id: &str| {
+                        let path = images_dir_for_save.join(format!("{id}.png"));
+                        match std::fs::write(&path, png) {
+                            Ok(()) => Some(path.to_string_lossy().to_string()),
+                            Err(err) => {
+                                eprintln!("Failed to save clipboard image: {err}");
+                                None
+                            }
                         }
-                    }
-                }))
-                .hash_image_file(Arc::new(|path: &str| {
-                    std::fs::read(path)
-                        .map(|bytes| history::sha1_hex(&bytes))
-                        .unwrap_or_default()
-                }))
-                .remove_image_file(Arc::new(move |path: &str| {
-                    cache_for_remove.lock().unwrap().remove(path);
-                    let _ = std::fs::remove_file(path);
-                }))
-                .image_file_exists(Arc::new(|path: &str| Path::new(path).exists()))
-                .build();
+                    }),
+                    hash_image_file: Arc::new(|path: &str| {
+                        std::fs::read(path).map(|bytes| history::sha1_hex(&bytes)).unwrap_or_default()
+                    }),
+                    remove_image_file: Arc::new(move |path: &str| {
+                        cache_for_remove.lock().unwrap().remove(path);
+                        let _ = std::fs::remove_file(path);
+                    }),
+                    image_file_exists: Arc::new(|path: &str| Path::new(path).exists()),
+                },
+                history::Clock::default(),
+            );
 
             // 载入历史（宽松处理：单条损坏只丢该条）
             let mut icon_cache: HashMap<String, Option<String>> = HashMap::new();
