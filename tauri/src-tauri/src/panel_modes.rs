@@ -2,6 +2,11 @@
 // 纯逻辑 module：不依赖 tauri / Win32。模式状态、转换级联、全局热键集合的推导与差量应用
 // 全部收在本 module 的 interface 之后；窗口焦点、渲染层通知、焦点快照等效果经 host 注入。
 //
+// 三个输入态共用一对 enter_input / exit_input：五步顺序（退他态 → 补快照 → 改 mode →
+// 热键差量 → 聚焦或失焦 + 发事件）只写一遍，各态的差异全部提成 Mode 上的纯判定
+// （enter_event / exit_event / needs_focus / requires_visible_panel）。hide 也复用同一份
+// 判定，不再自己表述一遍「逐层退出、发对退出事件」。
+//
 // 焦点快照走进程内同步 Win32 调用（focus_paste::snapshot），状态机因此没有异步等待点，
 // 四态转换与热键差量全部可以直接单测。
 //
@@ -84,6 +89,50 @@ pub enum Mode {
     ShortcutCapture,
 }
 
+/// 状态机要发给渲染层的事件。渲染层协议有两条通道：`panel:key`（带动作名与可选的
+/// 备注条目 id）与 `shortcut:capture-end`。「哪个态进 / 出各发哪条」是 Mode 上的纯判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererEvent {
+    PanelKey { action: &'static str, note_entry_id: Option<String> },
+    CaptureEnd,
+}
+
+impl Mode {
+    /// 进入该输入态要发的事件。捕获态没有进入事件：覆盖层由 main.rs 在呼出面板之后编排。
+    pub fn enter_event(self, note_entry_id: Option<&str>) -> Option<RendererEvent> {
+        match self {
+            Mode::Search => Some(RendererEvent::PanelKey { action: "search-enter", note_entry_id: None }),
+            Mode::NoteEdit => Some(RendererEvent::PanelKey {
+                action: "note-edit-enter",
+                note_entry_id: note_entry_id.map(|s| s.to_string()),
+            }),
+            Mode::Browse | Mode::ShortcutCapture => None,
+        }
+    }
+
+    /// 退出该输入态要发的事件。浏览态不是输入态，没有退出事件。
+    pub fn exit_event(self) -> Option<RendererEvent> {
+        match self {
+            Mode::Search => Some(RendererEvent::PanelKey { action: "search-exit", note_entry_id: None }),
+            Mode::NoteEdit => Some(RendererEvent::PanelKey { action: "note-edit-exit", note_entry_id: None }),
+            Mode::ShortcutCapture => Some(RendererEvent::CaptureEnd),
+            Mode::Browse => None,
+        }
+    }
+
+    /// 进入该态是否要把面板聚焦起来（捕获态不要：它此刻只负责注销全局键，
+    /// 面板还没呼出，聚焦由 main.rs 在 show 之后做）。
+    pub fn needs_focus(self) -> bool {
+        matches!(self, Mode::Search | Mode::NoteEdit)
+    }
+
+    /// 进入该态是否要求面板已经显示。捕获态不要求：托盘「更换快捷键」是在面板收起时
+    /// 进入的，随后才呼出面板。
+    pub fn requires_visible_panel(self) -> bool {
+        self != Mode::ShortcutCapture
+    }
+}
+
 // 效果宿主：本 module 持有状态机锁期间调用这些方法，宿主实现不得回锁状态机。
 pub trait ModesHost {
     // —— 全局热键 seam（register_key 返回是否成功）
@@ -103,18 +152,19 @@ pub trait ModesHost {
     fn report_no_focus_target(&self);
     // —— 领域查询（备注编辑目标校验，由 main.rs 用历史 store 回答）
     fn validate_note_target(&self, target_id: Option<&str>) -> bool;
-    // —— 呼出快捷键被按下（main.rs 的分发器直接处理 Toggle，实现为协议完整性保留）
-    #[allow(dead_code)]
-    fn on_toggle_requested(&self);
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // state() 投影供测试与诊断使用
 pub struct PanelModesState {
     pub visible: bool,
     pub mode: Mode,
-    pub composing: bool,
-    pub note_entry_id: Option<String>,
+}
+
+impl PanelModesState {
+    /// 输入态（搜索 / 备注 / 捕获）豁免「浏览态自动失焦」——主线程只读这条判定的原子快照。
+    pub fn input_active(&self) -> bool {
+        self.visible && self.mode != Mode::Browse
+    }
 }
 
 pub struct PanelModes {
@@ -220,31 +270,41 @@ impl PanelModes {
         }
     }
 
-    // —— 输入态之间的互斥退出（进入另一输入态前调用，不归还焦点）——
-
-    fn exit_note_edit_internal(&mut self, host: &mut dyn ModesHost) {
-        self.mode = Mode::Browse;
-        self.note_entry_id = None;
-        host.send_panel_key("note-edit-exit", None);
-        host.blur_panel_if_focused();
-        self.apply_hotkeys(host);
+    // 把 Mode 判出来的事件投递出去：两条渲染层通道在此收口
+    fn announce(host: &mut dyn ModesHost, event: Option<RendererEvent>) {
+        match event {
+            Some(RendererEvent::PanelKey { action, note_entry_id }) => {
+                host.send_panel_key(action, note_entry_id.as_deref());
+            }
+            Some(RendererEvent::CaptureEnd) => host.send_capture_end(),
+            None => {}
+        }
     }
 
-    fn exit_search_internal(&mut self, host: &mut dyn ModesHost) {
+    // 退出当前输入态回到浏览态：改 mode → 清子态 → 热键差量 → 交还面板焦点 → 发退出事件。
+    // `announce_exit` = false 用于捕获确认（覆盖层由渲染层自行收起，不发 capture-end）。
+    // 不归还原程序焦点——那是 exit_input 的 restore_focus 参数的事。
+    // 已是浏览态则整段跳过并返回 false，让调用方知道热键与焦点还没同步过。
+    fn exit_input_internal(&mut self, host: &mut dyn ModesHost, announce_exit: bool) -> bool {
+        let prev = self.mode;
+        if prev == Mode::Browse {
+            return false;
+        }
         self.mode = Mode::Browse;
         self.composing = false;
-        host.send_panel_key("search-exit", None);
-        host.blur_panel_if_focused();
+        self.note_entry_id = None;
         self.apply_hotkeys(host);
+        host.blur_panel_if_focused();
+        if announce_exit {
+            Self::announce(host, prev.exit_event());
+        }
+        true
     }
 
-    #[allow(dead_code)] // 测试使用
     pub fn state(&self) -> PanelModesState {
         PanelModesState {
             visible: self.visible,
             mode: self.mode,
-            composing: self.composing,
-            note_entry_id: self.note_entry_id.clone(),
         }
     }
 
@@ -257,25 +317,14 @@ impl PanelModes {
         self.registered.get(accel).copied()
     }
 
-    // 输入态（搜索/备注/捕获）豁免「浏览态自动失焦」
-    #[allow(dead_code)]
-    pub fn is_input_active(&self) -> bool {
-        self.visible && self.mode != Mode::Browse
-    }
-
-    // 启动/更换呼出快捷键（捕获确认也走这里）
+    // 启动/更换呼出快捷键
     pub fn set_toggle_shortcut(&mut self, accel: &str, host: &mut dyn ModesHost) {
         self.toggle_accel = Some(accel.to_string());
         self.apply_hotkeys(host);
     }
 
     // 当前焦点快照（只读，不消费）。粘贴链路用它恢复原输入框；隐藏面板时才被消费清空。
-    #[allow(dead_code)]
-    pub fn focus_target_snapshot(&self) -> Option<&FocusTarget> {
-        self.focus_target.as_ref()
-    }
-
-    pub fn focus_target_snapshot_cloned(&self) -> Option<FocusTarget> {
+    pub fn focus_target_snapshot(&self) -> Option<FocusTarget> {
         self.focus_target.clone()
     }
 
@@ -291,25 +340,16 @@ impl PanelModes {
         host.send_panel_shown();
     }
 
-    // 隐藏面板：按捕获→备注→搜索的顺序逐层退出（同一时刻最多一个输入态，逐层只为发对退出事件），
-    // 然后注销导航键（呼出键保留）、消费焦点快照。
+    // 隐藏面板：退出当前输入态（发对退出事件，判定与 exit_input 共用 Mode::exit_event）、
+    // 注销导航键（呼出键保留）、消费焦点快照。
     // 返回被消费的焦点快照（restore_focus=true 时由调用方归还焦点）。
     pub fn hide(&mut self, host: &mut dyn ModesHost, restore_focus: bool) -> Option<FocusTarget> {
-        let prev_mode = self.mode;
-        let was_capturing = prev_mode == Mode::ShortcutCapture;
+        let prev = self.mode;
         self.visible = false;
         self.mode = Mode::Browse;
         self.composing = false;
         self.note_entry_id = None;
-        if was_capturing {
-            host.send_capture_end();
-        }
-        if prev_mode == Mode::NoteEdit {
-            host.send_panel_key("note-edit-exit", None);
-        }
-        if prev_mode == Mode::Search {
-            host.send_panel_key("search-exit", None);
-        }
+        Self::announce(host, prev.exit_event());
         self.apply_hotkeys(host);
         host.blur_panel_if_focused();
         let target = self.focus_target.take();
@@ -326,13 +366,13 @@ impl PanelModes {
     pub fn on_nav_action(&mut self, host: &mut dyn ModesHost, action: NavAction) {
         match action {
             NavAction::Search => {
-                self.begin_search(host);
+                self.enter_input(host, Mode::Search, None);
             }
             NavAction::Escape if self.mode == Mode::Search => {
-                self.end_search(host, true);
+                self.exit_input(host, Mode::Search, true);
             }
             NavAction::Note => {
-                self.begin_note_edit(host, None);
+                self.enter_input(host, Mode::NoteEdit, None);
             }
             other => {
                 host.send_panel_key(other.as_str(), None);
@@ -340,36 +380,52 @@ impl PanelModes {
         }
     }
 
-    // 进入搜索模式：先退出备注编辑；快照缺失先补拍（失败上报并放弃）；
-    // 切换热键集合（Space/Z/Del/B 让位），聚焦面板，通知渲染层。
-    pub fn begin_search(&mut self, host: &mut dyn ModesHost) -> bool {
-        if !host.can_interact() || !self.visible || self.mode == Mode::Search {
+    // 进入一个输入态。五步固定顺序，三个输入态共用：
+    //   1) 退出当前输入态（同一时刻最多一个；互斥退出要发对退出事件，但不归还程序焦点——
+    //      紧接着就要把面板聚焦起来）
+    //   2) 确保焦点快照：缺失先补拍，拍不到就上报并放弃，面板留在浏览态
+    //   3) 该态独有的准入：备注编辑要校验目标条目
+    //   4) 改 mode 并清子态（composing 只属于搜索、note_entry_id 只属于备注编辑）
+    //   5) 热键差量 → 需要焦点的态聚焦面板 → 发进入事件
+    // 捕获态是这条序列的例外：不要求面板已显示、也不聚焦（面板由 main.rs 随后呼出）。
+    pub fn enter_input(
+        &mut self,
+        host: &mut dyn ModesHost,
+        target: Mode,
+        note_target_id: Option<&str>,
+    ) -> bool {
+        if !host.can_interact() || self.mode == target {
             return false;
         }
-        if self.mode == Mode::NoteEdit {
-            self.exit_note_edit_internal(host);
+        if target.requires_visible_panel() && !self.visible {
+            return false;
         }
+        self.exit_input_internal(host, true);
         if !self.ensure_focus_target(host, true) {
             return false;
         }
-        self.mode = Mode::Search;
+        if target == Mode::NoteEdit && !host.validate_note_target(note_target_id) {
+            return false;
+        }
+        self.mode = target;
         self.composing = false;
+        self.note_entry_id =
+            if target == Mode::NoteEdit { note_target_id.map(|s| s.to_string()) } else { None };
         self.apply_hotkeys(host);
-        host.focus_panel();
-        host.send_panel_key("search-enter", None);
+        if target.needs_focus() {
+            host.focus_panel();
+        }
+        Self::announce(host, target.enter_event(self.note_entry_id.as_deref()));
         true
     }
 
-    // 退出搜索模式：恢复浏览态热键集合，归还焦点（快照保留）。
-    pub fn end_search(&mut self, host: &mut dyn ModesHost, restore_focus: bool) {
-        if self.mode != Mode::Search {
+    // 退出一个输入态（只有当前正处于该态才退）：五步同 exit_input_internal，外加按需把焦点
+    // 还给原程序（快照保留，同一次呼出内还能再进搜索 / 备注）。
+    pub fn exit_input(&mut self, host: &mut dyn ModesHost, from: Mode, restore_focus: bool) {
+        if self.mode != from {
             return;
         }
-        self.mode = Mode::Browse;
-        self.composing = false;
-        self.apply_hotkeys(host);
-        host.blur_panel_if_focused();
-        host.send_panel_key("search-exit", None);
+        self.exit_input_internal(host, true);
         if restore_focus {
             self.restore_focus_keeping_snapshot(host);
         }
@@ -386,78 +442,8 @@ impl PanelModes {
         }
     }
 
-    // 进入备注编辑：先退出搜索；补拍快照（失败上报并放弃）；校验目标条目；注销导航键，聚焦面板。
-    pub fn begin_note_edit(&mut self, host: &mut dyn ModesHost, target_id: Option<&str>) -> bool {
-        if !host.can_interact() || !self.visible || self.mode == Mode::NoteEdit {
-            return false;
-        }
-        if self.mode == Mode::Search {
-            self.exit_search_internal(host);
-        }
-        if !self.ensure_focus_target(host, true) {
-            return false;
-        }
-        if !host.validate_note_target(target_id) {
-            return false;
-        }
-        self.mode = Mode::NoteEdit;
-        self.note_entry_id = target_id.map(|s| s.to_string());
-        self.apply_hotkeys(host);
-        host.focus_panel();
-        host.send_panel_key("note-edit-enter", self.note_entry_id.as_deref());
-        true
-    }
-
-    // 退出备注编辑：通知渲染层保存草稿，归还焦点，恢复浏览态热键（快照保留）。
-    pub fn end_note_edit(&mut self, host: &mut dyn ModesHost, restore_focus: bool) {
-        if self.mode != Mode::NoteEdit {
-            return;
-        }
-        self.mode = Mode::Browse;
-        self.note_entry_id = None;
-        host.send_panel_key("note-edit-exit", None);
-        host.blur_panel_if_focused();
-        self.apply_hotkeys(host);
-        if restore_focus {
-            self.restore_focus_keeping_snapshot(host);
-        }
-    }
-
-    // 开始快捷键捕获：先退出其它输入态，注销呼出键与全部导航键（按键让位给要捕获的组合键）。
-    // 面板显示与 capture-start 事件由 main.rs 随后编排（show 保持捕获态）。
-    pub fn begin_shortcut_capture(&mut self, host: &mut dyn ModesHost) -> bool {
-        if !host.can_interact() || self.mode == Mode::ShortcutCapture {
-            return false;
-        }
-        if self.mode == Mode::NoteEdit {
-            self.exit_note_edit_internal(host);
-        }
-        if self.mode == Mode::Search {
-            self.exit_search_internal(host);
-        }
-        if !self.ensure_focus_target(host, true) {
-            return false;
-        }
-        self.mode = Mode::ShortcutCapture;
-        self.apply_hotkeys(host);
-        true
-    }
-
-    // 取消捕获：恢复原呼出键与（面板仍显示时的）导航键，通知渲染层收起覆盖层。
-    pub fn cancel_shortcut_capture(&mut self, host: &mut dyn ModesHost, restore_focus: bool) {
-        if self.mode != Mode::ShortcutCapture {
-            return;
-        }
-        self.mode = Mode::Browse;
-        self.apply_hotkeys(host);
-        host.blur_panel_if_focused();
-        host.send_capture_end();
-        if restore_focus {
-            self.restore_focus_keeping_snapshot(host);
-        }
-    }
-
-    // 捕获确认：新呼出键注册成功才算成功；成功则退出捕获态（不发 capture-end，覆盖层由渲染层自行收起）。
+    // 捕获确认：新呼出键注册成功才算成功；成功则退出捕获态，但不发 capture-end
+    // （覆盖层由渲染层自行收起）。这是 exit_input 唯一的变体：只差那一条事件。
     pub fn try_set_toggle_shortcut(&mut self, host: &mut dyn ModesHost, accel: &str) -> bool {
         if self.mode != Mode::ShortcutCapture {
             return false;
@@ -467,9 +453,7 @@ impl PanelModes {
         }
         self.registered.insert(accel.to_string(), HotkeyAction::Toggle);
         self.toggle_accel = Some(accel.to_string());
-        self.mode = Mode::Browse;
-        self.apply_hotkeys(host);
-        host.blur_panel_if_focused();
+        self.exit_input_internal(host, false);
         true
     }
 
@@ -562,7 +546,6 @@ mod tests {
                 Some(id) => id == "entry-1",
             }
         }
-        fn on_toggle_requested(&self) {}
     }
 
     struct Harness {
@@ -620,7 +603,7 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        assert!(h.modes.begin_search(&mut h.host));
+        assert!(h.modes.enter_input(&mut h.host, Mode::Search, None));
         let reg = h.host.registered.borrow();
         assert!(!reg.contains_key("Space"));
         assert!(!reg.contains_key("Z"));
@@ -645,9 +628,9 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        h.modes.begin_search(&mut h.host);
+        h.modes.enter_input(&mut h.host, Mode::Search, None);
         let snapshots_before = *h.host.snapshot_requests.borrow();
-        h.modes.end_search(&mut h.host, true);
+        h.modes.exit_input(&mut h.host, Mode::Search, true);
         let mut reg: Vec<String> = h.host.registered.borrow().keys().cloned().collect();
         let mut expected: Vec<String> = vec!["Control+Shift+V".to_string()];
         expected.extend(nav_accels().into_iter().map(|s| s.to_string()));
@@ -657,7 +640,7 @@ mod tests {
         assert_eq!(events_with_action(&h, "search-exit"), 1);
         assert_eq!(*h.host.restored.borrow(), vec![FocusTarget { hwnd: 1, focus_hwnd: 1, pid: 1, tid: 1 }]);
         // 快照保留：再次进入搜索不再补拍
-        h.modes.begin_search(&mut h.host);
+        h.modes.enter_input(&mut h.host, Mode::Search, None);
         assert_eq!(*h.host.snapshot_requests.borrow(), snapshots_before);
     }
 
@@ -673,7 +656,7 @@ mod tests {
             h.modes.on_nav_action(&mut h.host, a);
         }
         assert_eq!(events_with_action(&h, "escape"), 1);
-        h.modes.begin_search(&mut h.host);
+        h.modes.enter_input(&mut h.host, Mode::Search, None);
         let action = *h.host.registered.borrow().get("Esc").unwrap();
         if let HotkeyAction::Nav(a) = action {
             h.modes.on_nav_action(&mut h.host, a);
@@ -688,8 +671,8 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        h.modes.begin_search(&mut h.host);
-        assert!(h.modes.begin_note_edit(&mut h.host, Some("entry-1")));
+        h.modes.enter_input(&mut h.host, Mode::Search, None);
+        assert!(h.modes.enter_input(&mut h.host, Mode::NoteEdit, Some("entry-1")));
         assert_eq!(h.modes.state().mode, Mode::NoteEdit);
         assert!(!h.host.registered.borrow().contains_key("Enter"), "备注编辑中导航键全部让位");
         assert!(h.host.events.borrow().iter().any(|(ch, a, _)| ch == "panel:key" && a == "search-exit"));
@@ -728,10 +711,10 @@ mod tests {
         h.modes.ensure_focus_target(&mut h.host, false);
         h.modes.show(&mut h.host);
         assert_eq!(*h.host.no_focus_errors.borrow(), 0);
-        assert!(!h.modes.begin_search(&mut h.host));
+        assert!(!h.modes.enter_input(&mut h.host, Mode::Search, None));
         assert_eq!(*h.host.no_focus_errors.borrow(), 1);
         assert_eq!(h.modes.state().mode, Mode::Browse);
-        assert!(!h.modes.begin_note_edit(&mut h.host, None));
+        assert!(!h.modes.enter_input(&mut h.host, Mode::NoteEdit, None));
         assert_eq!(*h.host.no_focus_errors.borrow(), 2);
     }
 
@@ -742,7 +725,7 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        assert!(h.modes.begin_shortcut_capture(&mut h.host));
+        assert!(h.modes.enter_input(&mut h.host, Mode::ShortcutCapture, None));
         assert!(h.host.registered.borrow().is_empty(), "捕获中无任何全局键");
         assert!(h.modes.try_set_toggle_shortcut(&mut h.host, "Control+Alt+X"));
         assert!(h.host.registered.borrow().contains_key("Control+Alt+X"));
@@ -761,12 +744,12 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        h.modes.begin_shortcut_capture(&mut h.host);
+        h.modes.enter_input(&mut h.host, Mode::ShortcutCapture, None);
         // 模拟被占用：直接占用目标键
         h.host.registered.borrow_mut().insert("Control+Alt+X".to_string(), HotkeyAction::Toggle);
         assert!(!h.modes.try_set_toggle_shortcut(&mut h.host, "Control+Alt+X"));
         assert_eq!(h.modes.state().mode, Mode::ShortcutCapture);
-        h.modes.cancel_shortcut_capture(&mut h.host, true);
+        h.modes.exit_input(&mut h.host, Mode::ShortcutCapture, true);
         assert!(h.host.registered.borrow().contains_key("Control+Shift+V"));
         for (accel, _, _) in NAV_SHORTCUTS {
             assert!(h.host.registered.borrow().contains_key(accel), "{accel}");
@@ -780,11 +763,11 @@ mod tests {
         h.set_snapshot(FocusTarget { hwnd: 1, focus_hwnd: 1, pid: 1, tid: 1 });
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
-        assert!(h.modes.begin_shortcut_capture(&mut h.host));
+        assert!(h.modes.enter_input(&mut h.host, Mode::ShortcutCapture, None));
         h.modes.show(&mut h.host); // startShortcutCapture 随后的 showPanel
         assert!(h.host.registered.borrow().is_empty(), "捕获中 show 不注册任何键");
         assert_eq!(h.modes.state().mode, Mode::ShortcutCapture);
-        h.modes.cancel_shortcut_capture(&mut h.host, false);
+        h.modes.exit_input(&mut h.host, Mode::ShortcutCapture, false);
         assert_eq!(h.modes.state().mode, Mode::Browse);
         assert!(h.host.registered.borrow().contains_key("Up")); // 面板仍显示 → 导航键恢复
     }
@@ -796,7 +779,7 @@ mod tests {
         h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
         h.modes.ensure_focus_target(&mut h.host, true);
         h.modes.show(&mut h.host);
-        assert!(!h.modes.begin_note_edit(&mut h.host, Some("no-such-entry")));
+        assert!(!h.modes.enter_input(&mut h.host, Mode::NoteEdit, Some("no-such-entry")));
         assert_eq!(h.modes.state().mode, Mode::Browse);
         for (accel, _, _) in NAV_SHORTCUTS {
             assert!(h.host.registered.borrow().contains_key(accel), "{accel}");
@@ -810,5 +793,85 @@ mod tests {
         assert!(!is_repeatable_navigation("Enter"));
         assert!(!is_repeatable_navigation("Esc"));
         assert!(!is_repeatable_navigation("Control+Up"));
+    }
+
+    #[test]
+    fn 输入态的四条判定_进入与退出事件_是否聚焦_是否要求面板已显示() {
+        // 进入事件：搜索与备注各一条；捕获态没有（覆盖层由 main.rs 在呼出面板之后编排），
+        // 浏览态不是输入态。备注那条要带上目标条目 id，渲染层据此决定草稿从哪来。
+        assert_eq!(
+            Mode::Search.enter_event(None),
+            Some(RendererEvent::PanelKey { action: "search-enter", note_entry_id: None })
+        );
+        assert_eq!(
+            Mode::NoteEdit.enter_event(Some("e1")),
+            Some(RendererEvent::PanelKey {
+                action: "note-edit-enter",
+                note_entry_id: Some("e1".to_string()),
+            })
+        );
+        assert_eq!(Mode::ShortcutCapture.enter_event(None), None);
+        assert_eq!(Mode::Browse.enter_event(None), None);
+        // 退出事件：三个输入态各一条，捕获态走 shortcut:capture-end 这条独立通道
+        assert_eq!(
+            Mode::Search.exit_event(),
+            Some(RendererEvent::PanelKey { action: "search-exit", note_entry_id: None })
+        );
+        assert_eq!(
+            Mode::NoteEdit.exit_event(),
+            Some(RendererEvent::PanelKey { action: "note-edit-exit", note_entry_id: None })
+        );
+        assert_eq!(Mode::ShortcutCapture.exit_event(), Some(RendererEvent::CaptureEnd));
+        assert_eq!(Mode::Browse.exit_event(), None);
+        // 聚焦：搜索与备注要把面板聚焦起来，捕获态此刻还不要求（由 main.rs 呼出后再聚焦）
+        assert!(Mode::Search.needs_focus() && Mode::NoteEdit.needs_focus());
+        assert!(!Mode::ShortcutCapture.needs_focus() && !Mode::Browse.needs_focus());
+        // 准入：托盘「更换快捷键」在面板收起时进入捕获，所以只有捕获态不要求面板已显示
+        assert!(Mode::Search.requires_visible_panel() && Mode::NoteEdit.requires_visible_panel());
+        assert!(!Mode::ShortcutCapture.requires_visible_panel());
+    }
+
+    #[test]
+    fn 从捕获态进入搜索_先发capture_end再发进入事件() {
+        // 三个输入态共用 enter_input 之后，「退掉他态」不再只针对某一个态：从捕获态直接
+        // 进搜索也要发对 capture-end，否则渲染层的覆盖层会留在屏幕上（旧写法会静默盖过去）。
+        let mut h = make_machine();
+        h.set_snapshot(FocusTarget { hwnd: 1, focus_hwnd: 1, pid: 1, tid: 1 });
+        h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
+        h.modes.ensure_focus_target(&mut h.host, true);
+        h.modes.show(&mut h.host);
+        assert!(h.modes.enter_input(&mut h.host, Mode::ShortcutCapture, None));
+        assert!(h.modes.enter_input(&mut h.host, Mode::Search, None));
+        let seq: Vec<String> = h
+            .host
+            .events
+            .borrow()
+            .iter()
+            .filter(|(ch, a, _)| ch == "shortcut:capture-end" || a == "search-enter")
+            .map(|(ch, a, _)| if ch == "panel:key" { a.clone() } else { ch.clone() })
+            .collect();
+        assert_eq!(seq, vec!["shortcut:capture-end".to_string(), "search-enter".to_string()]);
+        assert_eq!(h.modes.state().mode, Mode::Search);
+    }
+
+    #[test]
+    fn exit_input只退指定那个态_同态重复进入幂等拒绝() {
+        let mut h = make_machine();
+        h.set_snapshot(FocusTarget { hwnd: 1, focus_hwnd: 1, pid: 1, tid: 1 });
+        h.modes.set_toggle_shortcut("Control+Shift+V", &mut h.host);
+        h.modes.ensure_focus_target(&mut h.host, true);
+        h.modes.show(&mut h.host);
+        assert!(h.modes.enter_input(&mut h.host, Mode::Search, None));
+        let events_before = h.host.events.borrow().len();
+        let blurred_before = *h.host.blurred.borrow();
+        // 已在搜索态：再进一次幂等拒绝，不重复发进入事件
+        assert!(!h.modes.enter_input(&mut h.host, Mode::Search, None));
+        assert_eq!(h.host.events.borrow().len(), events_before);
+        // 备注态没开：exit_input(NoteEdit) 整段跳过，搜索态、事件、焦点都不该动
+        h.modes.exit_input(&mut h.host, Mode::NoteEdit, true);
+        assert_eq!(h.modes.state().mode, Mode::Search);
+        assert_eq!(h.host.events.borrow().len(), events_before);
+        assert_eq!(*h.host.blurred.borrow(), blurred_before);
+        assert!(h.host.restored.borrow().is_empty());
     }
 }

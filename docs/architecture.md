@@ -29,7 +29,7 @@
 |---|---|---|---|
 | `main.rs` | 效果编排：持久化与广播、热键分发与方向键重复、IPC 注册、`AppState` | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `new(max, Ports, Clock)` + `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
-| `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32） | `show` `hide` `on_nav_action` `begin_search` `end_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` `is_repeatable_navigation` | 12 |
+| `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`） | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation` | 15 |
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主 | `spawn` + 15 个具名操作（见下） | — |
 | `panel_window.rs` | 面板几何、焦点、鼠标穿透；主线程投递与 DIP 换算 | `show_at_cursor` `park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`；纯函数 `centered` `parked` `contains_point` | 4 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 写盘失败重试标志 | `observe` `confirm` `skip_unchanged` `note_seq` `sync_now` | 7 |

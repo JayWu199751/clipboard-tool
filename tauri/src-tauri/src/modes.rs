@@ -136,10 +136,6 @@ impl ModesHost for Host {
         }
     }
 
-    fn on_toggle_requested(&self) {
-        // Toggle 统一由 dispatch_accel 在执行线程上处理（&self 拿不到 &mut PanelModes）；
-        // 本方法为 trait 完整性保留
-    }
 }
 
 // ---------- 具名操作（以下私有函数只在执行线程的任务闭包内调用） ----------
@@ -195,9 +191,7 @@ impl Modes {
                     let st = modes.state();
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         state.modes_visible.store(st.visible, Ordering::Relaxed);
-                        state
-                            .modes_input_active
-                            .store(st.visible && st.mode != Mode::Browse, Ordering::Relaxed);
+                        state.modes_input_active.store(st.input_active(), Ordering::Relaxed);
                     }
                 }
             });
@@ -279,7 +273,7 @@ impl Modes {
     }
 
     pub fn begin_search(&self) -> Reply<bool> {
-        self.submit(|modes, host| modes.begin_search(host))
+        self.submit(|modes, host| modes.enter_input(host, Mode::Search, None))
     }
 
     pub fn set_composing(&self, composing: bool) -> Reply<()> {
@@ -287,18 +281,18 @@ impl Modes {
     }
 
     pub fn begin_note_edit(&self, id: Option<String>) -> Reply<bool> {
-        self.submit(move |modes, host| modes.begin_note_edit(host, id.as_deref()))
+        self.submit(move |modes, host| modes.enter_input(host, Mode::NoteEdit, id.as_deref()))
     }
 
     pub fn end_note_edit(&self) -> Reply<()> {
-        self.submit(|modes, host| modes.end_note_edit(host, true))
+        self.submit(|modes, host| modes.exit_input(host, Mode::NoteEdit, true))
     }
 
     /// 托盘「更换快捷键」：进入捕获态、呼出并聚焦面板、通知渲染层显示覆盖层
     pub fn begin_shortcut_capture(&self) -> Reply<()> {
         let app = self.app.clone();
         self.submit(move |modes, host| {
-            if !modes.begin_shortcut_capture(host) {
+            if !modes.enter_input(host, Mode::ShortcutCapture, None) {
                 return;
             }
             show_on(&app, modes, host, false);
@@ -314,7 +308,7 @@ impl Modes {
     }
 
     pub fn cancel_shortcut_capture(&self) -> Reply<()> {
-        self.submit(|modes, host| modes.cancel_shortcut_capture(host, true))
+        self.submit(|modes, host| modes.exit_input(host, Mode::ShortcutCapture, true))
     }
 
     pub fn try_set_toggle_shortcut(&self, accel: &str) -> Reply<bool> {
@@ -328,6 +322,6 @@ impl Modes {
 
     /// 粘贴链路取当前焦点快照（无快照时命令侧按 no_focus_target 报错）
     pub fn focus_target(&self) -> Reply<Option<FocusTarget>> {
-        self.submit(|modes, _host| modes.focus_target_snapshot_cloned())
+        self.submit(|modes, _host| modes.focus_target_snapshot())
     }
 }
