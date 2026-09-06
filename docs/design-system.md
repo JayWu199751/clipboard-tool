@@ -23,7 +23,7 @@
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；边框描边用真 1px 实线 `--window-ring`（中灰 #757575，亮暗同值，阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
+**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；边框描边用真 2px 实线 `--window-ring`（中灰 #757575，亮暗同值；1px 画弧是细阶梯、观感比直边窄，2px 让弧长出抗锯齿翼；阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
 
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。

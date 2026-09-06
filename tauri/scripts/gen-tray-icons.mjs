@@ -204,10 +204,13 @@ export function decodePNG(buf) {
     for (let x = 0; x < width; x++) {
       const s = (y + 1) * stride + x * channels;   // out 顶部多留一行占位，行号要 +1
       const d = (y * width + x) * 4;
+      // 通道映射按 PNG 规范：type 0 灰、2 RGB、4 灰+alpha、6 RGBA。
+      // （旧写法把 type 6 的 G/B 也回落到 R——灰度托盘图标测不出这个 bug，
+      //   彩色截图一进分析就会把紫色读成灰色，2026-09-08 描边分析时撞现。）
       const r = out[s];
-      rgba[d] = channels === 3 || channels === 4 ? out[s] : r;
-      rgba[d + 1] = channels === 3 ? out[s + 1] : r;
-      rgba[d + 2] = channels === 3 ? out[s + 2] : r;
+      rgba[d] = channels >= 3 ? out[s] : r;
+      rgba[d + 1] = channels >= 3 ? out[s + 1] : r;
+      rgba[d + 2] = channels >= 3 ? out[s + 2] : r;
       rgba[d + 3] = channels === 4 ? out[s + 3] : channels === 2 ? out[s + 1] : 255;
     }
   }
