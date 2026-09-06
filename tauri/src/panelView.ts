@@ -1,5 +1,6 @@
-// 面板视图规则：搜索过滤、命中高亮、选中项落位，外加三条原先住在组件里的判定
-// （圆角外穿透、相对时间、按键码映射）。HUD 迁移后来源配色与自绘滚动条随旧界面退役。
+// 面板视图规则：搜索过滤、命中高亮、选中项落位，外加四条原先住在组件里的判定
+// （圆角外穿透、相对时间、按键码映射、滚动条 thumb 几何）。HUD 迁移后来源配色退役；
+// 自绘滚动条因「原生条在真机占布局宽度、把卡片右缘垫得比左缘远」而回归（见 styles.css）。
 // 纯逻辑、不依赖 React 与 Tauri，可被 scripts/panel-view-unit.mjs 用 plain node 直测。
 // 这里承载 README「操作」与 ADR-0004 定下的三条规则：
 //   匹配规则（大小写不敏感、空格分词多词 AND、正文+备注+来源应用五字段）
@@ -151,4 +152,28 @@ export function accelKeyFromCode(code: string): string | null {
     ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
   };
   return map[code] ?? null;
+}
+
+// 自绘滚动条 thumb 的几何：高度按可视比例、不小于 MIN_THUMB_HEIGHT，位置线性映射到滚动进度。
+export interface ScrollbarThumb {
+  visible: boolean;
+  top: number;
+  height: number;
+}
+
+export const MIN_THUMB_HEIGHT = 28;
+
+export function scrollbarThumb(
+  scrollTop: number,
+  clientHeight: number,
+  scrollHeight: number,
+): ScrollbarThumb {
+  if (scrollHeight <= clientHeight) {
+    return { visible: false, top: 0, height: MIN_THUMB_HEIGHT };
+  }
+  const height = Math.max(MIN_THUMB_HEIGHT, clientHeight * (clientHeight / scrollHeight));
+  const maxTop = clientHeight - height;
+  const maxScroll = scrollHeight - clientHeight;
+  const top = maxScroll > 0 ? (scrollTop / maxScroll) * maxTop : 0;
+  return { visible: true, top, height };
 }

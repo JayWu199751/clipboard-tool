@@ -171,13 +171,32 @@ p { font-weight: inherit; font-size: inherit; }
 /* ------------------------------------------------------------
    3. Card list（源 §4）
    ------------------------------------------------------------ */
-.cards-wrap { display: flex; flex-direction: column; min-height: 0; background: var(--bg-app); }
+.cards-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--bg-app); }
 
 .cards {
   flex: 1; overflow-y: auto; min-height: 0;
   padding: var(--space-3) var(--space-4) var(--space-4);
   scroll-padding-top: var(--space-3);
   display: flex; flex-direction: column; gap: var(--space-2);
+  /* 真机（WebView2 经典滚动条）里原生条占布局宽度，卡片右缘到边框会被垫出
+     「16px 留白 + 条宽」，与左缘的 16px 不对称（headless 是 overlay 条，测不出来）。
+     隐藏原生条，滚动位置由 .hud-scrollbar 自绘细条承担——左右留白回到同源对称。 */
+  scrollbar-width: none;
+}
+.cards::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* 自绘滚动条：4px 细条住在右侧 16px 留白内（right 5px + 宽 4px < 16px），
+   不压卡片；thumb 几何判定在 panelView.scrollbarThumb，到点自动隐藏。 */
+.hud-scrollbar {
+  position: absolute; top: 0; right: 5px; bottom: 0;
+  width: 4px; pointer-events: none;
+  opacity: 0; transition: opacity var(--dur-base) var(--ease-out);
+}
+.hud-scrollbar.is-visible { opacity: 1; }
+.hud-scrollbar-thumb {
+  position: absolute; left: 0; right: 0; top: 0;
+  border-radius: var(--radius-pill);
+  background: var(--scroll-thumb);
 }
 
 .card {

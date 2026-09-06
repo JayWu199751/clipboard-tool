@@ -55,7 +55,7 @@
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
-| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射。来源配色档位与自绘滚动条几何随旧界面退役 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode`；28 例 plain node |
+| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb`；31 例 plain node |
 | `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 5 例 + 对表 1 例 |
 | `useKeyboard.ts` | 渲染层唯一按键入口：`panel:key` 动作名 → 注册表处理函数的单点分发（ref 转发，不重订阅）。面板导航键由 Rust 全局拦截（浏览态窗口不持焦点），渲染层没有 keydown 监听——快捷键捕获覆盖层是唯一的例外，那是录入键值的编辑器行为 | — |
 | `clipStore.ts` | ClipStore 契约适配层：`RendererEntry` → `ClipItem` 投影 + `createClipStore`（query / total / getNote 只读视图）。组件不碰 invoke；copy / remove 等效果留在 App 接线（ADR-0008） | — |
@@ -63,7 +63,7 @@
 | `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
 | `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
-| `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与分数缩放留边、`.app-window` hairline 描边——原应用机制原样保留）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩与自绘滚动条退役。窗口圆角单一真源 `--radius-window` = 14px | — |
+| `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与分数缩放留边、`.app-window` hairline 描边——原应用机制原样保留）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 14px | — |
 | `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |

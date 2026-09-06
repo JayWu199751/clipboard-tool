@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEntry, PanelKeyAction } from './types';
-import { clampIndex, entryAt, formatTime, moveIndex, shouldIgnoreMouse, accelKeyFromCode } from './panelView';
+import { clampIndex, entryAt, formatTime, moveIndex, scrollbarThumb, shouldIgnoreMouse, accelKeyFromCode, MIN_THUMB_HEIGHT, type ScrollbarThumb } from './panelView';
 import { createClipStore, type ClipItem } from './clipStore';
 import { useKeyboard } from './useKeyboard';
 import { NAV_KEYS, chipLabel, footerChips } from './keyboard';
@@ -52,6 +52,9 @@ function App() {
   const cancelNoteBlurRef = useRef(false);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // 自绘滚动条（原生条在真机占布局宽度、破坏卡片左右对称，见 styles.css）
+  const listRef = useRef<HTMLUListElement>(null);
+  const [scrollState, setScrollState] = useState<ScrollbarThumb>({ visible: false, top: 0, height: MIN_THUMB_HEIGHT });
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
   const toastActionsRef = useRef(new Map<number, () => void>());
   const [focusError, setFocusError] = useState<FocusError | null>(null);
@@ -262,6 +265,32 @@ function App() {
     return () => darkModeMedia.removeEventListener('change', sync);
   }, []);
 
+  // —— 滚动条 thumb 跟随：接线与到点自动隐藏，几何判定在 panelView.scrollbarThumb ——
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    let hideTimer: number | null = null;
+    const update = () => {
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      if (scrollHeight <= clientHeight) {
+        setScrollState({ visible: false, top: 0, height: MIN_THUMB_HEIGHT });
+        return;
+      }
+      setScrollState(scrollbarThumb(scrollTop, clientHeight, scrollHeight));
+      if (hideTimer) window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setScrollState((s) => ({ ...s, visible: false })), 900);
+    };
+    el.addEventListener('scroll', update, { passive: true });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      observer.disconnect();
+      if (hideTimer) window.clearTimeout(hideTimer);
+    };
+  }, [items.length]);
+
   // —— 列表变化时选中项拉回有效范围；选中项滚进可视区 ——
   useEffect(() => { setSelected((index) => clampIndex(index, items.length)); }, [items.length]);
   useEffect(() => {
@@ -355,7 +384,8 @@ function App() {
         />
         <main className="cards-wrap">
           {items.length > 0 ? (
-            <ul className="cards" role="listbox" aria-label="剪贴板条目" tabIndex={0}>
+            <>
+            <ul className="cards" ref={listRef} role="listbox" aria-label="剪贴板条目" tabIndex={0}>
               {items.map((item, index) => (
                 <ClipCard
                   key={item.id}
@@ -378,6 +408,10 @@ function App() {
                 />
               ))}
             </ul>
+            <div className={'hud-scrollbar' + (scrollState.visible ? ' is-visible' : '')} aria-hidden="true">
+              <span className="hud-scrollbar-thumb" style={{ height: scrollState.height, transform: `translateY(${scrollState.top}px)` }} />
+            </div>
+            </>
           ) : (
             <div className="empty-state" role="status">
               <div className="empty-state__icon"><Icon id={total === 0 ? 'i-layers' : 'i-search'} size={20} /></div>

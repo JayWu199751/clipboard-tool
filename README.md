@@ -21,6 +21,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 - 中文输入法组合期间面板导航键全部暂停，不会误跳选中项。
 - 长按 `↑` / `↓` 时选中框与列表滚动即时跟随，不被输入重复速度甩开。
 - 键盘导航把选中项滚到列表边缘时，顶部滚到的是 `scroll-padding` 留白内侧（渐隐遮罩已随 HUD 退役）；回到第一项时列表也回到呼出时的位置。
+- 列表滚动条是自绘 4px 细条，住在右侧 16px 留白内、滚动后约 1 秒自动隐藏——原生条在真机占布局宽度，会把卡片右缘到边框的距离垫得比左缘宽，隐藏后左右对称。
 - 页脚快捷键提示与搜索井右侧的键名 chip 由真实键位表在启动时生成（`keyboard.ts` 注册表，一组一枚 chip）；页脚只列面板可见时用上的键——搜索键住搜索井，呼出键的展示归托盘菜单与捕获覆盖层。「提示 = 行为」不漂移；渲染层镜像与 Rust `NAV_SHORTCUTS` 的一致性由单测跨语言对表钉住。
 - 删除是延迟落盘的：Del 先把条目从可见列表摘除并起 6 秒撤销窗口，到点才调 `clipboard_remove` 持久化；撤销 = 摘除隐藏。6 秒内强退应用则该条不会被删（已确认的取舍）。
 - 搜索匹配正文、备注与来源应用（应用名 / 窗口标题 / 可执行文件路径），空格分词多词 AND、大小写不敏感、命中片段高亮；结果保持原顺序，不做匹配度排序。
@@ -87,12 +88,12 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 ```bash
 cd tauri
 npm run test        # = test:view + test:rust
-npm run test:view   # node scripts/panel-view-unit.mjs —— 35 例
+npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
 npm run test:rust   # cargo test —— 81 例（另有 1 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwright install chromium）
 ```
 
-116 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4 / tray 3，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
+119 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4 / tray 3，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
 
 `test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 116 例统计。
 
@@ -128,7 +129,7 @@ npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwri
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。
-- HUD 迁移（2026-09-08）后：亮 / 暗两主题整体观感对照 `clipboard-app/` 源 UI（token 面为不透明实底，旧毛玻璃与「降低透明度」分支已退役）；OS 切亮暗应即时换肤、无刷新、无 FOUC。
+- HUD 迁移（2026-09-08）后：亮 / 暗两主题整体观感对照 `clipboard-app/` 源 UI（token 面为不透明实底，旧毛玻璃与「降低透明度」分支已退役）；OS 切亮暗应即时换肤、无刷新、无 FOUC；列表自绘滚动条细条的观感与「滚动后约 1 秒自动隐藏」的节奏一并确认（卡片左右缘到边框对称由浏览器探针守住，真机滚动条占位差异正是这次修复的动机）。
 - 暗色描边四边等宽（2026-09-05 修复，HUD 迁移后由更新过的 `test:browser` 像素测量守住）：125% / 150% / 175% 各缩放档位下四边宽度应一致；实际合成与 DPI 仍需眼看。
 - 圆角穿透半径改由样式表读出（2026-09-07）后：面板四角「看不见的圆弧外」点击应落到下层窗口，且穿透边界与看到的圆角重合（HUD 迁移后样式表值为 14px）。
 - 删除撤销（HUD 迁移新增）：Del 后条目立即从列表消失、红色 toast 带「撤销」，6 秒内点撤销条目回到原位置；到点后重启应用确认该条确已删除。

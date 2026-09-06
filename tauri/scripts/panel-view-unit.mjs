@@ -12,6 +12,7 @@ import {
   formatTime,
   highlight,
   moveIndex,
+  scrollbarThumb,
   shouldIgnoreMouse,
   spansToText,
 } from '../src/panelView.ts';
@@ -352,6 +353,25 @@ test('渲染层键位镜像与Rust表逐条一致_一条不多一条不少', () 
     eq(byAction.get(key), accel, `导航键 ${key} 漂移：`);
   }
   eq(byAction.size, Object.keys(NAV_KEYS).length, '两侧键数必须相等');
+});
+
+// ---------- 滚动条几何 ----------
+
+test('滚动条_内容不超高时不可见', () => {
+  eq(scrollbarThumb(0, 600, 600), { visible: false, top: 0, height: 28 });
+  eq(scrollbarThumb(0, 600, 100), { visible: false, top: 0, height: 28 });
+});
+
+test('滚动条_thumb高度按可视比例_且不破下限', () => {
+  eq(scrollbarThumb(0, 600, 1200).height, 300);
+  eq(scrollbarThumb(0, 600, 60000).height, 28);
+});
+
+test('滚动条_top随滚动进度线性到最大位', () => {
+  eq(scrollbarThumb(0, 600, 1200).top, 0);
+  eq(scrollbarThumb(300, 600, 1200).top, 150);
+  eq(scrollbarThumb(600, 600, 1200).top, 300);
+  eq(scrollbarThumb(0, 600, 60000).visible, true);
 });
 
 console.log(`\npanelView+keyboard: ${passed} passed, ${failures.length} failed`);
