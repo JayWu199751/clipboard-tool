@@ -47,7 +47,6 @@ export async function installPanelHarness(page, entries) {
       },
       invoke(command, args) {
         if (command === 'clipboard_get') return Promise.resolve(history);
-        if (command === 'shortcut_get') return Promise.resolve('Control+Shift+V');
         if (command === 'plugin:event|listen') {
           const registered = listeners.get(args.event) ?? [];
           registered.push(args.handler);

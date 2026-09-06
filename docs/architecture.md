@@ -64,7 +64,7 @@
 | `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
 | `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与分数缩放留边、`.app-window` hairline 描边——原应用机制原样保留）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩与自绘滚动条退役。窗口圆角单一真源 `--radius-window` = 14px | — |
-| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge（含 `shortcut_get` 桩）与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
+| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 
@@ -78,7 +78,7 @@
 | `clipboard_copy` | 复制并粘贴（三入口共用） | `{ ok, message }` |
 | `clipboard_remove` / `clipboard_pin` / `clipboard_clear` | 删除 / 置顶切换 / 清空 | `bool` |
 | `note_set` / `note_begin_edit` / `note_end_edit` | 写备注 / 进入备注编辑态 / 退出 | `bool` |
-| `shortcut_get` / `shortcut_try` / `shortcut_cancel` | 读当前呼出键 accel（页脚 chip 的真实键位来源）/ 试设 / 取消捕获 | `String` / `{ ok, formatted }` / `bool` |
+| `shortcut_try` / `shortcut_cancel` | 试设呼出键 / 取消捕获 | `{ ok, formatted }` / `bool` |
 | `search_activate` / `search_set_composing` | 进入搜索态 / 同步 IME 组合状态 | `bool` |
 | `window_hide` / `window_set_ignore_mouse` | 隐藏面板 / 切换鼠标穿透 | `bool` |
 

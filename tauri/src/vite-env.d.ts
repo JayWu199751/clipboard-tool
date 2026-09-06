@@ -42,8 +42,6 @@ interface ClipboardAPI {
   setIgnoreMouse(ignore: boolean, forward?: boolean): Promise<void>;
   activateSearch(): Promise<void>;
   setSearchComposing(composing: boolean): Promise<void>;
-  /** 当前呼出键 accel（协议串，如 Control+Shift+V）；页脚 chip 的真实键位来源 */
-  getShortcut(): Promise<string>;
 }
 
 declare global {
@@ -53,5 +51,4 @@ declare global {
 }
 
 export {};
-
 

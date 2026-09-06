@@ -323,7 +323,9 @@ p { font-weight: inherit; font-size: inherit; }
   min-width: 0; overflow: hidden; white-space: nowrap;
 }
 .hud-footer .hints { margin-left: auto; display: flex; align-items: center; gap: var(--space-3); }
-.hud-footer .hints span { display: inline-flex; align-items: center; gap: 5px; }
+.hud-footer .hints span { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+/* 溢出时宁可裁掉也不压扁：chip 与计数被 flex-shrink 挤瘦就是「间距不均匀」的来路 */
+.hud-footer #status-count { flex: none; }
 .hud-footer .kbd { height: 16px; font-size: 9.5px; border-bottom-width: 1px; }
 /* 焦点恢复失败的底栏提示（原应用 panel:focus-error 的皮肤） */
 .hud-footer .footer-error {

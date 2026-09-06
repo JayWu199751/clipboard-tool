@@ -60,6 +60,4 @@ window.clipboardAPI = {
   activateSearch: () => invoke('search_activate'),
   // 搜索：中文输入法组合状态同步（组合期间主进程暂停面板导航键）
   setSearchComposing: (composing) => invoke('search_set_composing', { composing }),
-  // 页脚 chip 启动时取一次真实呼出键（迁移提示词第 4 条：提示 = 行为，不漂移）
-  getShortcut: () => invoke<string>('shortcut_get'),
 };

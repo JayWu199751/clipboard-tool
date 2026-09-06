@@ -327,13 +327,18 @@ test('注册表九条_呼出键取真实值_描述全中文', () => {
   assert(bindings.every((binding) => binding.desc.length > 0 && !/[a-zA-Z]{4,}/.test(binding.desc.replace(/Ctrl|Alt|Esc|Del|Tab|Home|End/g, ''))), '描述应为中文');
 });
 
-test('页脚chip由注册表同一份键值生成_顺序稳定', () => {
-  const chips = footerChips('Control+Shift+V');
-  eq(chips.map((chip) => chip.label), ['选择', '复制', '置顶', '备注', '删除', '搜索', '隐藏', '唤起']);
-  eq(chips[0].chips, ['↑', '↓']);
-  eq(chips[5].chips, ['空格']);
-  const THIN = '\u2009';
-  eq(chips[7].chips, [['Ctrl', '\u21e7', 'V'].join(THIN)]);
+test('页脚chip由注册表同一份键值生成_一组一枚_顺序稳定', () => {
+  const chips = footerChips();
+  eq(chips.map((chip) => chip.label), ['选择', '复制', '置顶', '备注', '删除', '隐藏']);
+  // ↑↓ 并排写进同一枚 chip（源 UI 同形）；两枚会把这组撑出第三次 5px 间隙，节奏断裂
+  eq(chips[0].chips, ['↑↓']);
+  eq(chips.map((chip) => chip.chips.length).every((n) => n === 1), true);
+});
+
+test('页脚只列面板可见时用上的键_搜索住井里_呼出住托盘与覆盖层', () => {
+  const labels = footerChips().map((chip) => chip.label);
+  assert(!labels.includes('搜索'), '空格 chip 归搜索井');
+  assert(!labels.includes('唤起'), '呼出键在面板隐藏时才有效，页脚看不见它');
 });
 
 // ---------- 跨语言对表：NAV_KEYS 镜像 vs Rust NAV_SHORTCUTS ----------

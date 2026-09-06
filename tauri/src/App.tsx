@@ -55,7 +55,6 @@ function App() {
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
   const toastActionsRef = useRef(new Map<number, () => void>());
   const [focusError, setFocusError] = useState<FocusError | null>(null);
-  const [toggleAccel, setToggleAccel] = useState('Control+Shift+V');
 
   const [shortcutCapture, setShortcutCapture] = useState<{ current: string; status: { text: string; ok: boolean } | null } | null>(null);
   const shortcutCaptureRef = useRef(shortcutCapture);
@@ -227,7 +226,6 @@ function App() {
   useEffect(() => {
     void window.clipboardAPI.getHistory().then(setEntries);
     window.clipboardAPI.onUpdated(setEntries);
-    void window.clipboardAPI.getShortcut().then((accel) => { if (accel) setToggleAccel(accel); });
     window.clipboardAPI.onFocusError(setFocusError);
     // 每次呼出重置选中/搜索/备注态；延迟删除的计时器跨隐藏继续（撤销窗口是秒表语义）
     window.clipboardAPI.onPanelShown(() => {
@@ -300,7 +298,6 @@ function App() {
           setShortcutCapture((s) => (s ? { ...s, status: { text: result.formatted + ' 已被占用或无效，请换一个', ok: false } } : s));
           return;
         }
-        setToggleAccel(accel); // 页脚 chip 跟着真实键位走（提示 = 行为）
         setShortcutCapture((s) => (s ? { ...s, status: { text: '已设置为 ' + result.formatted, ok: true } } : s));
         window.setTimeout(() => setShortcutCapture(null), 1200);
       });
@@ -342,7 +339,7 @@ function App() {
     };
   }, []);
 
-  const chips = footerChips(toggleAccel);
+  const chips = footerChips();
 
   return (
     <div className="desktop">
@@ -403,7 +400,7 @@ function App() {
             <span className="hints" aria-hidden="true">
               {chips.map((chip) => (
                 <span key={chip.label}>
-                  {chip.chips.map((label) => <kbd className="kbd" key={label}>{label}</kbd>)}
+                  <kbd className="kbd">{chip.chips.join('')}</kbd>
                   {chip.label}
                 </span>
               ))}

@@ -105,7 +105,7 @@ export interface KeyBinding {
 
 /**
  * 注册表全量（帮助/审计口径）：导航与操作键全部来自 NAV_KEYS 镜像（= 原应用现有键位），
- * 呼出键由启动时 shortcut_get 的真实 accel 填入。
+ * 呼出键条目供审计对表；页脚展示子集见 footerChips。
  */
 export function buildBindings(toggleAccel: string): KeyBinding[] {
   return [
@@ -128,18 +128,19 @@ export interface FooterChip {
 }
 
 /**
- * 页脚提示条：由注册表同一份键值生成（↑/↓ 合并一枚组合提示）。
+ * 页脚提示条：由注册表同一份键值生成，一组一枚 chip（↑↓ 并排写进同一枚 kbd，
+ * 与源 UI 的 <kbd>↑↓</kbd> 同形——两枚 chip 会让这组多出一次 5px 间隙，节奏断裂）。
+ * 只列面板可见时用得上的键：搜索键住在搜索井的 chip 里（空格），呼出键只在面板
+ * 隐藏时有意义（那时页脚不可见；它的展示归托盘菜单与捕获覆盖层）。
  * 顺序即页脚顺序；一切按键提示都从这里出，禁止在组件里写死键名。
  */
-export function footerChips(toggleAccel: string): FooterChip[] {
+export function footerChips(): FooterChip[] {
   return [
-    { chips: [chipLabel(NAV_KEYS.up), chipLabel(NAV_KEYS.down)], label: '选择' },
+    { chips: [chipLabel(NAV_KEYS.up) + chipLabel(NAV_KEYS.down)], label: '选择' },
     { chips: [chipLabel(NAV_KEYS.enter)], label: '复制' },
     { chips: [chipLabel(NAV_KEYS.pin)], label: '置顶' },
     { chips: [chipLabel(NAV_KEYS.note)], label: '备注' },
     { chips: [chipLabel(NAV_KEYS.delete)], label: '删除' },
-    { chips: [chipLabel(NAV_KEYS.search)], label: '搜索' },
     { chips: [chipLabel(NAV_KEYS.escape)], label: '隐藏' },
-    { chips: [chipLabel(toggleAccel)], label: '唤起' },
   ];
 }

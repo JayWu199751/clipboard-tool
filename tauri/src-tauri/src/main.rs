@@ -530,18 +530,6 @@ async fn note_end_edit(_app: AppHandle, state: State<'_, AppState>) -> Result<bo
     Ok(true)
 }
 
-// 呼出键只读查询：页脚 chip 必须由真实键位表生成（迁移提示词第 4 条），
-// 渲染层启动时取一次当前 accel 走 combo() 展示。空串按默认键归一，与 format_shortcut 同口径。
-#[tauri::command]
-fn shortcut_get(state: State<AppState>) -> String {
-    let accel = state.settings.lock().unwrap().shortcut.clone();
-    if accel.is_empty() {
-        settings::DEFAULT_SHORTCUT.to_string()
-    } else {
-        accel
-    }
-}
-
 // 更换快捷键：渲染进程按下组合键后请求注册
 #[tauri::command]
 async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String) -> Result<ShortcutTryResult, String> {
@@ -818,7 +806,6 @@ fn main() {
             note_set,
             note_begin_edit,
             note_end_edit,
-            shortcut_get,
             shortcut_try,
             shortcut_cancel,
             search_activate,
