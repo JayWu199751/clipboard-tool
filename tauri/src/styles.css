@@ -67,10 +67,15 @@ html[data-theme="dark"] .app-window {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* 分数缩放下给 .desktop 四边各留恰好 1 个设备像素，让描边完全落进窗口内
-   （透明窗口按 per-pixel alpha 裁切，贴物理边缘的描边会被裁淡）。
+/* 四边各留恰好 1 个设备像素，让描边完全不贴窗口物理边缘
+   （透明窗口按 per-pixel alpha 裁切，贴边缘的描边会被裁淡甚至整列丢失——
+   真机实证：100% 缩放下右缘描边没了，正是描边占住 surface 最后一列、
+   而 418×scale 取整后 surface 少一列时被裁掉；「整数 DPR 天然精确」是旧假设，已推翻）。
    描边宽度只能用整数 CSS 像素：Chromium 会把 border-width 的分数值归一成整数 CSS px；
-   四边等宽由 padding 对齐盒边缘相位来保。100%/200% 整数 DPR 天然精确，无需覆盖。 */
+   四边等宽由 padding 对齐盒边缘相位来保。>200% 的非整数缩放罕见，未覆盖。 */
+@media (max-resolution: 1.1dppx) {
+  .desktop { padding: 1px; }
+}
 @media (min-resolution: 1.2dppx) and (max-resolution: 1.4dppx) {
   .desktop { padding: 0.8px; }
 }
@@ -79,6 +84,10 @@ html[data-theme="dark"] .app-window {
 }
 @media (min-resolution: 1.7dppx) and (max-resolution: 1.9dppx) {
   .desktop { padding: 0.5714px; }
+}
+@media (min-resolution: 1.9dppx) and (max-resolution: 2.1dppx) {
+  /* 200% 下 0.5px 实测左右取整不对称（左留 2 设备像素、右仍贴边），用 1px = 2 设备像素 */
+  .desktop { padding: 1px; }
 }
 
 /* ------------------------------------------------------------

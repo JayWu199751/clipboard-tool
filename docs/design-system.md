@@ -22,7 +22,7 @@
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；hairline 用真边框（阴影矩形逐边取整不可控），分数缩放下 `resolution` 媒体查询给 `.desktop` 留 1 设备像素防裁淡。
+**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；hairline 用真边框（阴影矩形逐边取整不可控），`resolution` 媒体查询在所有缩放档位（含 100%/200% 整数档）给 `.desktop` 留恰好 1-2 个设备像素——描边永不贴窗口物理边缘，真机实证贴边列会被 surface 取整裁掉。
 
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。
