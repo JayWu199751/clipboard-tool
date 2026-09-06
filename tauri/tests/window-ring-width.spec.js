@@ -19,16 +19,13 @@ const ITEMS = 8;
 const RING_ALPHA = 0.08; // rgba(255,255,255,0.08) 的名义 alpha
 const ALPHA_ON = 16;     // alpha 高于此值视为卡片内容（窗口外是透明的）
 
-test.use({ viewport: { width: 418, height: 823 } });
+test.use({ viewport: { width: 418, height: 823 }, colorScheme: 'dark' });
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('clipboard-tool:theme', 'dark');
-  });
   await installPanelHarness(page, makeEntries(ITEMS));
   await page.goto('/');
   await page.waitForFunction(
-    (count) => document.querySelectorAll('.history-item').length === count,
+    (count) => document.querySelectorAll('.card').length === count,
     ITEMS,
   );
   // 隐藏卡片子元素，让描边裸露在均匀的卡片背景上（见文件头说明）

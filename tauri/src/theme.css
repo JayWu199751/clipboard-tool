@@ -1,0 +1,144 @@
+/* ============================================================
+   ClipFlow HUD — 设计 token（迁移自 clipboard-app/css/style.css §1/§1b）
+   唯一事实源：两套 token 块原样搬运，选择器语义与数值不得改动。
+   主题纯跟随系统：index.html 内联脚本按 prefers-color-scheme 预载
+   （防 FOUC），运行期 matchMedia change 实时同步 data-theme。
+   一切颜色/尺寸/动效必须走 token，禁止组件内写死色值。
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-desktop:   #050506;
+  --bg-app:       #0B0B0E;
+  --bg-card:      #141419;
+  --bg-input:     #15151A;
+  --bg-hover:     rgba(255, 255, 255, 0.05);
+  --bg-active:    rgba(255, 255, 255, 0.09);
+
+  --bg-selected:      rgba(123, 119, 224, 0.13);
+  --bg-selected-hover:rgba(123, 119, 224, 0.18);
+  --border-subtle:    rgba(255, 255, 255, 0.06);
+  --border-strong:    rgba(255, 255, 255, 0.12);
+  --border-selected:  rgba(123, 119, 224, 0.45);
+
+  /* Text */
+  --text-primary:   #F2F2F5;
+  --text-secondary: #A0A0AC;
+  --text-tertiary:  #7E7E8A;
+  --text-disabled:  #55555F;
+  --text-on-accent: #FFFFFF;
+
+  /* Accent (low-saturation indigo) */
+  --accent:        #7B77E0;
+  --accent-strong: #6763D6;
+  --accent-text:   #A7A4F0;
+  --accent-soft:   rgba(123, 119, 224, 0.13);
+
+  /* Status */
+  --success:      #57C08A;
+  --success-soft: rgba(87, 192, 138, 0.16);
+  --error:        #E05A52;
+
+  /* Type colors */
+  --type-text:  #8FA6C9;
+  --type-image: #57A8C0;
+
+  /* Typography */
+  --font-ui:   "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
+
+  /* Layout — fixed window, never adapts to the viewport */
+  --window-w: 400px;
+  --window-h: 800px;
+  --search-h: 60px;
+  --footer-h: 30px;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;
+
+  --radius-window: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-window: 0 40px 100px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --shadow-card:   0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-toast:  0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-inset:  inset 0 1px 0 rgba(255, 255, 255, 0.03);
+
+  /* Themeable primitives */
+  --selection-bg:   rgba(123, 119, 224, 0.35);
+  --selection-text: #FFFFFF;
+  --scroll-thumb:       rgba(255, 255, 255, 0.12);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.22);
+  --ring-soft:      rgba(123, 119, 224, 0.12);
+  --pop-bg:         rgba(26, 26, 33, 0.95);
+  --pop-border:     rgba(255, 255, 255, 0.1);
+  --checker:        rgba(255, 255, 255, 0.03);
+  --desktop-glow-1: rgba(103, 99, 214, 0.07);
+  --desktop-glow-2: rgba(87, 168, 192, 0.05);
+
+  /* Motion */
+  --dur-fast: 100ms;
+  --dur-base: 160ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:  cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+/* ------------------------------------------------------------
+   Light theme — token override
+   ------------------------------------------------------------ */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-desktop:   #D3D3DA;
+  --bg-app:       #F0F0F3;
+  --bg-card:      #FFFFFF;
+  --bg-input:     #F3F3F6;
+  --bg-hover:     rgba(20, 20, 30, 0.045);
+  --bg-active:    rgba(20, 20, 30, 0.08);
+
+  --bg-selected:       rgba(93, 89, 202, 0.09);
+  --bg-selected-hover: rgba(93, 89, 202, 0.14);
+  --border-subtle:     rgba(20, 20, 30, 0.08);
+  --border-strong:     rgba(20, 20, 30, 0.16);
+  --border-selected:   rgba(93, 89, 202, 0.5);
+
+  --text-primary:   #1A1A20;
+  --text-secondary: #5A5A66;
+  --text-tertiary:  #6E6E7A;
+  --text-disabled:  #A2A2AC;
+  --text-on-accent: #FFFFFF;
+
+  --accent:        #5D59CA;
+  --accent-strong: #514DC0;
+  --accent-text:   #5D59CA;
+  --accent-soft:   rgba(93, 89, 202, 0.1);
+
+  --success:      #2E9E68;
+  --success-soft: rgba(46, 158, 104, 0.14);
+  --error:        #C9443C;
+
+  --type-text:  #4A6A96;
+  --type-image: #2E7D96;
+
+  --shadow-window: 0 30px 70px rgba(30, 30, 60, 0.25), 0 0 0 1px rgba(20, 20, 30, 0.1);
+  --shadow-card:   0 1px 3px rgba(30, 30, 60, 0.08);
+  --shadow-toast:  0 10px 28px rgba(30, 30, 60, 0.22);
+  --shadow-inset:  inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  --selection-bg:   rgba(93, 89, 202, 0.22);
+  --selection-text: #1A1A20;
+  --scroll-thumb:       rgba(20, 20, 30, 0.16);
+  --scroll-thumb-hover: rgba(20, 20, 30, 0.28);
+  --ring-soft:  rgba(93, 89, 202, 0.16);
+  --pop-bg:     rgba(255, 255, 255, 0.96);
+  --pop-border: rgba(20, 20, 30, 0.1);
+  --checker:    rgba(20, 20, 30, 0.05);
+  --desktop-glow-1: rgba(93, 89, 202, 0.1);
+  --desktop-glow-2: rgba(46, 125, 150, 0.08);
+}

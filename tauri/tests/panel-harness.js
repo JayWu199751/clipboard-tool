@@ -1,9 +1,10 @@
 // 面板渲染层的测试替身：伪造 Tauri IPC，喂给 App 一份历史与一条 panel:key 事件通道。
 // 三条浏览器用例共用，避免各自复制一份假 API 而漂移。
 
-// styles.css 里 .history-list 的滚动边缘渐隐遮罩宽度。
-// 首尾卡片与滚动口边缘的空隙必须大于它，否则卡片顶部会被淡出成一道阴影。
-export const FADE_INSET = 10;
+// styles.css 里 .cards 的列表内边距与 scroll-padding-top（var(--space-3) = 12px）。
+// HUD 迁移后滚动边缘不再有渐隐遮罩；首尾选中项与滚动口边缘的空隙仍须不小于它，
+// 否则「贴边」就等于被裁在窗口圆角带里。
+export const FADE_INSET = 12;
 
 export function makeEntries(count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -46,6 +47,7 @@ export async function installPanelHarness(page, entries) {
       },
       invoke(command, args) {
         if (command === 'clipboard_get') return Promise.resolve(history);
+        if (command === 'shortcut_get') return Promise.resolve('Control+Shift+V');
         if (command === 'plugin:event|listen') {
           const registered = listeners.get(args.event) ?? [];
           registered.push(args.handler);

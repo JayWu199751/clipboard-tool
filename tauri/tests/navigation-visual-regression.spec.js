@@ -7,29 +7,31 @@ test.beforeEach(async ({ page }) => {
 
 test('长按上下方向键期间选中框与快速移动保持同步', async ({ page }) => {
   await page.goto('/');
-  await page.waitForFunction(() => document.querySelectorAll('.history-item').length === 60);
+  await page.waitForFunction(() => document.querySelectorAll('.card').length === 60);
   await page.waitForFunction(() => window.__panelKeyReady === true);
 
   // page.evaluate 在浏览器里执行，Node 侧的常量要靠参数传进去。
   const result = await page.evaluate(async (fadeInset) => {
     const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-    const list = document.querySelector('.history-list');
+    const list = document.querySelector('.cards');
     list.scrollTo({ top: 0, behavior: 'auto' });
 
     const sample = () => {
-      const selected = document.querySelector('.history-item.is-selected');
+      const selected = document.querySelector('.card.is-selected');
       const listRect = list.getBoundingClientRect();
       const selectedRect = selected?.getBoundingClientRect();
-      const runningAnimations = [...document.querySelectorAll('.history-item')]
-        .reduce((count, item) => count + item.getAnimations().filter((animation) => animation.playState === 'running').length, 0);
-      // 可视区要再让开上下各 fadeInset：贴到滚动口边缘等于被渐隐遮罩盖住，
-      // 按原始盒子判定会把这种「贴边」误判成可见。
+      // HUD 的选中态过渡的是背景/描边颜色（transition: background 实际驱动 background-color，
+      // 100ms token 动效），不影响「选中框与滚动同步」；会甩开同步的只有几何类动画，只数它们。
+      const runningAnimations = [...document.querySelectorAll('.card')]
+        .reduce((count, item) => count + item.getAnimations().filter((animation) => animation.playState === 'running' && (animation.transitionProperty === 'transform' || animation.transitionProperty === 'opacity')).length, 0);
+      // HUD 口径：顶部要留在 scroll-padding（fadeInset）之内——贴顶等于撞窗口圆角带；
+      // 底部对齐滚动口下缘（页脚分隔线）是 nearest 的设计内结果，只按「不裁过半个像素」判。
       const visible = selectedRect
         ? selectedRect.top >= listRect.top + fadeInset - 1
-          && selectedRect.bottom <= listRect.bottom - fadeInset + 1
+          && selectedRect.bottom <= listRect.bottom + 0.5
         : false;
       return {
-        index: [...document.querySelectorAll('.history-item')].indexOf(selected),
+        index: [...document.querySelectorAll('.card')].indexOf(selected),
         visible,
         selectedTop: selectedRect?.top,
         selectedBottom: selectedRect?.bottom,

@@ -1,8 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { ClipboardEntry } from './types';
-
-type PanelKeyAction = 'up' | 'down' | 'enter' | 'delete' | 'escape' | 'pin' | 'search-enter' | 'search-exit' | 'note-edit-enter' | 'note-edit-exit';
+import type { ClipboardEntry, PanelKeyAction } from './types';
 
 interface ShortcutTryResult {
   ok: boolean;
@@ -44,6 +42,8 @@ interface ClipboardAPI {
   setIgnoreMouse(ignore: boolean, forward?: boolean): Promise<void>;
   activateSearch(): Promise<void>;
   setSearchComposing(composing: boolean): Promise<void>;
+  /** 当前呼出键 accel（协议串，如 Control+Shift+V）；页脚 chip 的真实键位来源 */
+  getShortcut(): Promise<string>;
 }
 
 declare global {
@@ -53,6 +53,5 @@ declare global {
 }
 
 export {};
-
 
 

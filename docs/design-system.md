@@ -1,54 +1,41 @@
-# 设计系统 — Apple (Espana) Cathedral
+# 设计系统 — ClipFlow HUD
 
-> UI 语言的单一出处。token 落地在 `tauri/src/styles.css` 的 `:root`；改视觉前先读这里，别在组件里另起一套值。
+> UI 语言的单一出处。2026-09-08 起界面是 ClipFlow HUD（迁移自 `clipboard-app/`，其 DESIGN.md / REVIEW.md 是迁移的事实源存档）。
+> token 落地在 `tauri/src/theme.css`（`:root` 暗色 + `html[data-theme="light"]` 覆盖块），组件样式在 `tauri/src/styles.css`——选择器语义与数值照搬源 UI，改视觉前先对照，别在组件里另起一套值。
+> 旧版 Apple (Espana) Cathedral 语言随标题栏 / 详情面板 / 毛玻璃一并退役，其历史见 [changelog.md](changelog.md) 2026-09-05/06 条目。
 
+**视觉方向**：Swiss-minimal HUD（Raycast / Maccy 快贴气质）——无 chrome 窗口、近黑中性面、一枚低饱和靛蓝 accent 只服务选中与焦点；卡片靠明度 + hairline + 微阴影抬起，不靠装饰。
 
-> Cathedral of white space with whispered headlines. A vast pale hall where massive weight-700 type hangs in the air, tethered only by pastel product colors and a single blue thread.
+**Tokens（theme.css，两套块）**
+| 语义 | 暗 | 亮 | 用途 |
+|------|-----|-----|------|
+| `--bg-app` | #0B0B0E | #F0F0F3 | 窗口画布 / 搜索头 / 页脚 |
+| `--bg-card` | #141419 | #FFFFFF | 卡片 |
+| `--bg-selected` / `--border-selected` | 靛 13% / 白 45% alpha | 靛 9% / 黑 50% alpha | 选中态 = accent tint + accent 描边（禁止实心大色块） |
+| `--text-primary/secondary/tertiary/disabled` | #F2F2F5 / #A0A0AC / #7E7E8A / #55555F | #1A1A20 / #5A5A66 / #6E6E7A / #A2A2AC | 正文对比度 ≥4.5:1 两套主题已复算（16.4 / 17.3 起） |
+| `--accent / --accent-text / --accent-soft` | #7B77E0 / #A7A4F0 / 13% | #5D59CA / #5D59CA / 10% | 焦点环、复制胶囊、置顶图钉 |
+| `--success` / `--error` | #57C08A / #E05A52 | #2E9E68 / #C9443C | 复制闪光与 toast 勾 / 删除 toast 叉 |
+| `--type-text / --type-image` | #8FA6C9 / #57A8C0 | #4A6A96 / #2E7D96 | 卡片类型 chip（仅图标，着色走 token） |
+| `--shadow-window/card/toast/inset` | 黑重深影 | 着色低扩散 | 层级 |
 
-本项目 UI 采用 Apple (Espana) 产品页语言的桌面化移植：
+**主题**：纯跟随系统，无应用内开关。index.html 内联脚本按 `prefers-color-scheme` 首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时换肤。
 
-**Tokens（已落地到 src/styles.css :root）**
-| 语义 | 值 | 用途 |
-|------|-----|------|
-| Primary Ink | #1d1d1f | 主文本、标题、强对比前景 |
-| Mid Gray | #707070 | 次要文本、禁用占位 |
-| Deep Gray | #474747 | 导航、工具按钮默认 |
-| Hairline | #d6d6d6 | 唯一允许的边框（毛细线，分区不用实线） |
-| Canvas | #f5f5f7 | 窗口画布灰带，与 Paper 交替形成节奏 |
-| Paper | #ffffff | 卡片、白底、输入框 |
-| Cool Wash | #e8e8ed | 悬浮洗色、hover 底 |
-| Faded Surface | #fafafc | 抬升面板、导航毛玻璃 |
-| Quiet Dot | #777779 | 分页点、微弱指示 |
-| Electric Blue | #0071e3 | 唯一彩色 CTA 实心胶囊按钮 |
-| Link Blue | #0066cc | 行内链接/高亮 |
-| Ember | #b64400 | 新品/警示点缀 |
-|  pastel finishes | Sky #c8d8e0 / Citrus #dddc8c / Starlight #f0e4d3 / Silver #e3e4e5 / Blush #e8d0d0 / Indigo #596680 / Midnight #2e3642 | 图标与插画的唯一彩色来源（来源应用色板） |
+**排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**排版**
-- SF Pro Display 600/700 作标题（tracking -1.44px at 96px, -0.28px at 56px, +0.007em at 28px）
-- SF Pro Text 400 作正文 13px（tracking -0.08px）、微文案 11-12px（tracking -0.04em~0.04em），`font-feature-settings: "numr" 1` 保持数位等宽
-- 行高：Display 1.04–1.07 正本 1.45 形成层次，无需字号跳变
+**布局与密度**：窗口恒 418×823（内容 = 源 UI 的 400×800 加描边留边，`resizable:false`，用户拍板不改配置）；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 14px（`--radius-window`，穿透判定读 `.desktop` 的 computed 值）；hairline 用真边框（阴影矩形逐边取整不可控），分数缩放下 `resolution` 媒体查询给 `.desktop` 留 1 设备像素防裁淡。
 
-**间距与圆角**
-- 基准 4px，密度 comfortable；卡片 16px（小密度）/ 28px（大卡），按钮 980px/999px 胶囊，输入 12px，窗口 20px
-- Section 间距由 Canvas/Paper 交替完成，不用分割线或阴影
+**组件映射**
+- 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。
+- 卡片：meta 行 = 仅图标的类型 chip · 来源 · 时间 ·（可选）图钉 ·（可选）内联备注，单行省略号；文字卡 3 行 clamp；图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）；hover/选中浮现「复制」胶囊。
+- 备注编辑：meta 行内联输入框（Enter 保存 / Esc 取消 / 失焦保存），`.card:has(.note-input) .card__meta { padding-right: 76px }` 避让复制胶囊。
+- 页脚：左「N 条」，右 chip 组——**全部由 `keyboard.ts` 注册表 + `shortcut_get` 真实键位生成**，禁止写死键名。
+- toast：底部居中胶囊栈，成功绿勾 / 删除红叉 + 「撤销」动作（6s）；`aria-live`。
+- 快捷键捕获覆盖层：原应用功能保留，HUD 皮肤（token 面 + 胶囊按钮）。
 
-**动效与减少动态**
-- 只有 `transform` / `opacity` / `filter` 参与动画，几何属性不动，卡片因此能待在合成层里
-- 进出用对称路径：进入与退出共用同一组弹簧参数，中途可中断，重复触发不排队
-- 悬浮反馈是 1px 抬升加按压回弹，不放大、不改色相；Toast 与详情面板靠 blur 半径同步变化物化
-- 系统「减少动态效果」与「降低透明度」两条设置下，过渡与 blur 全部彻底关闭，不留残余动画
+**动效与减少动态**：卡片状态过渡 100ms（`--dur-fast`）；复制闪光 500ms 绿→选中色收口；toast 240ms 进 / 160ms 出；`prefers-reduced-motion` 全关。源 UI 的 `window-in` 入场动画不迁移——真实应用显隐由原生窗口承担，scale 变换还会污染描边与滚动几何的测量。
 
-**组件映射（clipboard-tool 落地）**
-- 全局窗：Canvas 半透明毛玻璃（blur 28px saturate 180%），Paper 卡片无边无影，靠画布交替区分
-- 标题栏：44px 导航条，Faded Surface 毛玻璃（blur 20px）
-- 搜索框：Paper 底 + Hairline，聚焦时 Electric Blue 0.14 4px 环
-- 列表卡：Paper 底，默认 transparent 边，悬停 Faded Surface，选中 Electric Blue 6% + 1px 18% 内描边，深色模式对应 #2c2c2e/#3a3a3c
-- 列表滚动边缘：上下各 10px 的 mask 渐隐代替硬分割线（分区不用实线，见「间距与圆角」）。首尾卡片与滚动口边缘的留白必须大于这 10px，且要用同源的 `scroll-padding` 把这段留白声明成可视区；只靠 `padding` 不够，`scrollIntoView({block:'nearest'})` 会把留白当多余空间滚掉，卡片顶部就淡成一道阴影。
-- 来源图标：按 appName 映射 pastel finish（notes/figma/safari 等），作唯一彩色载体，UI 其余保持单色
-- 底部快捷条：Canvas 毛玻璃 + kbd 白底 Hairline 胶囊，Quiet Dot 标注
-- 按钮：实心胶囊仅 Electric Blue 一处，其余 Ghost 胶囊（transparent + Hairline），Do: 单区最多一枚实心 CTA
+**无障碍**：`role=listbox/option` + `aria-selected`、`aria-live` toast、`:focus-visible` 环、对比度 ≥4.5:1 双主题复算过。
 
-**Do / Don't 执行**
-- Do: 交替 #ffffff/#f5f5f7 形成节奏、28px/16px 圆角、980px 胶囊、17px 级跟踪 -0.022em、numr 数字
-- Dont: 无阴影（仅选中 1px 内描边）、无彩色点缀（除 Electric/Link Blue 与产品图）、标题不小于 12px 感知、不用实线分割、圆角不小于 8px、UI 面无渐变、字重不低于 400/600、链接无底盒、段落不居中
+**Do / Don't**
+- Do：一切颜色/尺寸/动效走 token；mono=机器数据、sans=人的内容；选中=accent tint+描边；破坏性操作必须可撤销。
+- Don't：组件内写死色值；实心大色块；emoji 图标（空态用 SVG）；渐变装饰背景；卡片堆叠网页风；侧栏/多面板工作台形态回潮；页脚或提示里手写键名。

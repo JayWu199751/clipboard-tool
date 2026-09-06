@@ -13,7 +13,7 @@
 use crate::panel_window::PanelWindow;
 use crate::settings::Settings;
 use crate::hotkeys::format_shortcut;
-use crate::{set_auto_start, AppState};
+use crate::{commit, set_auto_start, AppState};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -90,6 +90,15 @@ impl Tray {
                 "autostart" => {
                     let enabled = !app.state::<AppState>().settings.lock().unwrap().auto_start;
                     set_auto_start(app, enabled);
+                }
+                // HUD 迁移：标题栏随旧版界面退役，清空历史入口搬进托盘菜单。
+                // store 锁短暂持有、不碰模式状态（线程模型红线），commit = 落盘 + 广播。
+                "clear-history" => {
+                    let state = app.state::<AppState>();
+                    {
+                        state.store.lock().unwrap().clear();
+                    }
+                    commit(app, &state);
                 }
                 "quit" => {
                     app.exit(0);
@@ -192,9 +201,10 @@ impl Tray {
         let sep1 = PredefinedMenuItem::separator(app)?;
         let autostart_item =
             CheckMenuItem::with_id(app, "autostart", labels.autostart, true, auto_start, None::<&str>)?;
+        let clear_item = MenuItem::with_id(app, "clear-history", "清空历史", true, None::<&str>)?;
         let sep2 = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-        Menu::with_items(app, &[&show_item, &shortcut_item, &sep1, &autostart_item, &sep2, &quit])
+        Menu::with_items(app, &[&show_item, &shortcut_item, &sep1, &autostart_item, &clear_item, &sep2, &quit])
     }
 }
 

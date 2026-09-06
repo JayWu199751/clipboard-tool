@@ -1,5 +1,5 @@
-// 面板视图规则：搜索过滤、命中高亮、选中项落位，外加五条原先住在组件里的判定
-// （圆角外穿透、来源配色档位、相对时间、按键码映射、滚动条几何）。
+// 面板视图规则：搜索过滤、命中高亮、选中项落位，外加三条原先住在组件里的判定
+// （圆角外穿透、相对时间、按键码映射）。HUD 迁移后来源配色与自绘滚动条随旧界面退役。
 // 纯逻辑、不依赖 React 与 Tauri，可被 scripts/panel-view-unit.mjs 用 plain node 直测。
 // 这里承载 README「操作」与 ADR-0004 定下的三条规则：
 //   匹配规则（大小写不敏感、空格分词多词 AND、正文+备注+来源应用五字段）
@@ -90,8 +90,8 @@ export function moveIndex(index: number, length: number, direction: NavDirection
 }
 
 // 按索引取条目：越界（含负数、空列表）返回 null，调用方不必自己防下标越界。
-// 需要「越界即拉回有效范围」的调用方先过 clampIndex 再取。
-export function entryAt(entries: ClipboardEntry[], index: number): ClipboardEntry | null {
+// 需要「越界即拉回有效范围」的调用方先过 clampIndex 再取。泛型：ClipItem 视图同样适用。
+export function entryAt<T>(entries: T[], index: number): T | null {
   if (index < 0 || index >= entries.length) return null;
   return entries[index] ?? null;
 }
@@ -127,38 +127,16 @@ export function shouldIgnoreMouse(
   return dx * dx + dy * dy > r * r;
 }
 
-// 来源应用名 → 图标配色档位（styles.css 的 .source-* 类名）。顺序即优先级。
-const SOURCE_TONES: ReadonlyArray<readonly [string[], string]> = [
-  [['备忘录', '便签', 'notes'], 'source-notes'],
-  [['figma'], 'source-figma'],
-  [['safari', '浏览器', 'browser', 'chrome', 'edge'], 'source-safari'],
-  [['pages'], 'source-pages'],
-  [['访达', 'finder', 'explorer'], 'source-finder'],
-  [['预览', 'preview'], 'source-preview'],
-  [['文本编辑', 'textedit', 'notepad'], 'source-textedit'],
-  [['终端', 'terminal', 'powershell', 'cmd'], 'source-terminal'],
-  [['截图', 'screenshot', 'snip'], 'source-screenshot'],
-  [['代码', 'code', 'vscode', 'xcode'], 'source-code'],
-];
-
-export function sourceTone(appName?: string): string {
-  const name = (appName || '').toLowerCase();
-  for (const [keywords, tone] of SOURCE_TONES) {
-    if (keywords.some((keyword) => name.includes(keyword))) return tone;
-  }
-  return 'source-icon';
-}
-
-// 相对时间四段阈值：一分钟内「刚刚」，一小时内按分钟，一天内按小时，再往前给日期。
+// 相对时间五档（HUD 迁移：阈值词表照搬源 UI clipboard.js timeAgo——
+// 刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前，界面全中文）。
 // now 由调用方传入（渲染层用 Date.now()），阈值边界因此可以直接单测。
 export function formatTime(ts: number, now: number): string {
   const diff = now - ts;
   if (diff < 60_000) return '刚刚';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (diff < 2 * 86_400_000) return '昨天';
+  return `${Math.floor(diff / 86_400_000)} 天前`;
 }
 
 // DOM 按键 code（KeyV / Digit1 / F5 / ArrowUp 等）→ accelerator 主键，无法映射返回 null。
@@ -173,28 +151,4 @@ export function accelKeyFromCode(code: string): string | null {
     ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
   };
   return map[code] ?? null;
-}
-
-// 自绘滚动条 thumb 的几何：高度按可视比例、不小于 MIN_THUMB_HEIGHT，位置线性映射到滚动进度。
-export interface ScrollbarThumb {
-  visible: boolean;
-  top: number;
-  height: number;
-}
-
-export const MIN_THUMB_HEIGHT = 28;
-
-export function scrollbarThumb(
-  scrollTop: number,
-  clientHeight: number,
-  scrollHeight: number,
-): ScrollbarThumb {
-  if (scrollHeight <= clientHeight) {
-    return { visible: false, top: 0, height: MIN_THUMB_HEIGHT };
-  }
-  const height = Math.max(MIN_THUMB_HEIGHT, clientHeight * (clientHeight / scrollHeight));
-  const maxTop = clientHeight - height;
-  const maxScroll = scrollHeight - clientHeight;
-  const top = maxScroll > 0 ? (scrollTop / maxScroll) * maxTop : 0;
-  return { visible: true, top, height };
 }

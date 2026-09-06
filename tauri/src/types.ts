@@ -1,3 +1,18 @@
+// 主进程 panel:key 转发的动作名（协议唯一出处：Rust panel_modes::Mode/NavAction 的 as_str）。
+// up/down/enter/delete/pin/escape 是导航键直投；search-enter/exit 与
+// note-edit-enter/exit 是输入态进出事件（B / 空格在 Rust 状态机内消化后转名投出）。
+export type PanelKeyAction =
+  | 'up'
+  | 'down'
+  | 'enter'
+  | 'delete'
+  | 'pin'
+  | 'escape'
+  | 'search-enter'
+  | 'search-exit'
+  | 'note-edit-enter'
+  | 'note-edit-exit';
+
 // 剪贴板历史条目类型定义
 export interface SourceApp {
   exePath: string; // 来源 exe 完整路径，如 C:\Program Files\Google\Chrome\chrome.exe

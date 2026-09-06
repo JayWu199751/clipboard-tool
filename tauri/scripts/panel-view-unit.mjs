@@ -1,6 +1,9 @@
-// 面板视图规则单测：直测 src/panelView.ts 的 interface，零框架、零 mock。
+// 面板视图规则单测：直测 src/panelView.ts 与 src/keyboard.ts 的 interface，零框架、零 mock。
 // 运行：npm run test:view（Node >= 22.18 原生剥离 TS 类型）
+// 末尾的跨语言对表把 keyboard.ts 的 NAV_KEYS 钉在 Rust panel_modes.rs 的 NAV_SHORTCUTS 上——
+// HUD 迁移后页脚 chip「由真实键位表生成」的约束靠这条测试在 CI 里成立，不靠自觉。
 
+import { readFileSync } from 'node:fs';
 import {
   accelKeyFromCode,
   clampIndex,
@@ -9,11 +12,10 @@ import {
   formatTime,
   highlight,
   moveIndex,
-  scrollbarThumb,
   shouldIgnoreMouse,
-  sourceTone,
   spansToText,
 } from '../src/panelView.ts';
+import { NAV_KEYS, accelToKeyId, buildBindings, chipLabel, combo, footerChips } from '../src/keyboard.ts';
 
 let passed = 0;
 const failures = [];
@@ -163,7 +165,8 @@ test('entryAt_越界与空列表返回 null_不抛异常', () => {
 
 // ---------- 圆角外穿透 ----------
 
-// 面板窗口的实际尺寸（418×823 CSS 像素），圆角取样式表的 20px
+// 面板窗口的实际尺寸（418×823 CSS 像素）；圆角由调用方从样式表读出传入（现值 14px），
+// 这里取 20 只测几何判定本身与半径参数化的形状
 const PANEL = { left: 0, top: 0, right: 418, bottom: 823 };
 const R = 20;
 
@@ -216,38 +219,6 @@ test('穿透_半径超过短边一半时按浏览器口径收敛', () => {
   assert(!shouldIgnoreMouse(1, 1, small, -8));
 });
 
-// ---------- 来源配色档位 ----------
-
-test('来源配色_十档关键字各自命中', () => {
-  eq(sourceTone('备忘录'), 'source-notes');
-  eq(sourceTone('Figma'), 'source-figma');
-  eq(sourceTone('Google Chrome'), 'source-safari');
-  eq(sourceTone('Pages'), 'source-pages');
-  eq(sourceTone('访达'), 'source-finder');
-  eq(sourceTone('预览'), 'source-preview');
-  eq(sourceTone('文本编辑'), 'source-textedit');
-  eq(sourceTone('WindowsTerminal'), 'source-terminal');
-  eq(sourceTone('PixPin 截图'), 'source-screenshot');
-  eq(sourceTone('Visual Studio Code'), 'source-code');
-});
-
-test('来源配色_大小写归一与子串命中', () => {
-  eq(sourceTone('GOOGLE CHROME'), 'source-safari');
-  eq(sourceTone('Microsoft Edge'), 'source-safari');
-  eq(sourceTone('powershell.exe'), 'source-terminal');
-});
-
-test('来源配色_未知与空名回落兜底档', () => {
-  eq(sourceTone(undefined), 'source-icon');
-  eq(sourceTone(''), 'source-icon');
-  eq(sourceTone('WeChat'), 'source-icon');
-});
-
-test('来源配色_表内顺序即优先级', () => {
-  // 同时含「终端」与「代码」，靠前的终端档胜出
-  eq(sourceTone('代码终端'), 'source-terminal');
-});
-
 // ---------- 相对时间 ----------
 
 const MINUTE = 60_000;
@@ -267,14 +238,16 @@ test('相对时间_分钟档与小时档的阈值边界', () => {
   eq(formatTime(0, DAY - 1), '23 小时前');
 });
 
-test('相对时间_跨天后给日期与时分_个位补零', () => {
+test('相对时间_跨天首日为昨天_边界含等于', () => {
   const ts = Date.parse('2026-09-05T08:09:00');
-  eq(formatTime(ts, ts + DAY), '9月5日 08:09');
+  eq(formatTime(ts, ts + DAY), '昨天');
+  eq(formatTime(ts, ts + 2 * DAY - 1), '昨天');
 });
 
-test('相对时间_月份与日期不补零_小时分钟补零', () => {
+test('相对时间_两天起按天前取整', () => {
   const ts = Date.parse('2026-01-02T03:04:00');
-  eq(formatTime(ts, ts + DAY), '1月2日 03:04');
+  eq(formatTime(ts, ts + 2 * DAY), '2 天前');
+  eq(formatTime(ts, ts + 11 * DAY - 1), '10 天前');
 });
 
 // ---------- 按键码映射 ----------
@@ -311,26 +284,72 @@ test('按键码_裸修饰键与未知码返回null', () => {
   eq(accelKeyFromCode(''), null);
 });
 
-// ---------- 滚动条几何 ----------
+// ---------- 键盘注册表（keyboard.ts） ----------
 
-test('滚动条_内容不超高时不可见', () => {
-  eq(scrollbarThumb(0, 600, 600), { visible: false, top: 0, height: 28 });
-  eq(scrollbarThumb(0, 600, 100), { visible: false, top: 0, height: 28 });
+test('accel归一_修饰键与别名收成keyId形', () => {
+  eq(accelToKeyId('Control+Shift+V'), 'ctrl+shift+v');
+  eq(accelToKeyId('CommandOrControl+D'), 'ctrl+d');
+  eq(accelToKeyId('Alt+X'), 'alt+x');
+  eq(accelToKeyId('Super+Space'), 'meta+ ');
+  eq(accelToKeyId('Up'), 'arrowup');
+  eq(accelToKeyId('Down'), 'arrowdown');
+  eq(accelToKeyId('Esc'), 'escape');
+  eq(accelToKeyId('Space'), ' ');
+  eq(accelToKeyId('Delete'), 'delete');
+  eq(accelToKeyId('Enter'), 'enter');
+  eq(accelToKeyId('B'), 'b');
 });
 
-test('滚动条_thumb高度按可视比例_且不破下限', () => {
-  eq(scrollbarThumb(0, 600, 1200).height, 300);
-  eq(scrollbarThumb(0, 600, 60000).height, 28);
+test('combo平台化显示_中文键名_修饰缩写', () => {
+  const THIN = '\u2009';
+  eq(combo('ctrl+shift+v'), ['Ctrl', '\u21e7', 'V'].join(THIN));
+  eq(combo(' '), '空格');
+  eq(combo('arrowup'), '↑');
+  eq(combo('arrowdown'), '↓');
+  eq(combo('enter'), '⏎');
+  eq(combo('escape'), 'Esc');
+  eq(combo('delete'), 'Del');
+  eq(combo('alt+x'), ['Alt', 'X'].join(THIN));
 });
 
-test('滚动条_top随滚动进度线性到最大位', () => {
-  eq(scrollbarThumb(0, 600, 1200).top, 0);
-  eq(scrollbarThumb(300, 600, 1200).top, 150);
-  eq(scrollbarThumb(600, 600, 1200).top, 300);
-  eq(scrollbarThumb(0, 600, 60000).visible, true);
+test('chipLabel把accel一步转成展示文案', () => {
+  const THIN = '\u2009';
+  eq(chipLabel('Control+Shift+V'), ['Ctrl', '\u21e7', 'V'].join(THIN));
+  eq(chipLabel('Space'), '空格');
+  eq(chipLabel('Z'), 'Z');
 });
 
-console.log(`\npanelView: ${passed} passed, ${failures.length} failed`);
+test('注册表九条_呼出键取真实值_描述全中文', () => {
+  const bindings = buildBindings('Alt+J');
+  eq(bindings.length, 9);
+  const toggle = bindings.find((binding) => binding.action === 'toggle');
+  eq(toggle.keys, ['Alt+J']);
+  assert(bindings.every((binding) => binding.desc.length > 0 && !/[a-zA-Z]{4,}/.test(binding.desc.replace(/Ctrl|Alt|Esc|Del|Tab|Home|End/g, ''))), '描述应为中文');
+});
+
+test('页脚chip由注册表同一份键值生成_顺序稳定', () => {
+  const chips = footerChips('Control+Shift+V');
+  eq(chips.map((chip) => chip.label), ['选择', '复制', '置顶', '备注', '删除', '搜索', '隐藏', '唤起']);
+  eq(chips[0].chips, ['↑', '↓']);
+  eq(chips[5].chips, ['空格']);
+  const THIN = '\u2009';
+  eq(chips[7].chips, [['Ctrl', '\u21e7', 'V'].join(THIN)]);
+});
+
+// ---------- 跨语言对表：NAV_KEYS 镜像 vs Rust NAV_SHORTCUTS ----------
+
+test('渲染层键位镜像与Rust表逐条一致_一条不多一条不少', () => {
+  const rust = readFileSync(new URL('../src-tauri/src/panel_modes.rs', import.meta.url), 'utf8');
+  const rows = [...rust.matchAll(/\("(.+?)",\s*NavAction::(\w+),\s*(true|false)\)/g)];
+  assert(rows.length === 8, `Rust NAV_SHORTCUTS 应为 8 条，实为 ${rows.length}`);
+  const byAction = new Map(rows.map(([, accel, action]) => [action.toLowerCase(), accel]));
+  for (const [key, accel] of Object.entries(NAV_KEYS)) {
+    eq(byAction.get(key), accel, `导航键 ${key} 漂移：`);
+  }
+  eq(byAction.size, Object.keys(NAV_KEYS).length, '两侧键数必须相等');
+});
+
+console.log(`\npanelView+keyboard: ${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   for (const f of failures) console.error(`  - ${f.name}: ${f.message}`);
   process.exit(1);

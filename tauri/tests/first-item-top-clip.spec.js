@@ -2,8 +2,9 @@ import { test, expect } from '@playwright/test';
 import { FADE_INSET, installPanelHarness, makeEntries } from './panel-harness.js';
 
 // 呼出面板后按下键把列表滚走，再按上键回到第一项：首项必须回到呼出时的位置，
-// 不能被列表顶部的渐隐遮罩盖住。到最后一项时末项同理。
+// 不能贴进窗口顶部的圆角带（scroll-padding-top 与列表内边距同源）。
 // 复现路径：scrollIntoView({block:'nearest'}) 会把容器顶部预留的留白当成多余空间滚掉。
+// HUD 迁移注：滚动边缘的渐隐遮罩已随旧设计退役，底部口径从「不被淡出」放宽为「不被裁掉」。
 
 const ITEMS = 20;
 const press = async (page, action, times) => {
@@ -19,9 +20,9 @@ const press = async (page, action, times) => {
 
 const geometry = (page) =>
   page.evaluate(() => {
-    const list = document.querySelector('.history-list');
-    const selected = document.querySelector('.history-item.is-selected');
-    const items = [...document.querySelectorAll('.history-item')];
+    const list = document.querySelector('.cards');
+    const selected = document.querySelector('.card.is-selected');
+    const items = [...document.querySelectorAll('.card')];
     const listRect = list.getBoundingClientRect();
     const rect = selected.getBoundingClientRect();
     return {
@@ -38,13 +39,13 @@ test.beforeEach(async ({ page }) => {
   await installPanelHarness(page, makeEntries(ITEMS));
   await page.goto('/');
   await page.waitForFunction(
-    (count) => document.querySelectorAll('.history-item').length === count,
+    (count) => document.querySelectorAll('.card').length === count,
     ITEMS,
   );
   await page.waitForFunction(() => window.__panelKeyReady === true);
 });
 
-test('回到第一项时首项不被顶部渐隐遮罩盖住', async ({ page }) => {
+test('回到第一项时首项回到scroll-padding留白内', async ({ page }) => {
   const fresh = await geometry(page);
   expect(fresh.scrollTop).toBe(0);
   expect(fresh.topGap).toBeGreaterThanOrEqual(FADE_INSET);
@@ -66,9 +67,12 @@ test('回到第一项时首项不被顶部渐隐遮罩盖住', async ({ page }) 
   expect(extraUp.topGap).toBeGreaterThanOrEqual(FADE_INSET);
 });
 
-test('到最后一项时末项不被底部渐隐遮罩盖住', async ({ page }) => {
+test('到最后一项时末项不被滚动口下缘裁掉', async ({ page }) => {
   await press(page, 'down', ITEMS * 2);
   const last = await geometry(page);
   expect(last.index).toBe(ITEMS - 1);
-  expect(last.bottomGap).toBeGreaterThanOrEqual(FADE_INSET);
+  // HUD 列表的下缘是页脚分隔线（不是窗口圆角带），nearest 把末项底边对齐到滚动口
+  // 下缘是设计内行为；Chromium 把 scrollTop 取整到整数设备像素，分数行高下允许
+  // 半像素的过冲，所以口径是「不被裁掉」：bottomGap ≥ -0.5。
+  expect(last.bottomGap).toBeGreaterThanOrEqual(-0.5);
 });

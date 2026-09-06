@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>剪贴板</title>
+    <script>
+      /* 主题纯跟随系统：首帧前按 prefers-color-scheme 定 data-theme，防 FOUC
+         （迁移提示词第 5 条；运行期实时同步在 App.tsx 的 matchMedia 监听）。 */
+      (function () {
+        var m = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+        document.documentElement.dataset.theme = m && m.matches ? 'dark' : 'light';
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -43,7 +43,7 @@
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
 | `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
-| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地 | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
+| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——`clipboard_clear` 的唯一入口） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
 `history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
@@ -51,17 +51,22 @@
 
 ## 渲染层地图
 
-`tauri/src/` 与 `tauri/tests/`。
+`tauri/src/` 与 `tauri/tests/`。HUD 迁移（2026-09-08）后界面是 ClipFlow 单列表形态：搜索头 / 卡片列表 / 快捷键页脚，标题栏与详情面板退役。
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
-| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、来源配色档位、相对时间阈值、按键码映射、滚动条 thumb 几何 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `sourceTone` `formatTime` `accelKeyFromCode` `scrollbarThumb`；35 例 plain node |
+| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射。来源配色档位与自绘滚动条几何随旧界面退役 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode`；28 例 plain node |
+| `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 5 例 + 对表 1 例 |
+| `useKeyboard.ts` | 渲染层唯一按键入口：`panel:key` 动作名 → 注册表处理函数的单点分发（ref 转发，不重订阅）。面板导航键由 Rust 全局拦截（浏览态窗口不持焦点），渲染层没有 keydown 监听——快捷键捕获覆盖层是唯一的例外，那是录入键值的编辑器行为 | — |
+| `clipStore.ts` | ClipStore 契约适配层：`RendererEntry` → `ClipItem` 投影 + `createClipStore`（query / total / getNote 只读视图）。组件不碰 invoke；copy / remove 等效果留在 App 接线（ADR-0008） | — |
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
-| `App.tsx` | 只剩效果接线：读 DOM → 调 `panelView` 的判定 → 画出来或 `invoke`。穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入；「保持选中项可见」只负责滚，判定交给 `styles.css` 的 `scroll-padding` | 由 `first-item-top-clip.spec.js` 守 |
-| `styles.css` | Apple (Espana) Cathedral 设计语言的 token 落地，见 [design-system.md](design-system.md)；列表滚动边缘的「可视区」也由它定义：`padding` 让开 10px 渐隐遮罩，`scroll-padding` 把同一段留白声明成 `scrollIntoView` 的可视区，两者同源。窗口圆角的单一真源是 `--radius-window`（`.desktop` 的 `border-radius`），穿透判定读它、不复制它 | — |
-| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量 | — |
-| `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随 | 1 例 Playwright |
-| `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被渐隐遮罩盖住 | 2 例 Playwright |
+| `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
+| `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运） | — |
+| `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
+| `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与分数缩放留边、`.app-window` hairline 描边——原应用机制原样保留）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩与自绘滚动条退役。窗口圆角单一真源 `--radius-window` = 14px | — |
+| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge（含 `shortcut_get` 桩）与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
+| `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
+| `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 
 ## IPC 契约
 
@@ -73,7 +78,7 @@
 | `clipboard_copy` | 复制并粘贴（三入口共用） | `{ ok, message }` |
 | `clipboard_remove` / `clipboard_pin` / `clipboard_clear` | 删除 / 置顶切换 / 清空 | `bool` |
 | `note_set` / `note_begin_edit` / `note_end_edit` | 写备注 / 进入备注编辑态 / 退出 | `bool` |
-| `shortcut_try` / `shortcut_cancel` | 试设呼出键 / 取消捕获 | `{ ok, formatted }` / `bool` |
+| `shortcut_get` / `shortcut_try` / `shortcut_cancel` | 读当前呼出键 accel（页脚 chip 的真实键位来源）/ 试设 / 取消捕获 | `String` / `{ ok, formatted }` / `bool` |
 | `search_activate` / `search_set_composing` | 进入搜索态 / 同步 IME 组合状态 | `bool` |
 | `window_hide` / `window_set_ignore_mouse` | 隐藏面板 / 切换鼠标穿透 | `bool` |
 
