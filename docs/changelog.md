@@ -2,7 +2,9 @@
 
 > 按时间倒序，记当次改动的动机、取舍与行数/例数变化。可回退的当次细节留在这里，难回退的决策进 [adr/](adr/)。
 >
-> 早期条目里的「本文档」指迁移前承载这份日志的 [CONTEXT.md](../CONTEXT.md)；条目提到的 `electron/`、`scripts/`、`resources/` 已随 2026-08-31 删除 Electron 实现一并移除，按历史读。
+> 早期条目里的「本文档」指迁移前承载这份日志的 [CONTEXT.md](../CONTEXT.md)；条目提到的 `electron/`、`scripts/`、`resources/` 已随 2026-08-31 删除 Electron 实现一并移除，按历史读。同日删除的 `docs/reimplementation-prompt.md` 同理——它是导出快照，文件已删，条目里的链接不再维护。
+
+- **删除重实现 prompt 快照（2026-09-06）**：`docs/reimplementation-prompt.md` 由用户删除（一次性导出快照，不再需要），README 文档地图同步撤掉指针。纯文档变更，零代码改动。
 
 - **截图链路收尾：解码不再持有剪贴板（2026-09-06）**：`clipboard_read_image_png` 原先在 `ClipboardGuard` 存活期间才解码，把独占剪贴板的时间从「拷出字节」拉长到「再解一张 PNG」，几十毫秒的窗口正好落在用户刚按下 `Ctrl+C` 之后，别的程序这段时间 `OpenClipboard` 会失败。改成取完字节即释放守卫、解码在剪贴板之外；判定与行为不变，`dib` 7 例与 `poll_baseline` 不受影响。顺带补上真机证据：`真机探针` 在实时剪贴板上全绿——1150288 字节 `CF_DIBV5` 解出 7038 字节 PNG、基线判定为新复制，同一份内容 arboard 仍报 `ConversionFailure`；`%APPDATA%\ClipboardTool` 里那条图片条目就是这条链路的产物。三条判据复跑全绿（node 14 + cargo 66，另 1 例忽略）。
 
