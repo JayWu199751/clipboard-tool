@@ -85,13 +85,13 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 35 例
-npm run test:rust   # cargo test —— 66 例（另有 1 例真机探针 #[ignore]）
+npm run test:rust   # cargo test —— 69 例（另有 1 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwright install chromium）
 ```
 
-101 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4，加渲染层 panelView 35（搜索过滤与高亮 14、圆角外穿透 6、来源配色档位 4、相对时间 4、按键码映射 4、滚动条几何 3）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
+104 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 12 / paste_chain 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4 / tray 3，加渲染层 panelView 35（搜索过滤与高亮 14、圆角外穿透 6、来源配色档位 4、相对时间 4、按键码映射 4、滚动条几何 3）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 101 例统计。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 104 例统计。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -133,7 +133,7 @@ npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwri
 - styles.css 死规则清理（2026-09-05）后：亮 / 暗主题下列表卡片、详情覆盖层、快捷键栏、toast 与快捷键捕获浮层的观感应与清理前一致（删除的规则均匹配不到任何元素，属零渲染差异预期，仍需眼看兜底）。
 - 截图进历史（2026-09-06 修复）：重新构建后用 PixPin / `Win+Shift+S` 截一张，历史里应出现一条图片条目，缩略图与详情正常；带透明背景的截图 alpha 应保留。断在哪一步由探针报：`cargo test --bin clipboard-tool -- 真机探针 --ignored --nocapture`（在 `tauri/src-tauri/` 下跑）。
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
-- 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。
+- 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。判定半边已由 `tray` 3 例单测兜住（缩放取档、去重键、菜单文案），剩下的「最终 HICON 是否仍糊」只能眼看。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。
 
 自动化测不到的实现细节另见 [docs/architecture.md](docs/architecture.md) 末节「待真机复核」。

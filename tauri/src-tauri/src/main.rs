@@ -9,7 +9,8 @@
 //   startup        静默启动通道的意图 / 事实分离
 //   settings       settings.json 键名契约
 //   paste_chain    复制并粘贴链路的五步顺序与结果文案
-// 剩下的编排职责：剪贴板读写、持久化与广播、托盘、全局热键分发、IPC 命令。
+//   tray           托盘图标尺寸阶梯、去重键、菜单文案
+// 剩下的编排职责：剪贴板读写、持久化与广播、全局热键分发、IPC 命令。
 //
 // 结构要点：
 // - 焦点快照、来源应用图标、全局点击监听、计划任务拉起全部住在本进程内
@@ -38,6 +39,7 @@ mod source_app;
 mod settings;
 mod startup;
 mod tasks;
+mod tray;
 
 use history::{EntryType, HistoryStore, HistoryStoreBuilder, SourceApp};
 use settings::Settings;
@@ -53,17 +55,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, Wry};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 use base64::Engine as _;
+use tray::Tray;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
 const NAV_REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(300);
 const NAV_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
-const TRAY_ICON_SIZES: [u32; 5] = [16, 20, 24, 28, 32];
-const TRAY_ID: &str = "main-tray";
 
 #[derive(Default)]
 struct NavigationRepeat {
@@ -127,7 +126,6 @@ struct AppState {
     hotkeys: Mutex<HashMap<Shortcut, String>>, // Shortcut -> accel（host 注册的记录，供分发）
     navigation_repeat: NavigationRepeat,
     data_dir: PathBuf,
-    tray_icon_key: Mutex<String>,
 }
 
 // ---------- 渲染层数据契约（与 src/types.ts 对齐） ----------
@@ -504,143 +502,6 @@ fn panel(app: &AppHandle) -> PanelWindow {
     PanelWindow::new(app)
 }
 
-
-fn tray_icon_image(dark_theme: bool, scale: f64) -> Option<tauri::image::Image<'static>> {
-    // 按主屏 scaleFactor 选「恰好 round(16*scale) 物理像素」的单一尺寸图，HICON 1:1 渲染
-    // 零重采样（深色任务栏用白色图标，浅色用黑色图标）。这套阶梯图由 gen:tray 解析直出。
-    let target = (16.0 * scale).round() as i32;
-    let size = *TRAY_ICON_SIZES
-        .iter()
-        .min_by_key(|&&s| (s as i32 - target).abs())
-        .unwrap_or(&32);
-    let bytes: &[u8] = match (dark_theme, size) {
-        (true, 16) => include_bytes!("../icons/tray/tray-icon-light-16.png"),
-        (true, 20) => include_bytes!("../icons/tray/tray-icon-light-20.png"),
-        (true, 24) => include_bytes!("../icons/tray/tray-icon-light-24.png"),
-        (true, 28) => include_bytes!("../icons/tray/tray-icon-light-28.png"),
-        (true, 32) => include_bytes!("../icons/tray/tray-icon-light-32.png"),
-        (false, 16) => include_bytes!("../icons/tray/tray-icon-16.png"),
-        (false, 20) => include_bytes!("../icons/tray/tray-icon-20.png"),
-        (false, 24) => include_bytes!("../icons/tray/tray-icon-24.png"),
-        (false, 28) => include_bytes!("../icons/tray/tray-icon-28.png"),
-        (false, 32) => include_bytes!("../icons/tray/tray-icon-32.png"),
-        _ => include_bytes!("../icons/tray-icon.png"), // 缺分尺寸图时回退 32px 基图
-    };
-    tauri::image::Image::from_bytes(bytes).ok()
-}
-
-fn window_icon_image(dark_theme: bool) -> Option<tauri::image::Image<'static>> {
-    // 窗口图标跟随系统主题切换（走 32px 基图：窗口图标路径由系统多尺寸缩放，无托盘 HICON 问题）
-    let bytes: &[u8] = if dark_theme {
-        include_bytes!("../icons/tray-icon-light.png")
-    } else {
-        include_bytes!("../icons/tray-icon.png")
-    };
-    tauri::image::Image::from_bytes(bytes).ok()
-}
-
-// 托盘图标按主屏缩放取「恰好物理尺寸」的图，取不到缩放时按 1x 处理
-fn primary_scale(app: &AppHandle) -> f64 {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0)
-}
-
-fn update_tray_icon(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
-    let state = app.state::<AppState>();
-    let scale = primary_scale(app);
-    let dark = panel(app).is_dark_theme();
-    // 同主题同尺寸时跳过，display-metrics 高频触发也不重复 setImage
-    let key = format!("{}@{}", if dark { "light" } else { "dark" }, (16.0 * scale).round() as i32);
-    {
-        let mut last = state.tray_icon_key.lock().unwrap();
-        if *last == key {
-            return;
-        }
-        let Some(icon) = tray_icon_image(dark, scale) else { return };
-        *last = key;
-        let _ = tray.set_icon(Some(icon));
-    }
-    update_window_icon(app, dark);
-}
-
-fn update_window_icon(app: &AppHandle, dark: bool) {
-    let Some(icon) = window_icon_image(dark) else { return };
-    panel(app).set_icon(icon);
-}
-
-fn build_tray_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
-    let settings = state.settings.lock().unwrap();
-    let show_item = MenuItem::with_id(app, "show", "显示剪贴板面板", true, None::<&str>)?;
-    let shortcut_label = format!("更换快捷键(当前: {})", format_shortcut(&settings.shortcut));
-    let shortcut_item = MenuItem::with_id(app, "change-shortcut", shortcut_label, true, None::<&str>)?;
-    let sep1 = PredefinedMenuItem::separator(app)?;
-    let autostart_label = format!("开机启动 {}", if settings.auto_start { "✅" } else { "❌" });
-    let autostart_item =
-        CheckMenuItem::with_id(app, "autostart", autostart_label, true, settings.auto_start, None::<&str>)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    Menu::with_items(app, &[&show_item, &shortcut_item, &sep1, &autostart_item, &sep2, &quit])
-}
-
-fn rebuild_tray_menu(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        match build_tray_menu(app, &state) {
-            Ok(menu) => {
-                let _ = tray.set_menu(Some(menu));
-            }
-            Err(err) => eprintln!("重建托盘菜单失败: {err}"),
-        }
-    }
-}
-
-fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let state = app.state::<AppState>();
-    let scale = primary_scale(app);
-    let dark = panel(app).is_dark_theme();
-    let icon = tray_icon_image(dark, scale).ok_or_else(|| std::io::Error::other("tray icon missing"))?;
-    let menu = build_tray_menu(app, &state)?;
-    let _tray = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
-        .tooltip("剪贴板工具")
-        .menu(&menu)
-        // 左键点击呼出面板，菜单走右键
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "show" => {
-                let state = app.state::<AppState>();
-                state.modes.show();
-            }
-            "change-shortcut" => {
-                app.state::<AppState>().modes.begin_shortcut_capture();
-            }
-            "autostart" => {
-                let state = app.state::<AppState>();
-                let enabled = !state.settings.lock().unwrap().auto_start;
-                set_auto_start(app, enabled);
-            }
-            "quit" => {
-                app.exit(0);
-            }
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
-                let app = tray.app_handle();
-                let state = app.state::<AppState>();
-                state.modes.show();
-            }
-        })
-        .build(app)?;
-    update_tray_icon(app);
-    update_window_icon(app, dark);
-    Ok(())
-}
-
 // ---------- 快捷键 ----------
 
 fn format_shortcut(accel: &str) -> String {
@@ -682,7 +543,7 @@ fn set_auto_start(app: &AppHandle, want: bool) {
         settings.auto_start = applied.effective;
         save_settings(&state, &settings);
     }
-    rebuild_tray_menu(app);
+    Tray::new(app).rebuild_menu();
     println!("开机启动: {} — {}", if applied.effective { "✅" } else { "❌" }, applied.message);
     diag_log(&format!("set_auto_start want={want} applied={applied:?}"));
 }
@@ -837,7 +698,7 @@ async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String)
         settings.shortcut = accel;
         save_settings(&state, &settings);
     }
-    rebuild_tray_menu(&app);
+    Tray::new(&app).rebuild_menu();
     println!("全局快捷键已更换为: {formatted}");
     // 恢复焦点给原程序（导航键恢复已由模式状态机完成）
     let _ = state.modes.restore_original_focus().await;
@@ -1011,7 +872,6 @@ fn main() {
                 hotkeys: Mutex::new(HashMap::new()),
                 navigation_repeat: NavigationRepeat::default(),
                 data_dir,
-                tray_icon_key: Mutex::new(String::new()),
             });
             let state = app.state::<AppState>();
 
@@ -1028,7 +888,7 @@ fn main() {
                 });
             }
 
-            create_tray(app.handle())?;
+            Tray::new(app.handle()).create()?;
 
             // 全局点击监听（点击面板外关闭面板）
             let app2 = app.handle().clone();
@@ -1090,11 +950,11 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::ThemeChanged(_) => {
-                    update_tray_icon(app);
+                    Tray::new(app).sync_icon();
                 }
                 tauri::WindowEvent::ScaleFactorChanged { .. } => {
                     // 修改缩放比或拖到不同 DPI 显示器时 SM_CXSMICON 随之变化，重选对应物理尺寸
-                    update_tray_icon(app);
+                    Tray::new(app).sync_icon();
                 }
                 _ => {}
             }

@@ -27,7 +27,7 @@
 
 | module | 职责（唯一归属） | interface | 单测 |
 |---|---|---|---|
-| `main.rs` | 效果编排：剪贴板读写、持久化与广播、托盘、热键分发与方向键重复、IPC 注册、`AppState` | — | — |
+| `main.rs` | 效果编排：剪贴板读写、持久化与广播、热键分发与方向键重复、IPC 注册、`AppState` | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
 | `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32） | `show` `hide` `on_nav_action` `begin_search` `end_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` `is_repeatable_navigation` | 12 |
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主 | `spawn` + 15 个具名操作（见下） | — |
@@ -41,6 +41,7 @@
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
 | `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
+| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地 | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
 `history.rs` 的写图 / 哈希 / 删图 / 时间 / 生成 id、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。
 
