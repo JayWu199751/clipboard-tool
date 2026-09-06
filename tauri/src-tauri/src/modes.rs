@@ -18,68 +18,105 @@
 // modes_input_active），主线程只读快照、绝不阻塞在模式上。
 
 use crate::focus_paste;
-use crate::panel_modes::{FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
+use crate::hotkeys::{format_shortcut, Hotkeys};
+use crate::panel_modes::{is_repeatable_navigation, FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
 use crate::{
-    diag_log, emit_panel, format_shortcut, panel, send_focus_error, AppState,
+    diag_log, emit_panel, panel, send_focus_error, AppState,
     ShortcutCaptureStartPayload, PanelKeyPayload,
 };
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 type ModesJob = Box<dyn FnOnce(&mut PanelModes, &mut Host) + Send>;
 type Reply<R> = tokio::sync::oneshot::Receiver<R>;
+
+// Windows 的全局热键关闭了系统自动重复，↑/↓ 这两档由本 module 自行重复投递。
+const NAV_REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(300);
+const NAV_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 // ---------- 效果宿主（私有：只有执行线程能构造，只有本 module 能用） ----------
 
 struct Host {
     app: AppHandle,
+    // 「现在哪些全局键生效」的唯一真源（双向表 + 插件端口），见 hotkeys.rs。
+    // 由执行线程独占，所以「查重 → 调插件 → 记账」三步天然原子，也不需要锁。
+    hotkeys: Hotkeys,
+    // 按住 ↑/↓ 的连发登记。标志置位 = 该连发线程已结束，下一次按下换上新标志；
+    // 可连发的键只有上下方向键，表里最多留两条已停的登记，不会无限增长。
+    repeating: HashMap<Shortcut, Arc<AtomicBool>>,
 }
 
 impl Host {
     fn new(app: &AppHandle) -> Self {
-        Host { app: app.clone() }
+        Host {
+            app: app.clone(),
+            hotkeys: Hotkeys::new(),
+            repeating: HashMap::new(),
+        }
+    }
+
+    /// 武装连发：先判这个键该不该连发，再判是不是已经有活的线程在发它。
+    fn arm_repeat(&mut self, shortcut: Shortcut, accel: &str) {
+        if !is_repeatable_navigation(accel) {
+            return;
+        }
+        if let Some(stopped) = self.repeating.get(&shortcut) {
+            if !stopped.load(Ordering::Relaxed) {
+                return;
+            }
+        }
+        let stopped = Arc::new(AtomicBool::new(false));
+        self.repeating.insert(shortcut, stopped.clone());
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(NAV_REPEAT_INITIAL_DELAY);
+            while !stopped.load(Ordering::Relaxed) {
+                let state = app.state::<AppState>();
+                // 面板收起（连发中途粘贴成功也会收）就停手，不等那次松键事件了
+                if !state.modes_visible.load(Ordering::Relaxed) {
+                    break;
+                }
+                state.modes.on_hotkey_repeated(shortcut);
+                std::thread::sleep(NAV_REPEAT_INTERVAL);
+            }
+            // 线程收尾：立起标志，让执行线程知道这条登记已经死了
+            stopped.store(true, Ordering::Relaxed);
+        });
+    }
+
+    /// 松开即解除：置位并摘掉登记，连发线程下一轮自己退出。
+    fn disarm_repeat(&mut self, shortcut: Shortcut) {
+        if let Some(stopped) = self.repeating.remove(&shortcut) {
+            stopped.store(true, Ordering::Relaxed);
+        }
     }
 }
 
 impl ModesHost for Host {
-    fn register_key(&mut self, accel: &str, _action: HotkeyAction) -> bool {
-        use tauri_plugin_global_shortcut::Shortcut;
-        let Ok(shortcut) = accel.to_string().parse::<Shortcut>() else {
-            eprintln!("注册全局快捷键 {accel} 失败：无法解析");
-            return false;
-        };
-        let state = self.app.state::<AppState>();
-        {
-            let hotkeys = state.hotkeys.lock().unwrap();
-            if hotkeys.contains_key(&shortcut) {
-                return false;
-            }
+    fn register_key(&mut self, accel: &str, action: HotkeyAction) -> bool {
+        // 插件内部会投递主线程并阻塞等待——本方法只在执行线程上调用，主线程永远空闲可处理。
+        // 表由执行线程独占，查重与记账之间没有别人插得进来，所以这里不需要任何锁。
+        let app = self.app.clone();
+        let outcome =
+            self.hotkeys.register(accel, action, &mut |s| app.global_shortcut().register(s).is_ok());
+        if let Some(message) = outcome.diagnostic(accel) {
+            eprintln!("{message}");
         }
-        // 插件内部会投递主线程并阻塞等待——本方法只在执行线程上调用，主线程永远空闲可处理
-        let ok = self.app.global_shortcut().register(shortcut).is_ok();
-        if ok {
-            state.hotkeys.lock().unwrap().insert(shortcut, accel.to_string());
-        } else {
-            eprintln!("注册全局快捷键 {accel} 失败（可能被其他程序占用）");
-        }
-        ok
+        outcome.is_ok()
     }
 
     fn unregister_key(&mut self, accel: &str) {
-        let state = self.app.state::<AppState>();
-        let shortcut = {
-            let hotkeys = state.hotkeys.lock().unwrap();
-            hotkeys
-                .iter()
-                .find(|(_, a)| a.as_str() == accel)
-                .map(|(s, _)| *s)
-        };
-        if let Some(shortcut) = shortcut {
-            let _ = self.app.global_shortcut().unregister(shortcut);
-            state.hotkeys.lock().unwrap().remove(&shortcut);
-        }
+        let app = self.app.clone();
+        self.hotkeys.unregister(accel, &mut |s| app.global_shortcut().unregister(s).is_ok());
+    }
+
+    fn current_keys(&self) -> HashMap<String, HotkeyAction> {
+        self.hotkeys.bindings()
     }
 
     fn can_interact(&self) -> bool {
@@ -167,6 +204,33 @@ fn toggle_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host) {
     }
 }
 
+// 热键动作的统一执行：动作查 hotkeys 那张表，效果在这里串联。
+// `arm_repeat` = 只有真实按下才武装连发；连发线程自投递的那一路不再武装。
+fn perform_hotkey(
+    app: &AppHandle,
+    modes: &mut PanelModes,
+    host: &mut Host,
+    shortcut: Shortcut,
+    arm_repeat: bool,
+) {
+    let Some(accel) = host.hotkeys.accel_of(shortcut).map(str::to_string) else {
+        return; // 表里没有 = 不是我们注册的键，忽略
+    };
+    let Some(action) = host.hotkeys.action_of(shortcut) else {
+        return;
+    };
+    diag_log(&format!("dispatch_hotkey accel={accel}"));
+    match action {
+        HotkeyAction::Toggle => toggle_on(app, modes, host),
+        HotkeyAction::Nav(nav) => {
+            modes.on_nav_action(host, nav);
+            if arm_repeat {
+                host.arm_repeat(shortcut, &accel);
+            }
+        }
+    }
+}
+
 // ---------- 入口 ----------
 
 #[derive(Clone)]
@@ -236,18 +300,22 @@ impl Modes {
 
     // —— 全局输入事件 ——
 
-    /// 热键回调：按 accel 找到动作并分发（呼出键与导航键的集合由状态机推导）
-    pub fn dispatch_accel(&self, accel: &str) -> Reply<()> {
+    /// 热键按下：回调线程只交出 Shortcut、立即返回；「这是哪个动作」由 hotkeys 那张表在
+    /// 执行线程上判（分发不再按 accel 查状态机，两份真源就此并成一份）。
+    pub fn on_hotkey_pressed(&self, shortcut: Shortcut) -> Reply<()> {
         let app = self.app.clone();
-        let accel = accel.to_string();
-        self.submit(move |modes, host| {
-            diag_log(&format!("dispatch_hotkey accel={accel}"));
-            match modes.registered_action_for(&accel) {
-                Some(HotkeyAction::Toggle) => toggle_on(&app, modes, host),
-                Some(HotkeyAction::Nav(nav)) => modes.on_nav_action(host, nav),
-                None => {}
-            }
-        })
+        self.submit(move |modes, host| perform_hotkey(&app, modes, host, shortcut, true))
+    }
+
+    /// 连发线程自投递：只执行、不武装。
+    pub fn on_hotkey_repeated(&self, shortcut: Shortcut) -> Reply<()> {
+        let app = self.app.clone();
+        self.submit(move |modes, host| perform_hotkey(&app, modes, host, shortcut, false))
+    }
+
+    /// 热键松开：解除连发登记。
+    pub fn on_hotkey_released(&self, shortcut: Shortcut) -> Reply<()> {
+        self.submit(move |_modes, host| host.disarm_repeat(shortcut))
     }
 
     /// 全局鼠标钩子回调：点击面板外即隐藏。

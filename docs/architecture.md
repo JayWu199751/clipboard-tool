@@ -13,10 +13,10 @@
 | 线程 | 能做什么 | 绝不能做 |
 |---|---|---|
 | 主线程（tauri 事件循环） | 窗口几何/样式、托盘、插件投递的落地端；读 `modes_visible` / `modes_input_active` 两个原子快照 | 阻塞等待模式状态 |
-| `modes-executor` | 唯一持有 `PanelModes` 与效果宿主 `Host`；唯一允许调用热键 register/unregister | 把 `&mut PanelModes` 交出去（类型是 module 私有） |
+| `modes-executor` | 唯一持有 `PanelModes`、效果宿主 `Host` 与热键双向表 `Hotkeys`；唯一允许调用热键 register/unregister | 把 `&mut PanelModes` 或 `&mut Hotkeys` 交出去（前者类型私有、后者只经 `Modes` 具名操作间接使用） |
 | 命令线程（tokio worker，`async #[tauri::command]`） | 向 `Modes` 投递具名操作并 `.await` 回执；跑慢的 Win32 粘贴注入 | 持有 store 锁的同时 await 模式回执 |
 | 回调线程（热键 / 鼠标钩子 / 托盘 / 单实例 / 窗口事件） | 向 `Modes` 投递具名操作，**不等待**（忽略返回值不影响投递） | 阻塞：回调必须立即返回 |
-| 方向键重复线程 | `Up` / `Down` 按住期间按定时器重复投递 `dispatch_accel`；只读 `modes_visible`，面板隐藏后停止 | 持有模式状态、等待模式回执 |
+| 方向键重复线程 | `Up` / `Down` 按住期间按定时器重复投递 `on_hotkey_repeated`；只读 `modes_visible`，面板隐藏后停止 | 持有模式状态、等待模式回执 |
 | 轮询线程（600ms） | 读剪贴板、判定新复制、写盘广播；单次异常经 `catch_unwind` 只跳过本轮 | 被任何模式锁拖住 |
 
 两条附带约束：窗口几何与样式变更必须投递主线程执行（这条现在由 `panel_window.rs` 的实现内部承担，调用方只管动作）；`store` 锁与模式状态绝不交叉持有。
@@ -27,10 +27,11 @@
 
 | module | 职责（唯一归属） | interface | 单测 |
 |---|---|---|---|
-| `main.rs` | 效果编排：持久化与广播、热键分发与方向键重复、IPC 注册、`AppState` | — | — |
+| `main.rs` | 效果编排：持久化与广播、IPC 注册、`AppState` | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `new(max, Ports, Clock)` + `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
-| `panel_modes.rs` | 面板四态状态机 + 热键集合推导与差量注册（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`） | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `registered_action_for` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation` | 15 |
-| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主 | `spawn` + 15 个具名操作（见下） | — |
+| `panel_modes.rs` | 面板四态状态机 + 该注册哪些键的推导与差量指令（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`）；已生效集合不在本 module，差量的另一侧读 `host.current_keys()` | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation`；seam `ModesHost`（`register_key` `unregister_key` `current_keys` + 面板/渲染层/焦点/领域查询） | 15 |
+| `hotkeys.rs` | 「现在哪些全局键生效」的唯一真源：accel ↔ Shortcut 双向表 + 动作，两个方向都是 O(1)；注册三步（查重 / 调插件 / 记账）原子，插件拒绝一分不记；accel → 展示文案 | `register` `unregister` `action_of` `accel_of` `bindings`；纯函数 `format_shortcut`；插件调用经端口传入 | 9 |
+| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys` 与方向键连发登记） | `spawn` + 17 个具名操作（见下） | — |
 | `panel_window.rs` | 面板几何、焦点、鼠标穿透；主线程投递与 DIP 换算 | `show_at_cursor` `park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`；纯函数 `centered` `parked` `contains_point` | 4 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 写盘失败重试标志 | `observe` `confirm` `skip_unchanged` `note_seq` `sync_now` | 7 |
 | `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
@@ -44,9 +45,9 @@
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
 | `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地 | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
-`history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
+`history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
-**模式操作**（`modes.rs` 的 15 个具名方法）：`show` `hide` `hide_after_paste` `dispatch_accel` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。
+**模式操作**（`modes.rs` 的 17 个具名方法）：`show` `hide` `hide_after_paste` `on_hotkey_pressed` `on_hotkey_repeated` `on_hotkey_released` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。热键回调交出的是插件的 `Shortcut`，不是 accel 字符串——「这是哪个动作」由执行线程查 `Hotkeys` 判，主线程不再持有那份表。
 
 ## 渲染层地图
 

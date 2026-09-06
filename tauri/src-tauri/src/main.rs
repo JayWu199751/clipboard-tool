@@ -2,8 +2,9 @@
 // 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
 //   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
 //   clipboard      剪贴板独占窗口：打开重试、格式退让、Drop 必关、读写与序列号
-//   panel_modes    面板四态状态机 + 全局热键差量注册（纯逻辑）
-//   modes          状态机的唯一入口：独占执行线程、具名操作、效果宿主
+//   hotkeys        全局热键记账的唯一真源：accel ↔ Shortcut 双向表、展示文案
+//   panel_modes    面板四态状态机 + 「该注册哪些键」的推导（纯逻辑）
+//   modes          状态机的唯一入口：独占执行线程、具名操作、效果宿主（热键表与连发登记都在它手上）
 //   panel_window   面板几何 / 焦点 / 鼠标穿透（主线程投递与 DIP 换算都在其内部）
 //   poll_baseline  「算不算一次新复制」的基线判定
 //   dib            剪贴板 DIB 字节 → PNG 的解码判定
@@ -11,7 +12,7 @@
 //   settings       settings.json 键名契约
 //   paste_chain    复制并粘贴链路的五步顺序与结果文案
 //   tray           托盘图标尺寸阶梯、去重键、菜单文案
-// 剩下的编排职责：持久化与广播、全局热键分发、IPC 命令。
+// 剩下的编排职责：持久化与广播、IPC 命令。热键回调只做「把 Shortcut 投给执行线程」这一件事。
 //
 // 结构要点：
 // - 焦点快照、来源应用图标、全局点击监听、计划任务拉起全部住在本进程内
@@ -32,6 +33,7 @@ mod clipboard;
 mod dib;
 mod focus_paste;
 mod history;
+mod hotkeys;
 mod modes;
 mod panel_modes;
 mod panel_window;
@@ -46,7 +48,7 @@ mod tray;
 use history::{EntryType, HistoryStore, SourceApp};
 use settings::Settings;
 use modes::Modes;
-use panel_modes::{is_repeatable_navigation, FocusTarget};
+use panel_modes::FocusTarget;
 use panel_window::{PanelWindow, PANEL_LABEL};
 use paste_chain::{CopyContent, CopyResult, PastePort};
 use poll_baseline::{Change, PollBaseline};
@@ -58,57 +60,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 use base64::Engine as _;
 use tray::Tray;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(600);
-const NAV_REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(300);
-const NAV_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
-
-#[derive(Default)]
-struct NavigationRepeat {
-    active: Mutex<HashMap<Shortcut, Arc<AtomicBool>>>,
-}
-
-impl NavigationRepeat {
-    fn start(&self, app: AppHandle, shortcut: Shortcut, accel: String, modes: Modes) {
-        if !is_repeatable_navigation(&accel) {
-            return;
-        }
-
-        let stop = Arc::new(AtomicBool::new(false));
-        {
-            let mut active = self.active.lock().unwrap();
-            if active.contains_key(&shortcut) {
-                return;
-            }
-            active.insert(shortcut, stop.clone());
-        }
-
-        std::thread::spawn(move || {
-            std::thread::sleep(NAV_REPEAT_INITIAL_DELAY);
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                let state = app.state::<AppState>();
-                if !state.modes_visible.load(Ordering::Relaxed) {
-                    state.navigation_repeat.stop(&shortcut);
-                    break;
-                }
-                modes.dispatch_accel(&accel);
-                std::thread::sleep(NAV_REPEAT_INTERVAL);
-            }
-        });
-    }
-
-    fn stop(&self, shortcut: &Shortcut) {
-        if let Some(stop) = self.active.lock().unwrap().remove(shortcut) {
-            stop.store(true, Ordering::Relaxed);
-        }
-    }
-}
 
 struct AppState {
     store: Mutex<HistoryStore>,
@@ -125,8 +81,6 @@ struct AppState {
     image_url_cache: Arc<Mutex<HashMap<String, String>>>,
     // 「这次剪贴板算不算一次新复制」的基线（序列号短路、图片/文字基线、写盘失败重试）
     baseline: Mutex<PollBaseline>,
-    hotkeys: Mutex<HashMap<Shortcut, String>>, // Shortcut -> accel（host 注册的记录，供分发）
-    navigation_repeat: NavigationRepeat,
     data_dir: PathBuf,
 }
 
@@ -412,24 +366,6 @@ fn panel(app: &AppHandle) -> PanelWindow {
     PanelWindow::new(app)
 }
 
-// ---------- 快捷键 ----------
-
-fn format_shortcut(accel: &str) -> String {
-    // Control+Shift+V -> Ctrl + Shift + V
-    let accel = if accel.is_empty() { settings::DEFAULT_SHORTCUT } else { accel };
-    accel
-        .split('+')
-        .map(|part| match part {
-            "Control" | "CommandOrControl" => "Ctrl",
-            "Super" | "Meta" => "Win",
-            "Alt" => "Alt",
-            "Shift" => "Shift",
-            other => other,
-        })
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
 // ---------- 开机启动（意图落盘 + 事实重建；通道判定与顺序契约见 startup module） ----------
 
 // 启动时按持久化意图重建静默启动通道（dev 下内部为 no-op）
@@ -597,7 +533,7 @@ async fn note_end_edit(_app: AppHandle, state: State<'_, AppState>) -> Result<bo
 // 更换快捷键：渲染进程按下组合键后请求注册
 #[tauri::command]
 async fn shortcut_try(app: AppHandle, state: State<'_, AppState>, accel: String) -> Result<ShortcutTryResult, String> {
-    let formatted = format_shortcut(&accel);
+    let formatted = hotkeys::format_shortcut(&accel);
     let ok = state.modes.try_set_toggle_shortcut(&accel).await.unwrap_or(false);
     if !ok {
         return Ok(ShortcutTryResult { ok: false, formatted });
@@ -699,22 +635,13 @@ fn main() {
                 .build(),
         )
         .plugin(
+            // 回调必须立即返回：这里只把 Shortcut 交给执行线程。「这是哪个动作、要不要
+            // 继续连发」全在 hotkeys 那张表上判（表由执行线程独占，主线程不再读它）。
             tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
                 let state = app.state::<AppState>();
                 match event.state() {
-                    ShortcutState::Pressed => {
-                        let accel = state.hotkeys.lock().unwrap().get(shortcut).cloned();
-                        if let Some(accel) = accel {
-                            state.modes.dispatch_accel(&accel);
-                            state.navigation_repeat.start(
-                                app.clone(),
-                                *shortcut,
-                                accel,
-                                state.modes.clone(),
-                            );
-                        }
-                    }
-                    ShortcutState::Released => state.navigation_repeat.stop(shortcut),
+                    ShortcutState::Pressed => { state.modes.on_hotkey_pressed(*shortcut); }
+                    ShortcutState::Released => { state.modes.on_hotkey_released(*shortcut); }
                 }
             }).build(),
         )
@@ -782,8 +709,6 @@ fn main() {
                 icon_cache: Mutex::new(icon_cache),
                 image_url_cache,
                 baseline: Mutex::new(PollBaseline::new()),
-                hotkeys: Mutex::new(HashMap::new()),
-                navigation_repeat: NavigationRepeat::default(),
                 data_dir,
             });
             let state = app.state::<AppState>();

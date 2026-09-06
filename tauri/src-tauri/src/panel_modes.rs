@@ -12,7 +12,9 @@
 //
 // 设计要点：
 // - 全局快捷键（呼出键 + 面板导航键）由「当前模式」唯一推导：desired_keys() 给出目标集合，
-//   apply_hotkeys() 与已注册集合做差量同步。模式转换不再各自手写 register/unregister。
+//   apply_hotkeys() 与「已生效集合」做差量同步。模式转换不再各自手写 register/unregister。
+//   已生效集合不住在本 module：它是宿主那张双向表（hotkeys.rs）的唯一真源，本 module 只经
+//   host.current_keys() 读一份快照。于是「两份记录各自漂移」在类型上就不成立了。
 // - 焦点快照（FocusTarget）的生命周期归本 module：呼出/进入输入态前确保有快照，
 //   退出输入态归还焦点（快照保留，同一次呼出内复用），隐藏面板时消费快照并清空。
 // - 渲染层经 panel:key / panel:shown / shortcut:capture-* 事件感知模式变化。
@@ -135,9 +137,11 @@ impl Mode {
 
 // 效果宿主：本 module 持有状态机锁期间调用这些方法，宿主实现不得回锁状态机。
 pub trait ModesHost {
-    // —— 全局热键 seam（register_key 返回是否成功）
+    // —— 全局热键 seam：本 module 只发差量指令，已生效集合由宿主记账
+    //    （register_key 返回是否真的注册上了；current_keys 是差量的另一侧）
     fn register_key(&mut self, accel: &str, action: HotkeyAction) -> bool;
     fn unregister_key(&mut self, accel: &str);
+    fn current_keys(&self) -> HashMap<String, HotkeyAction>;
     // —— 面板窗口效果
     fn can_interact(&self) -> bool;
     fn focus_panel(&self);
@@ -174,7 +178,6 @@ pub struct PanelModes {
     note_entry_id: Option<String>,
     focus_target: Option<FocusTarget>, // 本次呼出期间的前台焦点快照（退出输入态复用，隐藏时消费）
     toggle_accel: Option<String>,      // 呼出快捷键（捕获期间临时注销，值不变）
-    registered: HashMap<String, HotkeyAction>, // accel -> action（本 module 维护的已注册集合）
 }
 
 impl Default for PanelModes {
@@ -192,7 +195,6 @@ impl PanelModes {
             note_entry_id: None,
             focus_target: None,
             toggle_accel: None,
-            registered: HashMap::new(),
         }
     }
     // 由当前状态推导应当注册的全局快捷键集合
@@ -226,23 +228,22 @@ impl PanelModes {
     }
 
     // 差量同步：只动需要动的键。替代原版散布 13 处的 register/unregister 舞步。
+    // 先注销后注册（腾出系统侧的槽位，换键时同一个组合键才注册得上）；注册侧不判返回值，
+    // 因为「有没有登记上」由宿主的表说了算 —— 失败就是没进表，下一次差量自然重试。
     fn apply_hotkeys(&mut self, host: &mut dyn ModesHost) {
         let desired = self.desired_keys();
-        let stale: Vec<String> = self
-            .registered
+        let current = host.current_keys();
+        let stale: Vec<String> = current
             .keys()
             .filter(|k| !desired.contains_key(*k))
             .cloned()
             .collect();
         for accel in stale {
             host.unregister_key(&accel);
-            self.registered.remove(&accel);
         }
         for (accel, action) in desired {
-            if !self.registered.contains_key(&accel) {
-                if host.register_key(&accel, action) {
-                    self.registered.insert(accel, action);
-                }
+            if !current.contains_key(&accel) {
+                host.register_key(&accel, action);
             }
         }
     }
@@ -310,11 +311,6 @@ impl PanelModes {
 
     pub fn is_panel_visible(&self) -> bool {
         self.visible
-    }
-
-    // 查询某个 accel 当前注册的动作（热键分发用：只读快照，不执行效果）
-    pub fn registered_action_for(&self, accel: &str) -> Option<HotkeyAction> {
-        self.registered.get(accel).copied()
     }
 
     // 启动/更换呼出快捷键
@@ -451,7 +447,6 @@ impl PanelModes {
         if !host.register_key(accel, HotkeyAction::Toggle) {
             return false;
         }
-        self.registered.insert(accel.to_string(), HotkeyAction::Toggle);
         self.toggle_accel = Some(accel.to_string());
         self.exit_input_internal(host, false);
         true
@@ -471,7 +466,7 @@ mod tests {
     use std::rc::Rc;
 
     struct MockHost {
-        registered: Rc<RefCell<HashMap<String, HotkeyAction>>>,
+        registered: Rc<RefCell<HashMap<String, HotkeyAction>>>, // 假宿主自己那张已生效表
         events: Rc<RefCell<Vec<(String, String, Option<String>)>>>, // (channel, action, noteEntryId)
         focus_snapshot: Rc<RefCell<Option<FocusTarget>>>,
         snapshot_requests: Rc<RefCell<usize>>,
@@ -507,6 +502,9 @@ mod tests {
         }
         fn unregister_key(&mut self, accel: &str) {
             self.registered.borrow_mut().remove(accel);
+        }
+        fn current_keys(&self) -> HashMap<String, HotkeyAction> {
+            self.registered.borrow().clone()
         }
         fn can_interact(&self) -> bool {
             true

@@ -12,7 +12,8 @@
 
 use crate::panel_window::PanelWindow;
 use crate::settings::Settings;
-use crate::{format_shortcut, set_auto_start, AppState};
+use crate::hotkeys::format_shortcut;
+use crate::{set_auto_start, AppState};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
