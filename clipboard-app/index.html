@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClipFlow</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <script>
+    /* Theme always follows the OS appearance (no pinned preference). */
+    (function () {
+      var m = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+      document.documentElement.dataset.theme = m && m.matches ? "dark" : "light";
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="desktop">
+
+  <!-- SVG icon sprite (outline family, 24-grid, stroke 1.75) -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7.5"/><path d="m21 21-4.35-4.35"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3.5"/><circle cx="9" cy="9" r="1.8"/><path d="m20.5 15.5-4.8-4.8L4.5 20.5"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5V4.5h16v2"/><path d="M12 4.5v15"/><path d="M8.5 19.5h7"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m20 6.5-11 11-5-5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5V4.5A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2.8 8.6 4.6-8.6 4.6-8.6-4.6z"/><path d="m3.4 12.4 8.6 4.6 8.6-4.6"/><path d="m3.4 16.9 8.6 4.6 8.6-4.6"/></symbol>
+  </svg>
+
+  <!-- ===================== HUD window (fixed 400 × 800) ===================== -->
+  <div class="window" id="app-window" role="application" aria-label="ClipFlow">
+
+    <!-- Search header (drag region in Electron) -->
+    <header class="hud-search">
+      <div class="hud-search__well" id="search-well">
+        <svg class="hud-search__icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="search-input" class="hud-search__input" type="text" placeholder="搜索文字与图片…" autocomplete="off" spellcheck="false" aria-label="搜索剪贴板" />
+        <button id="search-clear" class="hud-search__clear" type="button" aria-label="清除搜索" hidden>
+          <svg width="12" height="12" viewBox="0 0 24 24"><use href="#i-x"/></svg>
+        </button>
+        <kbd class="kbd hud-search__kbd" data-kbd=" " aria-hidden="true">空格</kbd>
+      </div>
+    </header>
+
+    <!-- Card list -->
+    <main class="cards-wrap">
+      <ul class="cards" id="card-list" role="listbox" aria-label="剪贴板条目" tabindex="0"></ul>
+      <div class="empty-state" id="empty-state" hidden>
+        <div class="empty-state__icon"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg></div>
+        <p class="empty-state__title">无匹配结果</p>
+        <p class="empty-state__hint">点击 ✕ 按钮可清除搜索。</p>
+      </div>
+    </main>
+
+    <!-- Hint footer -->
+    <footer class="hud-footer">
+      <span id="status-count">14 条</span>
+      <span class="hints" aria-hidden="true">
+        <span><kbd class="kbd">↑↓</kbd>选择</span>
+        <span><kbd class="kbd">⏎</kbd>复制</span>
+        <span><kbd class="kbd">B</kbd>备注</span>
+        <span><kbd class="kbd">Del</kbd>删除</span>
+        <span><kbd class="kbd">Esc</kbd>关闭</span>
+      </span>
+    </footer>
+  </div>
+
+  <!-- Reopen affordance while the HUD is closed (Electron: globalShortcut instead) -->
+  <div class="closed-hint" id="closed-hint" hidden>
+    <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-layers"/></svg>
+    <span>ClipFlow 已关闭 — 点击任意处或按 <kbd class="kbd" data-kbd="ctrl+shift+v">Ctrl ⇧ V</kbd> 重新打开</span>
+  </div>
+
+  <!-- Toasts -->
+  <div class="toast-stack" id="toast-stack" aria-live="polite" role="status"></div>
+
+  <script src="js/clipboard.js"></script>
+  <script src="js/keyboard.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
