@@ -2,8 +2,9 @@ import { test, expect } from '@playwright/test';
 import { installPanelHarness, makeEntries } from './panel-harness.js';
 import { decodePNG } from '../scripts/gen-tray-icons.mjs';
 
-// .app-window 的描边是 1px 实线 border --window-ring（#757575，styles.css「窗口框架」权威定义；
-// 2026-09-08 返修 4 由半透明白 hairline 改为中灰实线，亮暗同值）。
+// .app-window 的描边是 2px 实线 border --window-ring（#757575，styles.css「窗口框架」权威定义；
+// 2026-09-08 返修 4 由半透明白 hairline 改为中灰实线，亮暗同值；返修 9 由 1px 加粗到 2px 换
+// 圆弧的 AA 翼——圆角 28 下 1px 细阶梯弧观感比实心直列窄，用户复看拍板）。
 // 用户真机反馈过：四边的视觉宽度不一样。根因有二，均已修——.desktop 的 padding 贴边时
 // 描边被透明窗口 per-pixel alpha 裁淡（分数缩放下由分辨率媒体查询强制 1/dppx 内边距），
 // 以及 Chromium 把绘制矩形逐边取整到整数设备像素（border-width 的分数值会被归一成整数

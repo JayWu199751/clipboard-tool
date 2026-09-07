@@ -23,7 +23,7 @@
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
-**布局与密度**：窗口尺寸随屏自适应——高 = 屏幕高的 7/8、宽 = 高的一半（DIP 空间计算，任何 DPI 同比例；`resizable:false` 只管用户拖拽，`show_at_cursor` 每次呼出可编程重设）；窄窗下页脚逐级收紧（400/340px 两档媒体查询），不裁组；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚（行轨固定、列表吃掉剩余高度）；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 28px（`--radius-window`，原 14、用户 2026-09-08 加倍；穿透判定读 `.desktop` 的 computed 值，自动跟上）；边框描边用真 1px 实线 `--window-ring`（中灰 #757575，亮暗同值；曾试 2px 让圆弧长出抗锯齿翼、观感与直边等宽，用户看过拍板回 1px；阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
+**布局与密度**：窗口尺寸随屏自适应——高 = 屏幕高的 7/8、宽 = 高的一半（DIP 空间计算，任何 DPI 同比例；`resizable:false` 只管用户拖拽，`show_at_cursor` 每次呼出可编程重设）；窄窗下页脚逐级收紧（400/340px 两档媒体查询），不裁组；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚（行轨固定、列表吃掉剩余高度）；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 28px（`--radius-window`，原 14、用户 2026-09-08 加倍；穿透判定读 `.desktop` 的 computed 值，自动跟上）；边框描边用真 2px 实线 `--window-ring`（中灰 #757575，亮暗同值；1px 弧是无抗锯齿翼的细阶梯、观感比实心直列窄——混叠错觉，圆角 14 下曾拍板回 1px，圆角加倍到 28 后返修 9 复看改判 2px；「border-width 归一到设备像素」是死路——Chromium 把 border-width 截断成整数 CSS px，测量复验见原型分支 prototype/ring-corner-mask；阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
 
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。

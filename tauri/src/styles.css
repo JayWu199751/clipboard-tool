@@ -57,9 +57,12 @@ body {
   border-radius: calc(var(--radius-window) - 2px);
   /* 描边用真边框而非 inset box-shadow：阴影矩形被逐边独立取整，四边宽度不可控。
      2026-09-08 返修 4：由半透明 hairline 改为 --window-ring 中灰实线，亮暗同值。
-     返修 7 曾加粗到 2px 让圆弧长出 AA 翼（1px 弧是细阶梯、观感比直边窄），
-     用户看过后拍板回 1px——弧的混叠错觉换全窗更轻的描边，取舍归用户。 */
-  border: 1px solid var(--window-ring);
+     弧比直边显窄是混叠错觉（直边取整成实心设备列，弧是无 AA 翼的细阶梯）。宽度反复两轮：
+     返修 7 加粗 2px、返修 8 回 1px——都在圆角 14 下拍的板；圆角加倍到 28 后弧段更显眼，
+     返修 9 用户复看拍板回 2px。别再试「border-width 归一到设备像素」（如 calc(2px/var(--dpr))
+     凑 2 设备列）：Chromium 把 border-width 截断成整数 CSS px，1.143/1.333/1.6px 全部归一为
+     1px，死路；角部 mask 局部加粗原型验成未选。测量与对比页留档 prototype/ring-corner-mask。 */
+  border: 2px solid var(--window-ring);
   box-shadow: var(--shadow-card);
   overflow: hidden;
   /* 源 UI 的 window-in 入场动画不迁移：真实应用的显隐由原生窗口承担，
