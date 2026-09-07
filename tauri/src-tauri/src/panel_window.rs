@@ -14,11 +14,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
 };
-use tauri::{AppHandle, LogicalPosition, Manager, Position, Wry};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, Wry};
 
 pub const PANEL_LABEL: &str = "panel";
-pub const PANEL_WIDTH: f64 = 418.0;
-pub const PANEL_HEIGHT: f64 = 823.0;
+// 面板尺寸不再是常量：每次呼出按显示器算（sized：高=屏幕 2/3、宽=高一半，DIP 空间）。
 /// 离屏停靠时超出当前显示器工作区右缘的距离（留在同屏内，避免跨屏 DPI 漂移改尺寸）
 pub const OFFSCREEN_GAP: f64 = 20.0;
 /// 取不到显示器时的兜底停靠点
@@ -42,7 +41,15 @@ pub struct RectDip {
     pub height: f64,
 }
 
-/// 纯几何：面板在工作区内居中（物理工作区先除以缩放换成 DIP，再按固定面板尺寸居中）
+/// 纯几何：面板尺寸（DIP）——高 = 屏幕高的 2/3，宽 = 高的一半。
+/// 比值在 DIP 空间算（物理像素 ÷ 缩放），所以同一物理屏无论 DPI 都占同样的屏幕比例；
+/// 同 DPI 密度（如 4K@2x 与 1080p@1x 的 DIP 高相同）给出完全相同的尺寸——DPI 无关性由公式保证。
+pub fn sized(screen_height: f64, scale: f64) -> (f64, f64) {
+    let height = (screen_height / scale * 2.0 / 3.0).round();
+    ((height / 2.0).round(), height)
+}
+
+/// 纯几何：面板在工作区内居中（物理工作区先除以缩放换成 DIP，再按给定面板尺寸居中）
 pub fn centered(work: WorkArea, scale: f64, width: f64, height: f64) -> (f64, f64) {
     let area_x = work.x as f64 / scale;
     let area_y = work.y as f64 / scale;
@@ -149,12 +156,12 @@ impl PanelWindow {
                 .monitor_at(cx, cy)
                 .or_else(|| win.current_monitor().ok().flatten());
             let Some(monitor) = monitor else { return };
-            let (x, y) = centered(
-                work_area(&monitor),
-                monitor.scale_factor(),
-                PANEL_WIDTH,
-                PANEL_HEIGHT,
-            );
+            // 每次呼出按当前显示器重算尺寸与位置：换屏 / 改缩放后第一下就跟上。
+            // set_size 在 resizable:false 下依然可编程调用（resizable 只管用户拖拽）。
+            let scale = monitor.scale_factor();
+            let (w, h) = sized(monitor.size().height as f64, scale);
+            let _ = win.set_size(Size::Logical(LogicalSize::new(w, h)));
+            let (x, y) = centered(work_area(&monitor), scale, w, h);
             let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
         });
     }
@@ -263,22 +270,42 @@ fn work_area(m: &tauri::Monitor) -> WorkArea {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // 测试名用中文描述规则（含 DIP 这类大写缩写），snake_case 检查不适用
     use super::*;
 
     const FULL_HD: WorkArea = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
 
     #[test]
+    fn 面板尺寸高三分之二宽为高之半() {
+        // 1080p @1x：h=round(1080×2/3)=720，w=360
+        assert_eq!(sized(1080.0, 1.0), (360.0, 720.0));
+        // 1440 物理 @2x：DIP 高 720 → h=480，w=240——比值在 DIP 空间算
+        assert_eq!(sized(1440.0, 2.0), (240.0, 480.0));
+        // 1440 物理 @1.75：DIP 高 822.857 → h=549，w=round(274.5)=275（round 远离零）
+        assert_eq!(sized(1440.0, 1.75), (275.0, 549.0));
+    }
+
+    #[test]
+    fn 同DIP密度不同分辨率给出同尺寸() {
+        // 4K@2x 与 1080p@1x 的 DIP 屏幕高都是 1080 → 面板尺寸完全相同：
+        // 「适应任何 DPI」不是运行时补偿，而是公式在 DIP 空间的直接推论
+        assert_eq!(sized(2160.0, 2.0), sized(1080.0, 1.0));
+        // 2560 物理 @1.25 与 2048 物理 @1.0 的 DIP 高同为 2048 → 同尺寸
+        assert_eq!(sized(2560.0, 1.25), sized(2048.0, 1.0));
+    }
+
+    #[test]
     fn 居中按缩放换算后取整() {
         // 1x：x=(1920-418)/2=751，y=(1080-823)/2=128.5 -> 129（round 远离零）
-        assert_eq!(centered(FULL_HD, 1.0, PANEL_WIDTH, PANEL_HEIGHT), (751.0, 129.0));
+        assert_eq!(centered(FULL_HD, 1.0, 418.0, 823.0), (751.0, 129.0));
         // 2x：工作区先换算成 960x540 DIP 再居中；面板比工作区还高时 y 为负（沿用既有行为）
-        assert_eq!(centered(FULL_HD, 2.0, PANEL_WIDTH, PANEL_HEIGHT), (271.0, -142.0));
+        assert_eq!(centered(FULL_HD, 2.0, 418.0, 823.0), (271.0, -142.0));
     }
 
     #[test]
     fn 居中结果不随显示器原点丢失() {
         let work = WorkArea { x: 1920, y: 0, width: 2560, height: 1440 };
-        assert_eq!(centered(work, 1.0, PANEL_WIDTH, PANEL_HEIGHT), (2991.0, 309.0));
+        assert_eq!(centered(work, 1.0, 418.0, 823.0), (2991.0, 309.0));
     }
 
     #[test]

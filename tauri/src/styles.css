@@ -340,6 +340,15 @@ p { font-weight: inherit; font-size: inherit; }
 /* 溢出时宁可裁掉也不压扁：chip 与计数被 flex-shrink 挤瘦就是「间距不均匀」的来路 */
 .hud-footer #status-count { flex: none; }
 .hud-footer .kbd { height: 16px; font-size: 9.5px; border-bottom-width: 1px; }
+/* 窄窗兜底：面板尺寸改为「高=屏幕 2/3、宽=高一半」后，小屏上窗口宽度可能低于
+   六组提示的自然宽度（~407px）。逐级收紧间距与 chip，而不是裁掉右边的组。 */
+@media (max-width: 400px) {
+  .hud-footer .hints { gap: var(--space-1); }
+}
+@media (max-width: 340px) {
+  .hud-footer .hints span { gap: 2px; }
+  .hud-footer .kbd { min-width: 14px; padding: 0 3px; }
+}
 /* 焦点恢复失败的底栏提示（原应用 panel:focus-error 的皮肤） */
 .hud-footer .footer-error {
   margin-left: var(--space-3);

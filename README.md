@@ -6,7 +6,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 ## 操作
 
-界面是 ClipFlow HUD：无边框 418×823 浮层（内容 = 60px 搜索头 / 卡片列表 / 30px 快捷键页脚），窗口四缘带 1px 中灰描边（`--window-ring`，亮暗同值、对齐系统窗口边框），主题纯跟随系统（亮暗实时切换，无应用内开关）。呼出键默认 `Ctrl+Shift+V`，可在托盘里换。面板显示期间：
+界面是 ClipFlow HUD：无边框浮层，尺寸随屏自适应——**高 = 屏幕高的 2/3、宽 = 高的一半**（在 DIP 空间计算，任何 DPI 下占同样的屏幕比例；每次呼出按光标所在显示器重算）。内容 = 60px 搜索头 / 卡片列表 / 30px 快捷键页脚，窗口四缘带 1px 中灰描边（`--window-ring`，亮暗同值、对齐系统窗口边框），主题纯跟随系统（亮暗实时切换，无应用内开关）。呼出键默认 `Ctrl+Shift+V`，可在托盘里换。面板显示期间：
 
 | 键 | 浏览态 | 搜索态 |
 |---|---|---|
@@ -89,11 +89,11 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
-npm run test:rust   # cargo test —— 81 例（另有 1 例真机探针 #[ignore]）
+npm run test:rust   # cargo test —— 83 例（另有 1 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwright install chromium）
 ```
 
-119 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 4 / tray 3，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
+121 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 6 / tray 3，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 1 例 `#[ignore]` 的 `真机探针`：剪贴板图片这一路要真机才有答案，跑法见「待真机验证」。
 
 `test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步，以及滚到列表首尾时选中项不被渐隐遮罩盖住；它不并入纯模块测试的 116 例统计。
 
@@ -139,6 +139,7 @@ npm run test:browser # Playwright UI 回归 —— 6 例（首次需 npx playwri
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
 - 快捷键捕获覆盖层（2026-09-07 输入态收口后）：捕获中改从托盘或渲染层进入搜索 / 备注时，覆盖层应随 `shortcut:capture-end` 收起，不再留在屏幕上。
 - 热键记账并成一份（2026-09-07，第三轮深化候选 6）后：呼出键、面板导航键、托盘「更换快捷键」三条路都要照常生效；重点看「按住 `↑` / `↓` 连发、松开即停」——连发的武装与解除现在都走执行线程（登记住在 `modes.rs` 的宿主里，不再由主线程持有），松开事件排在长任务后面时停手会略晚一帧。
+- 动态窗口尺寸（2026-09-08）：不同分辨率 / DPI 的显示器上呼出，面板高应为屏幕高约 2/3、宽为高一半且居中不压任务栏；拖到另一块不同缩放的屏再呼出，尺寸应跟着那块屏重算。窄屏（<400px 宽）下页脚应逐级收紧而非裁掉右边的组。
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。判定半边已由 `tray` 3 例单测兜住（缩放取档、去重键、菜单文案），剩下的「最终 HICON 是否仍糊」只能眼看。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。
 
