@@ -4,6 +4,8 @@
 >
 > 早期条目里的「本文档」指迁移前承载这份日志的 [CONTEXT.md](../CONTEXT.md)；条目提到的 `electron/`、`scripts/`、`resources/` 已随 2026-08-31 删除 Electron 实现一并移除，按历史读。同日删除的 `docs/reimplementation-prompt.md` 同理——它是导出快照，文件已删，条目里的链接不再维护。
 
+- **npm run build 报错：返修 6 的 CSS 残骸（2026-09-08）**：用户报 build 失败。定位：`[lightningcss minify] Invalid empty selector`——返修 6 删 dppx 媒体查询阶梯时用「索引切片」构造 old_string，切点落在 200% 档块中部，留下 `.5px 实测左右取整不对称…*/` 半截注释与悬空 `}` 贴在 `.desktop { padding: 1px; }` 之后。dev 不 minify、浏览器 CSS 错误恢复把垃圾跳过，所以 Playwright 全绿照常；build 的 lightningcss 严格解析才炸。**教训两条**：① 删代码块用精确锚点整块匹配，不用 slice 掐字符数；② 动过 CSS 的轮次，判据之外还要跑 `npm run build:renderer`（dev 绿 ≠ build 绿）。修复 = 删三行残骸留一行正主；`npm run build` 复跑全绿（release exe + NSIS 安装包照常产出）。本轮圆角 28px 等其余改动不受影响。
+
 - **窗口圆角 14 → 28px（2026-09-08）**：用户要求边框四角圆角加倍。改单一真源 `--radius-window`（theme.css），`.desktop` 直接吃它、`.app-window` 内缩 2px 联动；圆角外鼠标穿透的半径由 `getComputedStyle` 运行时读 `.desktop`，零代码改动自动跟上（穿透边界与看到的圆弧仍重合）。卡片等内部圆角（`--radius-md` 等）未点名、不动。Playwright 6 例全绿（window-ring 采边中段 40%，直边段 418−56=362px 仍充裕）。
 
 - **列表与搜索框左右留白 16→12px（2026-09-08）**：屏幕比例制下窗口变窄，用户要求减少列表与搜索框到左右边框的间距。`.hud-search` 与 `.cards` 的左右 padding 从 `--space-4`(16px) 收到 `--space-3`(12px)——仍是 4px 节奏上的 token 值，不引裸数；`.cards` 上下留白不动（顶部 12px 与 scroll-padding 同源，渐隐退役后的首项保护不变）。页脚左右留白保持 16px（用户未点名，且计数与 chip 分居两端、无对齐诉求）。源 UI 的「数值不得改动」约束由用户本轮明示覆盖，记此备查。Playwright 6 例全绿（首项留白断言量的是垂直方向，不受影响）。
