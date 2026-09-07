@@ -41,11 +41,12 @@ pub struct RectDip {
     pub height: f64,
 }
 
-/// 纯几何：面板尺寸（DIP）——高 = 屏幕高的 2/3，宽 = 高的一半。
+/// 纯几何：面板尺寸（DIP）——高 = 屏幕高的 7/8，宽 = 高的一半。
+/// （2026-09-08：初版 2/3 用户嫌小，同日改 7/8；宽 = 高一半不变。）
 /// 比值在 DIP 空间算（物理像素 ÷ 缩放），所以同一物理屏无论 DPI 都占同样的屏幕比例；
 /// 同 DPI 密度（如 4K@2x 与 1080p@1x 的 DIP 高相同）给出完全相同的尺寸——DPI 无关性由公式保证。
 pub fn sized(screen_height: f64, scale: f64) -> (f64, f64) {
-    let height = (screen_height / scale * 2.0 / 3.0).round();
+    let height = (screen_height / scale * 7.0 / 8.0).round();
     ((height / 2.0).round(), height)
 }
 
@@ -276,13 +277,13 @@ mod tests {
     const FULL_HD: WorkArea = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
 
     #[test]
-    fn 面板尺寸高三分之二宽为高之半() {
-        // 1080p @1x：h=round(1080×2/3)=720，w=360
-        assert_eq!(sized(1080.0, 1.0), (360.0, 720.0));
-        // 1440 物理 @2x：DIP 高 720 → h=480，w=240——比值在 DIP 空间算
-        assert_eq!(sized(1440.0, 2.0), (240.0, 480.0));
-        // 1440 物理 @1.75：DIP 高 822.857 → h=549，w=round(274.5)=275（round 远离零）
-        assert_eq!(sized(1440.0, 1.75), (275.0, 549.0));
+    fn 面板尺寸高八分之七宽为高之半() {
+        // 1080p @1x：h=round(1080×7/8)=945，w=round(472.5)=473（round 远离零）
+        assert_eq!(sized(1080.0, 1.0), (473.0, 945.0));
+        // 1440 物理 @2x：DIP 高 720 → h=630，w=315——比值在 DIP 空间算
+        assert_eq!(sized(1440.0, 2.0), (315.0, 630.0));
+        // 1440 物理 @1.75：DIP 高 822.857 → h=round(720.0)=720，w=360
+        assert_eq!(sized(1440.0, 1.75), (360.0, 720.0));
     }
 
     #[test]
