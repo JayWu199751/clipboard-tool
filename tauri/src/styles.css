@@ -57,9 +57,9 @@ body {
   border-radius: calc(var(--radius-window) - 2px);
   /* 描边用真边框而非 inset box-shadow：阴影矩形被逐边独立取整，四边宽度不可控。
      2026-09-08 返修 4：由半透明 hairline 改为 --window-ring 中灰实线，亮暗同值。
-     返修 7：1px→2px——1px 画笔画圆弧时是角点相接的阶梯列，无抗锯齿翼，
-     观感比实心直边窄（真机 175% 实证）；2px 让弧长出 AA 翼，弧与直边观感一致。 */
-  border: 2px solid var(--window-ring);
+     返修 7 曾加粗到 2px 让圆弧长出 AA 翼（1px 弧是细阶梯、观感比直边窄），
+     用户看过后拍板回 1px——弧的混叠错觉换全窗更轻的描边，取舍归用户。 */
+  border: 1px solid var(--window-ring);
   box-shadow: var(--shadow-card);
   overflow: hidden;
   /* 源 UI 的 window-in 入场动画不迁移：真实应用的显隐由原生窗口承担，
@@ -211,8 +211,6 @@ p { font-weight: inherit; font-size: inherit; }
 .card.is-selected {
   background: var(--bg-selected);
   border-color: var(--border-selected);
-  /* 返修 7：同窗口描边，2px 让圆角弧与直边观感等宽（1px 弧是细阶梯，看着窄） */
-  border-width: 2px;
 }
 .card.is-copied { animation: copied-flash 500ms var(--ease-out); }
 @keyframes copied-flash {
