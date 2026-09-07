@@ -124,7 +124,8 @@ p { font-weight: inherit; font-size: inherit; }
    ------------------------------------------------------------ */
 .hud-search {
   display: flex; align-items: center;
-  padding: 0 var(--space-4);
+  /* 左右 16→12px（用户 2026-09-08：窄窗下减少列表与搜索框到边框的间距） */
+  padding: 0 var(--space-3);
   background: var(--bg-app);
   border-bottom: 1px solid var(--border-subtle);
   user-select: none;
@@ -169,7 +170,8 @@ p { font-weight: inherit; font-size: inherit; }
 
 .cards {
   flex: 1; overflow-y: auto; min-height: 0;
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  /* 左右与搜索头同步收到 12px；上下留白不动（顶部 12px 与 scroll-padding 同源） */
+  padding: var(--space-3) var(--space-3) var(--space-4);
   scroll-padding-top: var(--space-3);
   display: flex; flex-direction: column; gap: var(--space-2);
   /* 真机（WebView2 经典滚动条）里原生条占布局宽度，卡片右缘到边框会被垫出
