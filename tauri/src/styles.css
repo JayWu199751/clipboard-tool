@@ -285,8 +285,19 @@ p { font-weight: inherit; font-size: inherit; }
   box-shadow: 0 0 0 3px var(--ring-soft);
 }
 .note-input::placeholder { color: var(--text-tertiary); }
+/* 焦点环只留 .note-input 自己那一圈：全局 :focus-visible 的 2px --accent outline 会叠成
+   两圈蓝环。与搜索井同一口径——环住在控件上，裸输入框抑制自己的 outline（返修：用户报
+   「备注框蓝色边框超出界面」，2026-09-08）。 */
+.note-input:focus-visible { outline: none; }
 /* keep the inline editor clear of the absolutely-positioned Copy chip */
-.card:has(.note-input) .card__meta { padding-right: 76px; }
+/* 编辑态把 meta 的单行裁切由 hidden 换成 clip 并放行 4px：hidden 把 3px 环的上下两边拦腰
+   切掉，只剩左右两截「括号」伸出输入框——用户看到的「超出界面」正是这个断环。4px > 3px
+   环宽，留 1px 抗锯齿余量；放行带仍在卡片 16px 留白内，不碰右侧复制胶囊，零布局位移。 */
+.card:has(.note-input) .card__meta {
+  padding-right: 76px;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
 
 /* Copy affordance — hover / selected */
 .card__copy {

@@ -28,7 +28,7 @@
 **组件映射**
 - 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。
 - 卡片：meta 行 = 仅图标的类型 chip · 来源 · 时间 ·（可选）图钉 ·（可选）内联备注，单行省略号；文字卡 3 行 clamp；图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）；hover/选中浮现「复制」胶囊。
-- 备注编辑：meta 行内联输入框（Enter 保存 / Esc 取消 / 失焦保存），`.card:has(.note-input) .card__meta { padding-right: 76px }` 避让复制胶囊。
+- 备注编辑：meta 行内联输入框（Enter 保存 / Esc 取消 / 失焦保存），`.card:has(.note-input) .card__meta { padding-right: 76px }` 避让复制胶囊。焦点环与搜索井**同一口径**——只有输入框自己那一圈（1px `--border-selected` + 3px `--ring-soft`，全局 `:focus-visible` 的 outline 在 `.note-input` 上抑制）；编辑态那一条规则另把 meta 的单行裁切换成 `overflow: clip` + `overflow-clip-margin: 4px`，`hidden` 会把环的上下两边拦腰裁掉、只剩左右两截「括号」伸出输入框（2026-09-08 返修：用户报「蓝色边框超出界面」）。判定在 `note-input-ring` 两例。
 - 页脚：左「N 条」，右 chip 组（选择 / 复制 / 置顶 / 备注 / 删除 / 隐藏，一组一枚 chip，↑↓ 并排同枚；组距 8px、组内 4px——真机字体比 headless 宽，密度按真机留余量）——**全部由 `keyboard.ts` 注册表生成**，禁止写死键名；搜索键住搜索井，呼出键归托盘与覆盖层，418px 窗口放得下且不压扁（`flex: none` 护栏）。
 - toast：底部居中胶囊栈，成功绿勾 / 删除红叉 + 「撤销」动作（6s）；`aria-live`。
 - 列表滚动条：自绘 4px 细条（`--scroll-thumb`），住在右侧 16px 留白内（right 5px），滚动后约 1s 自动隐藏；原生条在 `.cards` 上隐藏——真机经典滚动条占布局宽度，会把卡片右缘到边框垫出「留白 + 条宽」的不对称。
