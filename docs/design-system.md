@@ -18,17 +18,15 @@
 | `--type-text / --type-image` | #8FA6C9 / #57A8C0 | #4A6A96 / #2E7D96 | 卡片类型 chip（仅图标，着色走 token） |
 | `--window-ring` | #757575 | #757575 | 应用边框描边（返修 4/5 追加，非源 UI 值）：亮暗同值中灰实线，对齐系统窗口边框，两主题必须肉眼可辨 |
 | `--shadow-card/toast/inset` | 黑重深影 | 着色低扩散 | 层级（**无窗口级阴影 token**：原生 shadow 关闭，描边与圆角由 CSS 承担） |
-| `--pop-bg` / `--pop-border` | 近黑 95% 不透明 / 白 96% | 浮层材质：toast 与提示框共用一套，两主题各自可读 |
 
-**主题**：三态偏好（亮 / 暗 / 跟随系统，默认跟随），搜索头右端一枚图标钮，一次点击走一格；判定（偏好 → 生效皮肤 / 后继态 / 文案 / 存档值）住在 `theme.ts`。偏好落渲染层 `localStorage`（`clipflow.theme`，默认值不落盘 = 空档），理由与被否决的方案见 [ADR-0012](adr/0012-theme-preference-in-renderer.md)。index.html 内联脚本按「偏好 + `prefers-color-scheme`」**首帧前**定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听管运行期：手动两态盖过系统，只有跟随系统才跟着翻。托盘图标跟的是**系统**主题、不跟面板皮肤（用户把手动暗压到亮色任务栏上，托盘仍该是亮底那套）。
+**主题**：纯跟随系统，无应用内开关。index.html 内联脚本按 `prefers-color-scheme` 首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时换肤。
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 
 **布局与密度**：窗口尺寸随屏自适应——高 = 屏幕高的 7/8、宽 = 高的一半（DIP 空间计算，任何 DPI 同比例；`resizable:false` 只管用户拖拽，`show_at_cursor` 每次呼出可编程重设）；窄窗下页脚逐级收紧（400/340px 两档媒体查询），不裁组；行轨 60px 搜索头 / 1fr 列表 / 30px 页脚（行轨固定、列表吃掉剩余高度）；网格轨道 `minmax(0,1fr)` + 卡片 `min-width:0` 防长文本撑破窗口（迁移坑②）。圆角 28px（`--radius-window`，原 14、用户 2026-09-08 加倍；穿透判定读 `.desktop` 的 computed 值，自动跟上）；边框描边用真 2px 实线 `--window-ring`（中灰 #757575，亮暗同值；1px 弧是无抗锯齿翼的细阶梯、观感比实心直列窄——混叠错觉，圆角 14 下曾拍板回 1px，圆角加倍到 28 后返修 9 复看改判 2px；「border-width 归一到设备像素」是死路——Chromium 把 border-width 截断成整数 CSS px，测量复验见原型分支 prototype/ring-corner-mask；阴影矩形逐边取整不可控所以不用 inset shadow），`.desktop` 一律留 1 CSS px 内边距（不按缩放档位分治——真机 175% 实证设备像素级「恰好」会被边框取整方向吃掉右缘描边）——描边永不贴窗口物理边缘。
 
 **组件映射**
-- 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。井右外一枚 28px 主题钮：quiet 图标钮配方与「清除」一致（`--text-tertiary` → hover `--bg-active` + `--text-primary`），三态一枚图标（太阳 / 月 / 显示器，同族 outline 补图，16px）。
-- 提示框（主题钮悬停）：**自绘真节点，不用原生 `title`**——原生那套由系统绘制、不跟应用换肤（用户 2026-09-11 要求提示框适应亮暗）。材质与 toast 同族（`--pop-bg` + `--pop-border` + `--shadow-toast`，圆角 `--radius-sm`），8px 方块转 45° 出尖角；出现延迟 90ms、消失无延迟（鼠标扫过头部不该甩出 tip）；`pointer-events:none`——它悬在列表上方，吃了点击就点不到卡片，代价是不可悬停，故同一份文案另进按钮 `aria-label`（hover-only 披露是禁止项），tip 节点本身 `aria-hidden`。两套生效主题各自实算过对比度（暗 14.63–15.61:1、亮 16.41–17.23:1，压在画布与卡片两种底上），由 `theme-toggle` 用例守。
+- 搜索头：60px 头内一枚 36px 紧凑井（`--bg-input` + hairline + inset 高光），焦点环在井上（accent 描边 + 3px 柔光），输入框自身 `outline:none`；井右侧 chip 显示真实搜索键（未激活时）。
 - 卡片：meta 行 = 仅图标的类型 chip · 来源 · 时间 ·（可选）图钉 ·（可选）内联备注，单行省略号；文字卡 3 行 clamp；图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）；hover/选中浮现「复制」胶囊。
 - 备注编辑：meta 行内联输入框（Enter 保存 / Esc 取消 / 失焦保存），`.card:has(.note-input) .card__meta { padding-right: 76px }` 避让复制胶囊。焦点环与搜索井**同一口径**——只有输入框自己那一圈（1px `--border-selected` + 3px `--ring-soft`，全局 `:focus-visible` 的 outline 在 `.note-input` 上抑制）；编辑态那一条规则另把 meta 的单行裁切换成 `overflow: clip` + `overflow-clip-margin: 4px`，`hidden` 会把环的上下两边拦腰裁掉、只剩左右两截「括号」伸出输入框（2026-09-08 返修：用户报「蓝色边框超出界面」）。判定在 `note-input-ring` 两例。
 - 页脚：左「N 条」，右 chip 组（选择 / 复制 / 置顶 / 备注 / 删除 / 隐藏，一组一枚 chip，↑↓ 并排同枚；组距 8px、组内 4px——真机字体比 headless 宽，密度按真机留余量）——**全部由 `keyboard.ts` 注册表生成**，禁止写死键名；搜索键住搜索井，呼出键归托盘与覆盖层，418px 窗口放得下且不压扁（`flex: none` 护栏）。
@@ -38,7 +36,7 @@
 
 **动效与减少动态**：卡片状态过渡 100ms（`--dur-fast`）；复制闪光 500ms 绿→选中色收口；toast 240ms 进 / 160ms 出；`prefers-reduced-motion` 全关。源 UI 的 `window-in` 入场动画不迁移——真实应用显隐由原生窗口承担，scale 变换还会污染描边与滚动几何的测量。
 
-**无障碍**：`role=listbox/option` + `aria-selected`、`aria-live` toast、`:focus-visible` 环、对比度 ≥4.5:1 双主题复算过。主题钮是 icon-only 控件：`aria-label` 里带当前态（「界面主题：跟随系统，点击切换」），提示框的内容因此不依赖悬停；环走全局 `:focus-visible` 那一圈，不另起口径。
+**无障碍**：`role=listbox/option` + `aria-selected`、`aria-live` toast、`:focus-visible` 环、对比度 ≥4.5:1 双主题复算过。
 
 **Do / Don't**
 - Do：一切颜色/尺寸/动效走 token；mono=机器数据、sans=人的内容；选中=accent tint+描边；破坏性操作必须可撤销。

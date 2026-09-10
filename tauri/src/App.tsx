@@ -8,8 +8,6 @@
 //   - 删除 = 渲染层延迟删除：先隐藏 + 6s 撤销 toast，到点才 clipboard_remove；
 //   - Home/End、Ctrl+F、Backspace 原应用无对应键 → 不加键（提示词第 4 条），只留鼠标路径；
 //   - 置顶（Z）是原应用既有键，ClipFlow 无此概念 → 保留行为，meta 行加图标态。
-// 主题三态（亮 / 暗 / 跟随系统）是 HUD 迁移后新增的能力，源 UI 与源 app.js 都没有：
-// 判定在 theme.ts，本文件只管存档与换肤效果，首帧前那一遍在 index.html 内联脚本。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEntry, PanelKeyAction } from './types';
@@ -21,30 +19,12 @@ import { Icon, IconSprite } from './icons';
 import { SearchHeader } from './SearchHeader';
 import { ClipCard } from './ClipCard';
 import { ToastStack, type ToastSpec } from './ToastStack';
-import {
-  DEFAULT_PREFERENCE,
-  THEME_STORAGE_KEY,
-  nextPreference,
-  normalizePreference,
-  resolveTheme,
-  toStoredValue,
-  type ThemePreference,
-} from './theme';
 
 const MAX_NOTE_LENGTH = 200;
 const DELETE_UNDO_MS = 6000;
 const COPY_FLASH_MS = 520;
 const SEARCH_DEBOUNCE_MS = 120;
 const darkModeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-
-// 存档读写是效果，不进 theme.ts；读不到（无存档 / 隐私模式）即默认偏好。
-function readStoredTheme(): ThemePreference {
-  try {
-    return normalizePreference(window.localStorage.getItem(THEME_STORAGE_KEY));
-  } catch {
-    return DEFAULT_PREFERENCE;
-  }
-}
 
 interface FocusError { stage: string; reason: string; message: string }
 
@@ -78,9 +58,6 @@ function App() {
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
   const toastActionsRef = useRef(new Map<number, () => void>());
   const [focusError, setFocusError] = useState<FocusError | null>(null);
-  // 主题：偏好（三态）与系统当前皮肤（两态）各一份状态，生效皮肤由 theme.ts 判出
-  const [themePref, setThemePref] = useState<ThemePreference>(() => readStoredTheme());
-  const [systemDark, setSystemDark] = useState(darkModeMedia.matches);
 
   const [shortcutCapture, setShortcutCapture] = useState<{ current: string; status: { text: string; ok: boolean } | null } | null>(null);
   const shortcutCaptureRef = useRef(shortcutCapture);
@@ -265,8 +242,6 @@ function App() {
       noteSavePendingRef.current = false;
       cancelNoteBlurRef.current = false;
       searchInputRef.current?.blur();
-      // 主题与搜索/选中不同：呼出不重置偏好，只补一次系统皮肤读数（停靠期间可能错过 change 事件）
-      setSystemDark(darkModeMedia.matches);
     });
     window.clipboardAPI.onShortcutCaptureStart((info) => setShortcutCapture({ current: info.current, status: null }));
     window.clipboardAPI.onShortcutCaptureEnd(() => setShortcutCapture(null));
@@ -282,26 +257,9 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  // —— 主题双效：换肤（改 data-theme）与存档（写 localStorage），判定同源 theme.ts ——
-  // 首帧前 index.html 内联脚本已按存档定过一次色，这里只负责运行期（分工见 theme.ts）。
-  // 默认偏好不落盘：跟随系统 = 空档，清档与恢复默认同一条路。
+  // —— 主题：纯跟随系统（head 内联脚本已防 FOUC，这里只做运行期实时同步） ——
   useEffect(() => {
-    const next = resolveTheme(themePref, systemDark);
-    document.documentElement.dataset.theme = next;
-    // 与 index.html 的 'inline:<theme>' 串成一条轨迹，浏览器用例读 trace[0] 断言首帧定色者
-    (window.__themeTrace ??= []).push(`app:${next}`);
-    try {
-      const stored = toStoredValue(themePref);
-      if (stored === null) window.localStorage.removeItem(THEME_STORAGE_KEY);
-      else window.localStorage.setItem(THEME_STORAGE_KEY, stored);
-    } catch {
-      // 存不下（隐私模式 / 配额）只是下次启动回到跟随系统，本次照常生效
-    }
-  }, [themePref, systemDark]);
-
-  // 系统换肤实时同步：跟随系统时它决定生效皮肤，手动两态下它也进悬停提示的「当前：X」
-  useEffect(() => {
-    const sync = () => setSystemDark(darkModeMedia.matches);
+    const sync = () => { document.documentElement.dataset.theme = darkModeMedia.matches ? 'dark' : 'light'; };
     sync();
     darkModeMedia.addEventListener('change', sync);
     return () => darkModeMedia.removeEventListener('change', sync);
@@ -410,9 +368,6 @@ function App() {
     };
   }, []);
 
-  // 一次点击走一格；偏好落盘由上面的主题 effect 统一做（两条路径不会写出不一样的值）
-  const cycleTheme = useCallback(() => setThemePref((pref) => nextPreference(pref)), []);
-
   const chips = footerChips();
 
   return (
@@ -423,12 +378,9 @@ function App() {
           searchActive={searchActive}
           query={query}
           inputRef={searchInputRef}
-          theme={themePref}
-          systemIsDark={systemDark}
           onQueryChange={setQuery}
           onActivate={() => void window.clipboardAPI.activateSearch()}
           onComposition={(active) => void window.clipboardAPI.setSearchComposing(active)}
-          onCycleTheme={cycleTheme}
         />
         <main className="cards-wrap">
           {items.length > 0 ? (

@@ -1,11 +1,9 @@
-// 面板视图规则单测：直测 src/panelView.ts、src/keyboard.ts 与 src/theme.ts 的 interface，零框架、零 mock。
+// 面板视图规则单测：直测 src/panelView.ts 与 src/keyboard.ts 的 interface，零框架、零 mock。
 // 运行：npm run test:view（Node >= 22.18 原生剥离 TS 类型）
 // 末尾的跨语言对表把 keyboard.ts 的 NAV_KEYS 钉在 Rust panel_modes.rs 的 NAV_SHORTCUTS 上——
 // HUD 迁移后页脚 chip「由真实键位表生成」的约束靠这条测试在 CI 里成立，不靠自觉。
-// 同类的跨文件对表还有两条：主题的 index.html 内联解色器（真跑一遍比判定）与 icons.tsx 图标精灵。
 
 import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
 import {
   accelKeyFromCode,
   clampIndex,
@@ -19,19 +17,6 @@ import {
   spansToText,
 } from '../src/panelView.ts';
 import { NAV_KEYS, accelToKeyId, buildBindings, chipLabel, combo, footerChips } from '../src/keyboard.ts';
-import {
-  DEFAULT_PREFERENCE,
-  THEME_PREFERENCES,
-  THEME_STORAGE_KEY,
-  nextPreference,
-  normalizePreference,
-  resolveTheme,
-  themeAriaLabel,
-  themeIcon,
-  themeLabel,
-  themeTooltip,
-  toStoredValue,
-} from '../src/theme.ts';
 
 let passed = 0;
 const failures = [];
@@ -389,119 +374,7 @@ test('滚动条_top随滚动进度线性到最大位', () => {
   eq(scrollbarThumb(0, 600, 60000).visible, true);
 });
 
-// ---------- 主题三态（theme.ts） ----------
-
-test('偏好归一_只认三个合法字面量_其余回落跟随系统', () => {
-  for (const pref of THEME_PREFERENCES) eq(normalizePreference(pref), pref);
-  eq(normalizePreference(null), DEFAULT_PREFERENCE);
-  eq(normalizePreference(undefined), DEFAULT_PREFERENCE);
-  eq(normalizePreference(''), DEFAULT_PREFERENCE);
-  eq(normalizePreference('SYSTEM'), DEFAULT_PREFERENCE);            // 大小写不放过：暗档写错就是悄悄回到跟随系统
-  eq(normalizePreference({ theme: 'dark' }), DEFAULT_PREFERENCE);
-});
-
-test('生效皮肤_手动两态盖过系统_只有跟随系统才看系统', () => {
-  eq(resolveTheme('light', true), 'light');
-  eq(resolveTheme('light', false), 'light');
-  eq(resolveTheme('dark', true), 'dark');
-  eq(resolveTheme('dark', false), 'dark');
-  eq(resolveTheme('system', true), 'dark');
-  eq(resolveTheme('system', false), 'light');
-});
-
-test('点击后继成环_三态各走一步三次回到原点', () => {
-  for (const pref of THEME_PREFERENCES) {
-    const once = nextPreference(pref);
-    const twice = nextPreference(once);
-    assert(once !== pref, `${pref} 自环：点一下没换态`);
-    assert(twice !== pref && twice !== once, `${pref} 两步撞回原值或重复`);
-    eq(nextPreference(twice), pref, `${pref} 三步不成环：`);
-  }
-  eq(nextPreference(DEFAULT_PREFERENCE), 'light', '默认态点一下应到「亮」：');
-});
-
-test('三态标签与图标各自唯一_重了就是同义词或看不出区别', () => {
-  const labels = THEME_PREFERENCES.map(themeLabel);
-  const icons = THEME_PREFERENCES.map(themeIcon);
-  eq(new Set(labels).size, 3);
-  eq(new Set(icons).size, 3);
-  assert(labels.every((label) => label.length > 0 && !/\s/.test(label)), `标签要短到进得了提示框：${labels}`);
-  assert(icons.every((id) => /^i-[a-z-]+$/.test(id)), '图标 id 走精灵命名规范');
-});
-
-test('悬停提示_跟随系统补当前皮肤_手动两态不补', () => {
-  assert(themeTooltip('system', true).includes(themeLabel('system')), '提示必须报当前偏好');
-  assert(themeTooltip('system', true).includes('暗'), '跟随系统要说清当前落到哪套：');
-  assert(!themeTooltip('dark', true).includes('当前'), '手动态没有歧义，不补「当前」');
-  assert(themeTooltip('light', true).includes(themeLabel(nextPreference('light'))), '提示要预告下一态：');
-  assert(themeTooltip('system', false) !== themeTooltip('system', true), '系统翻转应改提示文案');
-});
-
-test('提示框的内容不悬停也拿得到_无障碍名含当前态', () => {
-  for (const pref of THEME_PREFERENCES) {
-    const name = themeAriaLabel(pref);
-    assert(name.includes(themeLabel(pref)), `aria-label 缺当前态 ${pref}：${name}`);
-    assert(!/\s/.test(name.replace(/[，、（）]/g, '')), `无障碍名不留空话：${name}`);
-  }
-});
-
-test('存档值_默认不落盘_手动两态写回自身', () => {
-  eq(toStoredValue('system'), null);                                // 跟随系统 = 空档，清档与恢复默认同路
-  eq(toStoredValue('light'), 'light');
-  eq(toStoredValue('dark'), 'dark');
-  eq(THEME_STORAGE_KEY, 'clipflow.theme');                          // 键名已在用户机器上，改它即丢档
-});
-
-// index.html <head> 里那段内联解色器是 theme.ts 判定的第二份实现（首帧前跑，防 FOUC）。
-// 文本比对只防「改了字面量」，把它真跑一遍才防住「改了逻辑」——FOUC 是用户看得见的闪一下。
-const inlineThemeScript = ((readFileSync(new URL('../index.html', import.meta.url), 'utf8')
-  .match(/<script>([\s\S]*?)<\/script>/)) ?? [])[1] ?? '';
-
-function resolveInlineTheme(stored, systemIsDark, denyStorage = false) {
-  const sandbox = {
-    document: { documentElement: { dataset: {} } },
-    window: {
-      localStorage: {
-        getItem: () => {
-          if (denyStorage) throw new Error('Access is denied for this document.');
-          return stored;
-        },
-      },
-      matchMedia: (query) => ({ media: query, matches: query.includes('dark') ? systemIsDark : false }),
-    },
-  };
-  vm.runInNewContext(inlineThemeScript, sandbox);
-  // 内联脚本除定色外还留一条轨迹（'inline:<theme>'），浏览器用例靠它断言首帧的定色者
-  return { theme: sandbox.document.documentElement.dataset.theme, trace: sandbox.window.__themeTrace };
-}
-
-test('内联解色器与theme.ts判定同源_存档与系统逐一比', () => {
-  assert(inlineThemeScript.length > 0, 'index.html 的 <head> 内联解色器不在了');
-  assert(inlineThemeScript.includes(`'${THEME_STORAGE_KEY}'`), '内联脚本读的键必须等于 THEME_STORAGE_KEY');
-  assert(/catch/.test(inlineThemeScript), '内联脚本必须容错读档（隐私模式下取 localStorage 会抛）');
-  const storedCases = [null, undefined, '', 'light', 'dark', 'system', 'SYSTEM', '{"a":1}'];
-  for (const stored of storedCases) {
-    for (const systemIsDark of [true, false]) {
-      const hint = `存档=${JSON.stringify(stored)} 系统=${systemIsDark ? '暗' : '亮'}：`;
-      const expected = resolveTheme(normalizePreference(stored), systemIsDark);
-      const inline = resolveInlineTheme(stored, systemIsDark);
-      eq(inline.theme, expected, hint);
-      eq(inline.trace, ['inline:' + expected], `${hint}内联轨迹与颜色不一致：`);
-    }
-  }
-  // 读档抛异常 = 当作没设过：两边都必须回落跟随系统，而不是凭空认定某个手动态
-  eq(resolveInlineTheme(null, true, true).theme, 'dark', '读档被拒时应跟随系统：');
-  eq(resolveInlineTheme('light', true, true).theme, 'dark', '存档里写着 light 但读不到，就不许认作手动亮：');
-});
-
-test('三态图标都在SVG精灵里_缺一枚就是空白按钮', () => {
-  const sprite = readFileSync(new URL('../src/icons.tsx', import.meta.url), 'utf8');
-  for (const pref of THEME_PREFERENCES) {
-    assert(sprite.includes(`id="${themeIcon(pref)}"`), `精灵缺 symbol ${themeIcon(pref)}（${themeLabel(pref)}态画成空白）`);
-  }
-});
-
-console.log(`\npanelView+keyboard+theme: ${passed} passed, ${failures.length} failed`);
+console.log(`\npanelView+keyboard: ${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   for (const f of failures) console.error(`  - ${f.name}: ${f.message}`);
   process.exit(1);

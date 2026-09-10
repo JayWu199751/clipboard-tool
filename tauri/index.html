@@ -5,24 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>剪贴板</title>
     <script>
-      /* 主题：三态偏好（亮 / 暗 / 跟随系统，默认跟随）在首帧前定 html[data-theme]，防 FOUC
-         （迁移提示词第 5 条）。这段是 src/theme.ts 判定的行内复制体——它跑在打包产物之前，
-         没法 import，所以「两边是否同源」由 panel-view-unit 里真跑一遍这段脚本的对表测钉住；
-         改 theme.ts 的 resolveTheme / normalizePreference / 存档键，必改这里。
-         运行期换肤与读写在 App.tsx（含系统亮暗实时跟随）。偏好存 localStorage 不存 settings.json，理由见 ADR-0012。 */
+      /* 主题纯跟随系统：首帧前按 prefers-color-scheme 定 data-theme，防 FOUC
+         （迁移提示词第 5 条；运行期实时同步在 App.tsx 的 matchMedia 监听）。 */
       (function () {
-        var KEY = 'clipflow.theme';   // = theme.ts THEME_STORAGE_KEY
-        var pref = 'system';          // = theme.ts DEFAULT_PREFERENCE
-        var stored = null;
-        try { stored = window.localStorage.getItem(KEY); } catch (e) { stored = null; }
-        if (stored === 'light' || stored === 'dark' || stored === 'system') pref = stored;
         var m = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-        var dark = pref === 'dark' || (pref === 'system' && !!(m && m.matches));
-        var theme = dark ? 'dark' : 'light';
-        document.documentElement.dataset.theme = theme;
-        /* 首帧那一次颜色是谁定的，留一条轨迹：App 的换肤效果往后追加 'app:<theme>'。
-           浏览器用例读 trace[0] 就能确认「React 之前已定过色」，不用抢挂载时序赌运气。 */
-        window.__themeTrace = ['inline:' + theme];
+        document.documentElement.dataset.theme = m && m.matches ? 'dark' : 'light';
       })();
     </script>
   </head>
