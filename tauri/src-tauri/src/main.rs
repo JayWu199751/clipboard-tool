@@ -2,6 +2,7 @@
 // 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
 //   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
 //   clipboard      剪贴板独占窗口：打开重试、格式退让、Drop 必关、读写与序列号
+//   clipboard_probe 真机探针（仅测试构建）：通知能否收到 / 通知到可读的等待 / 一次复制几条通知
 //   hotkeys        全局热键记账的唯一真源：accel ↔ Shortcut 双向表、展示文案
 //   panel_modes    面板四态状态机 + 「该注册哪些键」的推导（纯逻辑）
 //   modes          状态机的唯一入口：独占执行线程、具名操作、效果宿主（热键表与连发登记都在它手上）
@@ -30,6 +31,9 @@
 
 mod click_watcher;
 mod clipboard;
+// 真机探针（仅测试构建）：量「提权进程能否收到 WM_CLIPBOARDUPDATE / 通知到可读的等待 / 一次复制几条通知」
+#[cfg(test)]
+mod clipboard_probe;
 mod dib;
 mod focus_paste;
 mod history;

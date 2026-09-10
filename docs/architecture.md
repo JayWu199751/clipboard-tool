@@ -45,6 +45,8 @@
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
 | `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——`clipboard_clear` 的唯一入口） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
+`clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」这个待决问题的真机量具——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知。跑法见 README「待真机验证」。
+
 `history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
 **模式操作**（`modes.rs` 的 17 个具名方法）：`show` `hide` `hide_after_paste` `on_hotkey_pressed` `on_hotkey_repeated` `on_hotkey_released` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。热键回调交出的是插件的 `Shortcut`，不是 accel 字符串——「这是哪个动作」由执行线程查 `Hotkeys` 判，主线程不再持有那份表。
