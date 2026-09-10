@@ -2,6 +2,7 @@
 // 本文件只做效果编排：把各 module 的决策接起来跑。规则本身都不在这里：
 //   history        条目身份 / 去重提升 / 置顶块 / 裁剪豁免
 //   clipboard      剪贴板独占窗口：打开重试、格式退让、Drop 必关、读写与序列号
+//   clipboard_events 剪贴板变化的事件源：建消息窗、注册监听、等通知、失败排重试（起不来则退回轮询）
 //   clipboard_probe 真机探针（仅测试构建）：通知能否收到 / 通知到可读的等待 / 一次复制几条通知
 //   hotkeys        全局热键记账的唯一真源：accel ↔ Shortcut 双向表、展示文案
 //   panel_modes    面板四态状态机 + 「该注册哪些键」的推导（纯逻辑）
@@ -31,6 +32,8 @@
 
 mod click_watcher;
 mod clipboard;
+// 剪贴板变化的事件源：message-only 窗口 + 系统通知 + 阻塞等的消息循环（注册不上时退回轮询）
+mod clipboard_events;
 // 真机探针（仅测试构建）：量「提权进程能否收到 WM_CLIPBOARDUPDATE / 通知到可读的等待 / 一次复制几条通知」
 #[cfg(test)]
 mod clipboard_probe;
@@ -267,10 +270,16 @@ fn commit(app: &AppHandle, state: &AppState) {
 
 // 读一次剪贴板当前内容，交给基线模块认作「已见过」（启动基线、自己写入后的同步都走这里）
 fn sync_baseline(state: &AppState) {
-    let Some(snapshot) = clipboard::read() else { return };
+    let seq = clipboard::sequence();
+    let snapshot = match clipboard::read() {
+        clipboard::ReadOutcome::Known(snapshot) => snapshot,
+        // 启动这一刻剪贴板被占着：不预设基线即可。sync 的用途只是「别把启动时已躺在剪贴板里的
+        // 内容当成新复制」，读不到就没什么可预设的；下一次通知会把真实内容照常记进来。
+        clipboard::ReadOutcome::Occupied => return,
+    };
     let mut baseline = state.baseline.lock().unwrap();
     baseline.sync_now(snapshot.png, snapshot.text);
-    baseline.note_seq(clipboard::sequence());
+    baseline.note_seq(seq);
 }
 
 fn current_source_app(state: &AppState) -> Option<SourceApp> {
@@ -283,16 +292,30 @@ fn current_source_app(state: &AppState) -> Option<SourceApp> {
     })
 }
 
-// 与 main.js pollClipboard 逐段对齐
-fn poll_once(app: &AppHandle, state: &AppState) {
+// 跑一轮：读一次剪贴板、判定、落库广播。返回 true 表示这一轮已尘埃落定；
+// false 表示剪贴板被占用或写盘失败，需要稍后再试一遍（事件路径靠 SetTimer 排重试、
+// 兜底路径靠 600ms 心跳）。与 main.js pollClipboard 逐段对齐。
+fn poll_round(app: &AppHandle, state: &AppState) -> bool {
+    // 记的是**触发这次读取的那个**序列号：若读取期间内容又变了，序列号会前进，下一轮不会被短路
+    let seq = clipboard::sequence();
+    // 序列号未变且没有欠着的一轮 → 这份通知已经处理过，不必再开剪贴板跟别人抢
+    if state.baseline.lock().unwrap().skip_unchanged(seq) {
+        return true;
+    }
     poll_trace("new");
     // 一次读取（先图后字）由 clipboard 独占剪贴板；图片不走 arboard 的原因见该 module。
-    // 文字端口打不开 → 整轮作废，下一轮再来。
-    let Some(clipboard::Snapshot { png, text }) = clipboard::read() else {
-        poll_trace("clipboard-open-failed");
-        return;
+    // 「剪贴板被别的程序占着」与「剪贴板里就是没有内容」必须分开：前者这次读取不可信，
+    // 当成空内容接受会把这次复制从基线上抹掉、序列号照旧推进，从此被短路吃掉、永久消失。
+    let snapshot = match clipboard::read() {
+        clipboard::ReadOutcome::Known(snapshot) => snapshot,
+        clipboard::ReadOutcome::Occupied => {
+            poll_trace("clipboard-occupied");
+            state.baseline.lock().unwrap().note_untrusted();
+            return false;
+        }
     };
     poll_trace("opened");
+    let clipboard::Snapshot { png, text } = snapshot;
 
     // 判定在基线模块内：图片优先、按内容哈希/文本比对，暂存待 confirm
     let change = state.baseline.lock().unwrap().observe(png.clone(), text);
@@ -311,38 +334,59 @@ fn poll_once(app: &AppHandle, state: &AppState) {
         }
         // 无新内容：仍要接受暂存的基线更新（图片未变时文字基线得跟上）
         None => {
-            state.baseline.lock().unwrap().confirm(true);
-            return;
+            let mut baseline = state.baseline.lock().unwrap();
+            baseline.confirm(true);
+            baseline.note_seq(seq);
+            return true;
         }
     };
-    // 写盘失败时基线不动并置重试标志，下一轮即使序列号未变也会再试一次
-    state.baseline.lock().unwrap().confirm(recorded);
+    // 写盘失败时基线不动并置重试标记，稍后即使序列号未变也会再试一次
+    let settled = {
+        let mut baseline = state.baseline.lock().unwrap();
+        baseline.confirm(recorded);
+        baseline.note_seq(seq);
+        !baseline.retry_pending()
+    };
     if recorded {
         commit(app, state);
     }
+    settled
 }
 
-fn poll_loop(app: AppHandle) {
+// 剪贴板监听线程：优先走系统通知（收到才读），事件源起不来时退回 600ms 轮询。
+fn clipboard_watch(app: AppHandle) {
+    let source = app.clone();
+    let result = clipboard_events::run(move || {
+        let state = source.state::<AppState>();
+        let app2 = source.clone();
+        // 监听线程要面对任意应用写入的剪贴板内容：单次异常只记录并跳过，不允许杀死监听
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poll_round(&app2, &state)))
+            // panic 视为「这一轮到此为止」但不排重试——免得同一次异常把重试打成死循环
+            .unwrap_or(true)
+    });
+    if let Err(why) = result {
+        eprintln!("剪贴板事件源起不来（{why}），退回 600ms 轮询");
+        poll_fallback(app);
+    }
+}
+
+// 事件源起不来时的兜底：行为与改动前一致（600ms 一拍，序列号短路在 poll_round 内部）。
+// 留着它是因为「轮询最坏是慢，事件源最坏是全哑」——多这十几行，最坏情况就只是慢。
+fn poll_fallback(app: AppHandle) {
     loop {
         std::thread::sleep(POLL_INTERVAL);
         let state = app.state::<AppState>();
-        // 序列号未变且没有待重试的写盘失败 → 本轮无需读剪贴板
-        if state.baseline.lock().unwrap().skip_unchanged(clipboard::sequence()) {
-            continue;
-        }
-        // 轮询线程要面对任意应用写入的剪贴板内容：单次异常只记录并跳过，不允许杀死轮询
         let app2 = app.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            poll_once(&app2, &state);
+            poll_round(&app2, &state);
         }));
-        state.baseline.lock().unwrap().note_seq(clipboard::sequence());
         if let Err(panic) = result {
             let msg = panic
                 .downcast_ref::<String>()
                 .cloned()
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "unknown panic".to_string());
-            eprintln!("poll_once panicked (skipped this round): {msg}");
+            eprintln!("poll_round panicked (skipped this round): {msg}");
         }
     }
 }
@@ -757,10 +801,10 @@ fn main() {
                 broadcast(app.handle(), &state);
             }
 
-            // 剪贴板轮询
+            // 剪贴板监听（系统通知优先，起不来时退回 600ms 轮询）
             {
                 let app2 = app.handle().clone();
-                std::thread::spawn(move || poll_loop(app2));
+                std::thread::spawn(move || clipboard_watch(app2));
             }
 
             Ok(())

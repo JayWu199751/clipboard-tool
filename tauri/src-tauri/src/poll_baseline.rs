@@ -4,7 +4,8 @@
 //   1. 序列号未变且没有待重试的写盘失败 -> 本轮不必打开剪贴板（省 CPU，也少与他人争用）；
 //   2. 图片优先：图片非空即按 PNG 内容哈希判定，文字基线跟上但不清空图片基线；
 //   3. 无图片时按文字判定：空文字不算新复制；文字分支清空图片基线（图片->文字是真实切换）；
-//   4. 图片写盘失败 -> 基线一律不动、置重试标志，下一轮即使序列号未变也再试一次；
+//   4. 写盘失败，或这一轮剪贴板被别的程序占着、读不到（note_untrusted）
+//      -> 基线一律不动、置重试标记，下一次即使序列号未变也再试一次；
 //   5. 自己刚写入剪贴板（复制并粘贴）-> 立刻把当前内容认作基线，否则 600ms 后会被当成
 //      「新复制」再提升+广播一次，表现为粘贴后列表闪一下。
 //
@@ -32,7 +33,7 @@ pub struct PollBaseline {
     text: String,
     image_hash: String,
     seq: u32,
-    retry: bool,
+    pending_retry: bool,
     pending: Option<Pending>,
 }
 
@@ -43,12 +44,27 @@ impl PollBaseline {
 
     /// 序列号未变且无待重试 -> 本轮可跳过（seq 为 0 表示取不到序列号，保守地照常轮询）
     pub fn skip_unchanged(&self, seq: u32) -> bool {
-        seq != 0 && !self.retry && seq == self.seq
+        seq != 0 && !self.pending_retry && seq == self.seq
     }
 
-    /// 记录本轮结束时的序列号
+    /// 记录本轮结束时的序列号。
+    /// 记的是**触发这次读取的那个**序列号：若读取期间内容又变了（写入方还没收手），
+    /// 序列号会前进，下一轮就不会被短路、会再读一次。
     pub fn note_seq(&mut self, seq: u32) {
         self.seq = seq;
+    }
+
+    /// 本轮读取不可信：剪贴板被别的程序占着，我们看到的既不是空内容、也不是新内容。
+    /// 基线一律不动、序列号不推进，只留下「这一轮还欠着」的标记——置了它之后
+    /// `skip_unchanged` 不再短路，下一次尝试不会因为序列号没变而被跳过去。
+    pub fn note_untrusted(&mut self) {
+        self.pending_retry = true;
+    }
+
+    /// 是否还有欠着的一轮（读不可信，或写盘失败）。事件路径据此排重试定时器，
+    /// 轮询兜底路径则由 `skip_unchanged` 读同一个标记。
+    pub fn retry_pending(&self) -> bool {
+        self.pending_retry
     }
 
     /// 与基线比对本轮所见。返回 Some(Change) 时基线只是暂存，
@@ -80,7 +96,7 @@ impl PollBaseline {
             None => return,
         };
         if !ok {
-            self.retry = true;
+            self.pending_retry = true;
             return;
         }
         if let Some(text) = pending.text {
@@ -89,13 +105,13 @@ impl PollBaseline {
         if let Some(hash) = pending.image_hash {
             self.image_hash = hash;
         }
-        self.retry = false;
+        self.pending_retry = false;
     }
 
     /// 直接把当前内容认作基线（启动基线、自己写入后的同步），不产生 Change
     pub fn sync_now(&mut self, png: Option<Vec<u8>>, text: String) {
         self.pending = None;
-        self.retry = false;
+        self.pending_retry = false;
         match png.filter(|bytes| !bytes.is_empty()) {
             Some(png) => {
                 self.image_hash = sha1_hex(&png);
@@ -204,5 +220,38 @@ mod tests {
         assert!(!b.skip_unchanged(9), "置了重试标志后不能短路");
         b.sync_now(Some(png("img1")), "残留文字".into());
         assert!(b.skip_unchanged(9), "sync_now 应清掉重试标志");
+    }
+
+    #[test]
+    fn 读不可信的一轮不推进序列号_下一轮同一内容仍算新复制() {
+        let mut b = PollBaseline::new();
+        round(&mut b, None, "上一次复制");
+        b.note_seq(41);
+
+        // 用户复制了新内容（序列号 41 → 42），但这一轮剪贴板被别的程序占着、读不到。
+        // 这里绝不能走 observe(None, "") 那条「空文字不算变化」的路——那会把基线记成空，
+        // 这次复制就从基线上消失了，下一轮还会被序列号短路吃掉。
+        b.note_untrusted();
+        assert!(b.retry_pending(), "读不可信必须留下待重试标记");
+        assert!(!b.skip_unchanged(41), "读不可信的一轮即使序列号没变也不许短路");
+
+        // 稍后重试读到真实内容：相对基线仍是新复制（这就是 P0 的回归点）
+        assert_eq!(
+            round(&mut b, None, "这一次复制"),
+            Some(Change::Text("这一次复制".into()))
+        );
+        assert!(!b.retry_pending(), "重试成功后标记应清掉");
+    }
+
+    #[test]
+    fn 读不可信不得清空图片基线() {
+        let mut b = PollBaseline::new();
+        round(&mut b, Some(png("img1")), "");
+
+        b.note_untrusted();
+        assert_eq!(b.image_hash, sha1_hex(&png("img1")), "读不可信不该动图片基线");
+
+        // 重试读到同一张图：相对基线没变，不报新复制
+        assert_eq!(round(&mut b, Some(png("img1")), ""), None);
     }
 }

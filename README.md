@@ -93,9 +93,9 @@ npm run test:rust   # cargo test —— 83 例（另有 1 例真机探针 #[igno
 npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwright install chromium）
 ```
 
-121 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 7 / dib 7 / settings 6 / startup 6 / panel_window 6 / tray 3，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个待决问题的三个未知项）。跑法都见「待真机验证」。
+124 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 6 / startup 6 / panel_window 6 / tray 3 / clipboard 1，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注框焦点环只有一圈且不被 meta 行裁断；它不并入纯模块测试的 121 例统计。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注框焦点环只有一圈且不被 meta 行裁断；它不并入纯模块测试的 124 例统计。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -117,7 +117,7 @@ npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwri
 |---|---|
 | [CONTEXT.md](CONTEXT.md) | 术语的唯一出处；改代码前先对齐说法 |
 | [docs/architecture.md](docs/architecture.md) | 改主进程前必读：线程模型与死锁防线、module 清单、IPC 契约 |
-| [docs/adr/](docs/adr/) | 10 条难回退的决策与被否决的方案；想推翻任何一条先看对应 ADR |
+| [docs/adr/](docs/adr/) | 11 条难回退的决策与被否决的方案；想推翻任何一条先看对应 ADR |
 | [docs/changelog.md](docs/changelog.md) | 每次改动的动机、取舍与行数/例数变化 |
 | [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、动效与减少动态、组件映射、Do / Don't |
 | [docs/desktop-tool-pitfalls.md](docs/desktop-tool-pitfalls.md) | Windows 桌面工具的通用坑，跨项目复用 |
@@ -136,7 +136,8 @@ npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwri
 - 换键与清空（HUD 迁移新增）：托盘「更换快捷键」的当前键文案与捕获覆盖层应显示新键；托盘「清空历史」应清空列表并落盘；页脚六组 chip 间距均匀、`Esc隐藏` 组完整可见不被窗口右缘裁掉。
 - 置顶在 HUD 里的可见性：Z 置顶后卡片 meta 行应出现图钉图标，置顶块顺序规则不变。
 - 截图进历史（2026-09-06 修复）：重新构建后用 PixPin / `Win+Shift+S` 截一张，历史里应出现一条图片条目，缩略图与详情正常；带透明背景的截图 alpha 应保留。断在哪一步由探针报：`cargo test --bin clipboard-tool -- 真机探针 --ignored --nocapture`（在 `tauri/src-tauri/` 下跑）。
-- 轮询要不要换成剪贴板格式监听（2026-09-10 加探针，只读不写）：`cargo test --bin clipboard-tool -- 剪贴板通知探针 --ignored --nocapture`——**必须在管理员终端跑**，否则「提权进程能否收到通知」那一问无效；窗口期（默认 25 秒，`CLIPBOARD_PROBE_SECS` 可调）内先从未提权程序复制、再从管理员程序复制。三问读数：① 提权进程收不收得到 `WM_CLIPBOARDUPDATE`（收不到则事件模型不可用、轮询不能删）；② 通知到达时锁在谁手上（据此判断撞的是源程序还是别的监听者）以及从通知到「能打开剪贴板」等了多久（= 事件模型要留的重试预算，现状图片 8×10ms、文字 arboard 5×5ms）；③ 一次复制来几条通知、各条到达时格式是否逐步补全（是则存在读到半成品的风险）。**2026-09-10 已跑两轮（管理员终端：文本 8 条 + 截图 5 条）：** ① 提权进程收到全部通知（普通程序与管理员程序两种源都收到），UIPI 不拦，**事件模型可用**；② 通知到达时 `GetOpenClipboardWindow()` 恒为「无人持有」，「等到可读」分两条路径——文本最长 **0.7ms**（写入极快，通知到达时已经写完）、截图最长 **13.8ms**（位图写入慢，通知确实落在写入中段），两者都低于现状预算（图片 8×10ms、文字 arboard 5×5ms），事件模型**无需放宽重试**；③ **一次复制 = 一条通知、无半成品读取**——两轮的序列号增量恒等于「格式数 + 1」（文本 7 格式→+8，截图 6 格式→+7，与冒烟时 `clip.exe` 的 4 格式→+5 同律），故每条通知到达时都已是终态，debounce 亦非必需。**探针自报的「间隔 <300ms = 同一动作多段通知」是误报**：它拿时间间隔做代理指标，应以序列号增量为准。**未覆盖**：探针当时是唯一的剪贴板监听者（真实运行时要与本应用、Win+V、输入法同抢那把锁，两位数毫秒是最乐观的读法）；4K 全屏截图写入更慢，有可能顶到 80ms 预算。决策与 ADR 见 [changelog](docs/changelog.md)。
+- 剪贴板监听改走系统通知后（2026-09-10，[ADR-0011](docs/adr/0011-clipboard-watch-via-events.md)）：**刚复制完立刻按呼出键，列表里就该有这一条**（改前最多要等 600ms）；在很短时间里连着复制两段，两条都该进历史——这是换事件模型真正买到的收益，序列号短路买不到。断在哪一步看 `diag.log`：`clipboard-occupied` 表示那一轮剪贴板被别的程序占着、已排重试。**4K 全屏截图**（`Win+Shift+S` 拖满整屏）单独试一次：探针只量到普通截图的 13.8ms，大图写入更慢，若超过 80ms 预算，靠的就是这条重试路径，历史里仍应出现。
+- 底层行为可用探针复验（2026-09-10 加，只读不写）：`cargo test --bin clipboard-tool -- 剪贴板通知探针 --ignored --nocapture`——**必须在管理员终端跑**，否则「提权进程能否收到通知」那一问无效；窗口期（默认 25 秒，`CLIPBOARD_PROBE_SECS` 可调）内复制若干次。**2026-09-10 已跑两轮（管理员终端：文本 8 条 + 截图 5 条）：** ① 提权进程收到全部通知（普通程序与管理员程序两种源都收到），UIPI 不拦，**事件模型可用**；② 通知到达时 `GetOpenClipboardWindow()` 恒为「无人持有」，「等到可读」分两条路径——文本最长 **0.7ms**（写入极快，通知到达时已经写完）、截图最长 **13.8ms**（位图写入慢，通知确实落在写入中段），两者都低于现状预算（图片 8×10ms、文字 arboard 5×5ms），事件模型**无需放宽重试**；③ **一次复制 = 一条通知、无半成品读取**——两轮的序列号增量恒等于「格式数 + 1」（文本 7 格式→+8，截图 6 格式→+7，与冒烟时 `clip.exe` 的 4 格式→+5 同律），故每条通知到达时都已是终态，debounce 亦非必需。**探针自报的「间隔 <300ms = 同一动作多段通知」是误报**：它拿时间间隔做代理指标，应以序列号增量为准。**未覆盖**：探针当时是唯一的剪贴板监听者（真实运行时要与本应用、Win+V、输入法同抢那把锁，两位数毫秒是最乐观的读法）。决策见 [ADR-0011](docs/adr/0011-clipboard-watch-via-events.md)，读数口径见 [changelog](docs/changelog.md)。
 - 焦点恢复 + `Ctrl+V` 注入的实际时延。
 - 快捷键捕获覆盖层（2026-09-07 输入态收口后）：捕获中改从托盘或渲染层进入搜索 / 备注时，覆盖层应随 `shortcut:capture-end` 收起，不再留在屏幕上。
 - 热键记账并成一份（2026-09-07，第三轮深化候选 6）后：呼出键、面板导航键、托盘「更换快捷键」三条路都要照常生效；重点看「按住 `↑` / `↓` 连发、松开即停」——连发的武装与解除现在都走执行线程（登记住在 `modes.rs` 的宿主里，不再由主线程持有），松开事件排在长任务后面时停手会略晚一帧。

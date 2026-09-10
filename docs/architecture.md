@@ -17,7 +17,7 @@
 | 命令线程（tokio worker，`async #[tauri::command]`） | 向 `Modes` 投递具名操作并 `.await` 回执；跑慢的 Win32 粘贴注入 | 持有 store 锁的同时 await 模式回执 |
 | 回调线程（热键 / 鼠标钩子 / 托盘 / 单实例 / 窗口事件） | 向 `Modes` 投递具名操作，**不等待**（忽略返回值不影响投递） | 阻塞：回调必须立即返回 |
 | 方向键重复线程 | `Up` / `Down` 按住期间按定时器重复投递 `on_hotkey_repeated`；只读 `modes_visible`，面板隐藏后停止 | 持有模式状态、等待模式回执 |
-| 轮询线程（600ms） | 读剪贴板、判定新复制、写盘广播；单次异常经 `catch_unwind` 只跳过本轮 | 被任何模式锁拖住 |
+| 剪贴板监听线程 | 等系统通知（`GetMessageW` 阻塞，收到 `WM_CLIPBOARDUPDATE` 才读）、判定新复制、写盘广播；单次异常经 `catch_unwind` 只跳过本轮；事件源起不来时退回 600ms 轮询 | 被任何模式锁拖住 |
 
 两条附带约束：窗口几何与样式变更必须投递主线程执行（这条现在由 `panel_window.rs` 的实现内部承担，调用方只管动作）；`store` 锁与模式状态绝不交叉持有。
 
@@ -33,9 +33,10 @@
 | `hotkeys.rs` | 「现在哪些全局键生效」的唯一真源：accel ↔ Shortcut 双向表 + 动作，两个方向都是 O(1)；注册三步（查重 / 调插件 / 记账）原子，插件拒绝一分不记；accel → 展示文案 | `register` `unregister` `action_of` `accel_of` `bindings`；纯函数 `format_shortcut`；插件调用经端口传入 | 9 |
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys` 与方向键连发登记） | `spawn` + 17 个具名操作（见下） | — |
 | `panel_window.rs` | 面板几何、焦点、鼠标穿透；主线程投递与 DIP 换算。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸） | `show_at_cursor`（含 set_size）`park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`；纯函数 `sized` `centered` `parked` `contains_point` | 6 |
-| `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 写盘失败重试标志 | `observe` `confirm` `skip_unchanged` `note_seq` `sync_now` | 7 |
+| `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 欠着的一轮（读不可信 / 写盘失败）的标记 | `observe` `confirm` `skip_unchanged` `note_seq` `note_untrusted` `retry_pending` `sync_now` | 9 |
 | `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
-| `clipboard.rs` | 剪贴板独占窗口的唯一归属：`OpenClipboard` 小步重试、`CF_DIBV5`→`CF_DIB` 退让、`Drop` 必关、取字节即释放守卫（解码在剪贴板之外）、arboard 文字读写、序列号 | `read()` → `Snapshot{png,text}`、`write_text`、`write_image_file`、`sequence`（`ClipboardGuard` 与格式常量在 module 内部） | — |
+| `clipboard.rs` | 剪贴板独占窗口的唯一归属：`OpenClipboard` 小步重试、`CF_DIBV5`→`CF_DIB` 退让、`Drop` 必关、取字节即释放守卫（解码在剪贴板之外）、arboard 文字读写、序列号；「读不到」与「剪贴板里就是没内容」在这里分开 | `read()` → `ReadOutcome{Known(Snapshot), Occupied}`、`write_text`、`write_image_file`、`sequence`；纯判定 `occupied`（`ClipboardGuard`、`DibBytes` / `ImageRead` 与格式常量在 module 内部） | 1 |
+| `clipboard_events.rs` | 剪贴板变化的事件源：建 `HWND_MESSAGE` 消息窗、注册格式监听、阻塞等 `WM_CLIPBOARDUPDATE`；没搞定的一轮用 `SetTimer` 显式排重试（纯事件下没有「下一轮」可等） | `run(on_change)`（消息窗建不起来 / 注册不上时返回 Err，调用方据此退回轮询兜底） | — |
 | `paste_chain.rs` | 复制并粘贴链路的顺序与结果文案；失败文案的唯一映射处 | `run(&mut port, id)` + `PastePort`（7 个效果）+ `focus_error_message` | 9 |
 | `startup.rs` | 静默启动通道的三态判定、意图/事实分离、「拉起→退出」舞步 | `channel` `apply_intent` `set_auto_start` `relaunch_via_task` `relaunch_if_not_elevated` `current_exe_path`（通道决策 `decide` 与 `sync_fact` 在 module 内部，任务注册经参数注入） | 6 |
 | `settings.rs` | `settings.json` 的读写与 camelCase 键名契约、坏档兜底 | `load` `save` `parse` `Settings::default` | 6 |
@@ -45,7 +46,7 @@
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
 | `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——`clipboard_clear` 的唯一入口） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
-`clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」这个待决问题的真机量具——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知。跑法见 README「待真机验证」。
+`clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」那个决策的真机量具（结论见 [ADR-0011](adr/0011-clipboard-watch-via-events.md)）——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知（判据是**序列号增量**而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）。跑法见 README「待真机验证」。
 
 `history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
@@ -100,9 +101,9 @@
 
 Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `commit()` = `persist()`（写 `clipboard-history.json`）+ `broadcast()`（图片条目转 dataUrl 后 emit `clipboard:updated`）。渲染层不直接改数组，只发命令、听事件。图片落盘 `images/`，dataUrl 按 `imagePath` 永久缓存（文件创建后内容不变），删除/裁剪时经注入端口同步失效。
 
-轮询线程每 600ms 跑一次，先用 `GetClipboardSequenceNumber` 短路未变化的轮次——序列号没动就不打开剪贴板，也就不必先读图片再编码 PNG。
+剪贴板监听线程阻塞在 `GetMessageW` 上等系统通知，收到 `WM_CLIPBOARDUPDATE` 才跑一轮（[ADR-0011](adr/0011-clipboard-watch-via-events.md)）；每轮仍先用 `GetClipboardSequenceNumber` 短路——序列号没动就不打开剪贴板，也就不必先读图片再编码 PNG，顺带挡住「同一内容收到两次通知」。事件源起不来时退回 600ms 轮询（`poll_fallback`），最坏情况只是慢。
 
-图片不走 arboard 的 `get_image`：那条路在「`BI_BITFIELDS` + V4/V5 头」上必挂（[ADR-0009](adr/0009-clipboard-image-decoded-in-house.md)）。轮询先用 Win32 自己取 `CF_DIBV5`（退回 `CF_DIB`）的原始字节交给 `dib` 解，文字仍用 arboard；两者各自独占剪贴板，先后取、不重叠持有；取字节一结束就释放守卫（`CloseClipboard`），解码在剪贴板之外进行——独占窗口若拉长到几十毫秒，正好会撞上用户刚按下 `Ctrl+C` 的时刻。这一整段时序住在 `clipboard.rs::read()` 一处：启动基线与轮询过去各写一遍、对 arboard 打开失败的处理还不一致（一处 trace + return、一处静默 return），现在两条链路共用同一个 `read()`，返回 `None` 就是「这次没读到」。
+图片不走 arboard 的 `get_image`：那条路在「`BI_BITFIELDS` + V4/V5 头」上必挂（[ADR-0009](adr/0009-clipboard-image-decoded-in-house.md)）。轮询先用 Win32 自己取 `CF_DIBV5`（退回 `CF_DIB`）的原始字节交给 `dib` 解，文字仍用 arboard；两者各自独占剪贴板，先后取、不重叠持有；取字节一结束就释放守卫（`CloseClipboard`），解码在剪贴板之外进行——独占窗口若拉长到几十毫秒，正好会撞上用户刚按下 `Ctrl+C` 的时刻。这一整段时序住在 `clipboard.rs::read()` 一处：启动基线与轮询过去各写一遍、对 arboard 打开失败的处理还不一致（一处 trace + return、一处静默 return），现在两条链路共用同一个 `read()`。它返回 `ReadOutcome`：`Known` 是「剪贴板状态已知」（可以既没有位图也没有文字），`Occupied` 是「剪贴板被别的程序占着、这次读取不可信」——后者基线一律不动、序列号不推进，靠重试再来一次；把两者混为一谈会让「打不开」被当成「剪贴板是空的」，那次复制就此永久消失（[ADR-0011](adr/0011-clipboard-watch-via-events.md)）。
 
 ## 待真机复核
 

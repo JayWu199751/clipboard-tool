@@ -8,7 +8,9 @@
 //   ② 从通知到达、到剪贴板真的能被 OpenClipboard 打开，中间隔多久。
 //      这就是事件模型必须留出的重试预算（现状：图片 8x10ms、文字走 arboard 5x5ms）。
 //   ③ 一次「复制」会来几条通知、每条到达时剪贴板里已有哪些格式。
-//      多条且格式逐步增加 = 存在「读到半成品」的风险（一次复制会被记成两条）。
+//      判据是**序列号增量**而不是时间间隔：一次完整复制让序列号前进「格式数 + 1」次
+//      （EmptyClipboard 一次 + 每个 SetClipboardData 各一次）；增量小于它，说明这条
+//      与上一条属于同一次复制（上一条到达时写入还没收手，即「读到半成品」的风险）。
 //
 // 跑法（**必须用管理员终端**，否则第 ① 问的结论无意义）：
 //   cargo test --bin clipboard-tool -- 剪贴板通知探针 --ignored --nocapture
@@ -116,8 +118,10 @@ fn clipboard_holder() -> String {
     }
 }
 
-// 此刻剪贴板上关心的格式有哪些。必须在剪贴板已打开时调用。
-fn available_formats() -> String {
+// 此刻剪贴板上关心的格式有哪些、一共几个格式。必须在剪贴板已打开时调用。
+// 返回 (格式总数, 展示串)：总数是判断「一次复制几条通知」的原料——
+// 一次完整复制会让序列号前进「格式数 + 1」次。
+fn available_formats() -> (usize, String) {
     unsafe {
         let total = CountClipboardFormats();
         let mut list = Vec::new();
@@ -143,7 +147,7 @@ fn available_formats() -> String {
         if marks.is_empty() {
             marks.push("无文本/无位图");
         }
-        format!("{total}个格式[{}]", marks.join("+"))
+        (total.max(0) as usize, format!("{total}个格式[{}]", marks.join("+")))
     }
 }
 
@@ -200,10 +204,11 @@ fn 剪贴板通知探针() {
     });
 
     let mut count = 0usize;
-    let mut burst = 0usize;
+    let mut same_copy = 0usize;
     let mut stall = 0usize;
     let mut max_wait_ms = 0.0f64;
     let mut last: Option<Instant> = None;
+    let mut last_seq: Option<u32> = None;
     let mut msg = MSG::default();
 
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
@@ -214,12 +219,12 @@ fn 剪贴板通知探针() {
         let now = Instant::now();
         let gap_ms = last.map(|t| t.elapsed().as_secs_f64() * 1000.0);
         last = Some(now);
-        // 同一复制动作的多段通知会挤在一起，这是判断「一次复制几条通知」的代理指标
-        if gap_ms.is_some_and(|g| g < 300.0) {
-            burst += 1;
-        }
 
         let seq = unsafe { GetClipboardSequenceNumber() };
+        // 时间间隔只当参考打印，不用它判定「一次复制几条通知」——那会误报：
+        // 实测两条通知间隔只有 151ms，序列号却各 +8，其实是两次独立的复制。
+        let seq_delta = last_seq.map(|prev| seq.wrapping_sub(prev));
+        last_seq = Some(seq);
         // 通知到达那一瞬，锁在谁手上 —— 撞车对手的实锤
         let holder = clipboard_holder();
         let holder = if holder.is_empty() {
@@ -252,20 +257,31 @@ fn 剪贴板通知探针() {
             stall += 1;
         }
 
-        let formats = if opened {
-            let text = available_formats();
+        let (formats_total, formats) = if opened {
+            let (total, text) = available_formats();
             let _ = unsafe { CloseClipboard() };
-            text
+            (Some(total), text)
         } else {
-            "（始终打不开）".to_string()
+            (None, "（始终打不开）".to_string())
         };
+
+        // 判据：一次完整复制让序列号前进「格式数 + 1」次。增量小于它 = 与上一条同属一次复制。
+        if let (Some(delta), Some(total)) = (seq_delta, formats_total) {
+            if delta < total as u32 + 1 {
+                same_copy += 1;
+            }
+        }
 
         let gap_text = match gap_ms {
             Some(g) => format!("{g:.0}ms"),
             None => "-".to_string(),
         };
+        let delta_text = match seq_delta {
+            Some(d) => format!("+{d}"),
+            None => "-".to_string(),
+        };
         eprintln!(
-            "#{count}  距上一条 {gap_text}  seq={seq}  通知到达时持锁者={holder}  等到可读 {waited_ms:.1}ms  内容={formats}"
+            "#{count}  距上一条 {gap_text}  seq={seq}(增量{delta_text})  通知到达时持锁者={holder}  等到可读 {waited_ms:.1}ms  内容={formats}"
         );
     }
 
@@ -274,7 +290,8 @@ fn 剪贴板通知探针() {
 
     eprintln!();
     eprintln!("=== 读数 ===");
-    eprintln!("收到通知 {count} 条（其中 {burst} 条与上一条间隔 <300ms，即同一复制动作的多段通知）");
+    eprintln!("收到通知 {count} 条；其中 {same_copy} 条与上一条同属一次复制");
+    eprintln!("（判据是序列号增量而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）");
     eprintln!("通知 -> 可读 最长等待 {max_wait_ms:.1}ms；彻底打不开 {stall} 次");
     eprintln!();
     eprintln!("=== 结论 ===");
@@ -296,13 +313,12 @@ fn 剪贴板通知探针() {
         eprintln!(
             "② 重试预算下限：最长等待 {max_wait_ms:.1}ms（现状图片 8x10ms、文字 arboard 5x5ms）。"
         );
-        if burst > 0 {
-            eprintln!(
-                "③ 出现了 {burst} 条间隔 <300ms 的通知 = 一个复制动作产生多条通知，"
-            );
-            eprintln!("   需对照各条的「内容」列确认是否逐步补全（是则存在读到半成品的风险）。");
+        if same_copy > 0 {
+            eprintln!("③ 有 {same_copy} 条的序列号增量小于「本条格式数 + 1」= 与上一条同属一次复制，");
+            eprintln!("   即一次复制会发多条通知、前面几条到达时内容还没写完（存在读到半成品的风险）。");
         } else {
-            eprintln!("③ 未见紧密簇：每个复制动作似乎只产生一条通知（仍需人工对照上面的行确认）。");
+            eprintln!("③ 每条通知的序列号增量都等于「本条格式数 + 1」= 每条都对应一次独立的复制：");
+            eprintln!("   一次复制 = 一条通知，且到达时已是终态。");
         }
     }
 
