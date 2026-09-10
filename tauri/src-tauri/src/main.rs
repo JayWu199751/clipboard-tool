@@ -51,9 +51,11 @@ mod settings;
 mod startup;
 mod tasks;
 mod tray;
+// 主题偏好的落地出口：把三态交给 WebView2 的 preferred color scheme（见 ADR-0012）
+mod webview_theme;
 
 use history::{EntryType, HistoryStore, SourceApp};
-use settings::Settings;
+use settings::{Settings, Theme};
 use modes::Modes;
 use panel_modes::FocusTarget;
 use panel_window::{PanelWindow, PANEL_LABEL};
@@ -442,6 +444,20 @@ fn set_auto_start(app: &AppHandle, want: bool) {
     diag_log(&format!("set_auto_start want={want} applied={applied:?}"));
 }
 
+// 主题开关：落盘 → 交给 WebView2 → 重建菜单。不碰模式状态、不碰热键，
+// 也不碰 tauri 的窗口主题（那只会改标题栏 DWM 属性，见 webview_theme.rs 文件头）。
+fn set_theme(app: &AppHandle, theme: Theme) {
+    let state = app.state::<AppState>();
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.theme = theme;
+        save_settings(&state, &settings);
+    }
+    webview_theme::apply(app, theme);
+    Tray::new(app).rebuild_menu();
+    diag_log(&format!("set_theme {}", theme.label()));
+}
+
 // ---------- IPC 命令 ----------
 
 // 复制并粘贴链路的生产 adapter：paste_chain 只管顺序与文案，五个效果在这里落地。
@@ -738,6 +754,12 @@ fn main() {
                 data_dir,
             });
             let state = app.state::<AppState>();
+
+            // 主题：先把存档里的偏好落到网页的 prefers-color-scheme，再进热身——
+            // 热身会把窗口真显示一次（(0,0)，120ms），首帧就该带上正确配色
+            // 先取值再调用：不让 settings 的锁活过 apply（它要经主线程投递）
+            let saved_theme = state.settings.lock().unwrap().theme;
+            webview_theme::apply(app.handle(), saved_theme);
 
             // ready-to-show 热身：先在 (0,0) 显示一次让 WebView 完成首帧渲染，120ms 后移到屏外，
             // 避免首次呼出时内容空白闪烁（与 main.js 的 ready-to-show 舞步一致）

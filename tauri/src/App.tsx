@@ -26,6 +26,12 @@ const COPY_FLASH_MS = 520;
 const SEARCH_DEBOUNCE_MS = 120;
 const darkModeMedia = window.matchMedia('(prefers-color-scheme: dark)');
 
+// 生效皮肤只由媒体查询决定：主进程改的是网页的 prefers-color-scheme（托盘「主题」子菜单，
+// 见 ADR-0012），渲染层自己不存偏好。定色这一处只此一份，呼出时的保险也复用它。
+function applyTheme() {
+  document.documentElement.dataset.theme = darkModeMedia.matches ? 'dark' : 'light';
+}
+
 interface FocusError { stage: string; reason: string; message: string }
 
 let toastSeq = 1;
@@ -242,6 +248,9 @@ function App() {
       noteSavePendingRef.current = false;
       cancelNoteBlurRef.current = false;
       searchInputRef.current?.blur();
+      // 保险：主进程改网页配色走的是 WebView2 的 SetPreferredColorScheme，万一那一下没触发
+      // change 事件，呼出时按媒体查询重刷一次（面板显示前是离屏的，这里不闪给用户看）
+      applyTheme();
     });
     window.clipboardAPI.onShortcutCaptureStart((info) => setShortcutCapture({ current: info.current, status: null }));
     window.clipboardAPI.onShortcutCaptureEnd(() => setShortcutCapture(null));
@@ -257,9 +266,11 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  // —— 主题：纯跟随系统（head 内联脚本已防 FOUC，这里只做运行期实时同步） ——
+  // —— 主题：跟着网页的 prefers-color-scheme 走（head 内联脚本已防 FOUC，这里做运行期同步）。
+  // 这个媒体查询默认就是系统色，但也可被主进程的托盘「主题」子菜单覆盖成手动亮/暗 ——
+  // 覆盖发生在 WebView2 的 profile 上，渲染层不需要知道有偏好这回事（ADR-0012）。
   useEffect(() => {
-    const sync = () => { document.documentElement.dataset.theme = darkModeMedia.matches ? 'dark' : 'light'; };
+    const sync = () => applyTheme();
     sync();
     darkModeMedia.addEventListener('change', sync);
     return () => darkModeMedia.removeEventListener('change', sync);

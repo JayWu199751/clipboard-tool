@@ -11,11 +11,11 @@
 // HICON，零重采样（非整数缩放下 1:1 才不糊，见 pitfalls 第 3 节）。
 
 use crate::panel_window::PanelWindow;
-use crate::settings::Settings;
+use crate::settings::{Settings, Theme};
 use crate::hotkeys::format_shortcut;
-use crate::{commit, set_auto_start, AppState};
+use crate::{commit, set_auto_start, set_theme, AppState};
 use std::sync::Mutex;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
@@ -42,18 +42,41 @@ pub fn icon_key(dark: bool, scale: f64) -> String {
     format!("{}@{}", if dark { "light" } else { "dark" }, size_for_scale(scale))
 }
 
-/// 判定三：菜单里两条随状态变化的文案（其余三条是常量）
+/// 判定三：菜单里三条随状态变化的文案（其余是常量）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuLabels {
     pub shortcut: String,
     pub autostart: String,
+    /// 主题子菜单的标题。当前态写进标题是刻意的：多数人不看子菜单里勾在哪一项
+    pub theme: String,
 }
 
 pub fn menu_labels(settings: &Settings) -> MenuLabels {
     MenuLabels {
         shortcut: format!("更换快捷键(当前: {})", format_shortcut(&settings.shortcut)),
         autostart: format!("开机启动 {}", if settings.auto_start { "✅" } else { "❌" }),
+        theme: format!("主题(当前: {})", settings.theme.label()),
     }
+}
+
+/// 主题子菜单的三条项（菜单 id ↔ 偏好）。顺序即菜单顺序，勾选唯一由 theme_items 保证。
+pub const THEME_MENU_ITEMS: [(&str, Theme); 3] = [
+    ("theme-system", Theme::System),
+    ("theme-light", Theme::Light),
+    ("theme-dark", Theme::Dark),
+];
+
+/// 判定：给定当前偏好，三条项各自的 (菜单 id, 文案, 是否打勾)
+pub fn theme_items(selected: Theme) -> [(&'static str, &'static str, bool); 3] {
+    THEME_MENU_ITEMS.map(|(id, theme)| (id, theme.label(), theme == selected))
+}
+
+/// 判定：菜单 id → 偏好。不是主题项的 id 返回 None，调用方据此决定要不要改设置
+pub fn theme_of_menu_id(id: &str) -> Option<Theme> {
+    THEME_MENU_ITEMS
+        .iter()
+        .find(|(item_id, _)| *item_id == id)
+        .map(|(_, theme)| *theme)
 }
 
 /// 上一次落地的图标键。整个进程只有一个托盘（单实例插件保证），所以这把锁住在
@@ -103,7 +126,13 @@ impl Tray {
                 "quit" => {
                     app.exit(0);
                 }
-                _ => {}
+                // 主题子菜单的三条项共用一个分支：id → 偏好 是纯判定（theme_of_menu_id），
+                // 认不出来的 id 什么都不做（菜单以后加项不会误改设置）
+                id => {
+                    if let Some(theme) = theme_of_menu_id(id) {
+                        set_theme(app, theme);
+                    }
+                }
             })
             .on_tray_icon_event(|tray, event| {
                 if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
@@ -196,6 +225,7 @@ impl Tray {
             let settings = state.settings.lock().unwrap();
             (menu_labels(&settings), settings.auto_start)
         };
+        let theme = state.settings.lock().unwrap().theme;
         let show_item = MenuItem::with_id(app, "show", "显示剪贴板面板", true, None::<&str>)?;
         let shortcut_item = MenuItem::with_id(app, "change-shortcut", labels.shortcut, true, None::<&str>)?;
         let sep1 = PredefinedMenuItem::separator(app)?;
@@ -204,18 +234,31 @@ impl Tray {
         let clear_item = MenuItem::with_id(app, "clear-history", "清空历史", true, None::<&str>)?;
         let sep2 = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-        Menu::with_items(app, &[&show_item, &shortcut_item, &sep1, &autostart_item, &clear_item, &sep2, &quit])
+        // 主题做成子菜单：三态在一条菜单项里选不出，摊开成三项才看得见「还有跟随系统这个选项」
+        let items = theme_items(theme);
+        let theme_system = CheckMenuItem::with_id(app, items[0].0, items[0].1, true, items[0].2, None::<&str>)?;
+        let theme_light = CheckMenuItem::with_id(app, items[1].0, items[1].1, true, items[1].2, None::<&str>)?;
+        let theme_dark = CheckMenuItem::with_id(app, items[2].0, items[2].1, true, items[2].2, None::<&str>)?;
+        let theme_submenu =
+            Submenu::with_id_and_items(app, "theme", labels.theme.clone(), true, &[&theme_system, &theme_light, &theme_dark])?;
+        Menu::with_items(
+            app,
+            &[&show_item, &shortcut_item, &sep1, &autostart_item, &theme_submenu, &clear_item, &sep2, &quit],
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
-    use super::{icon_key, menu_labels, size_for_scale, MenuLabels};
-    use crate::settings::Settings;
+    use super::{
+        icon_key, menu_labels, size_for_scale, theme_items, theme_of_menu_id, MenuLabels,
+    };
+    use crate::settings::{Settings, Theme};
 
     fn settings(accel: &str, auto_start: bool) -> Settings {
-        Settings { shortcut: accel.to_string(), auto_start }
+        // 主题走默认值（跟随系统），要测手动态的文案在各自用例里改
+        Settings { shortcut: accel.to_string(), auto_start, ..Settings::default() }
     }
 
     #[test]
@@ -245,7 +288,7 @@ mod tests {
 
     #[test]
     fn 菜单文案_快捷键走展示格式_开机启动带状态符号() {
-        let MenuLabels { shortcut, autostart } = menu_labels(&settings("Control+Shift+V", true));
+        let MenuLabels { shortcut, autostart, .. } = menu_labels(&settings("Control+Shift+V", true));
         assert_eq!(shortcut, "更换快捷键(当前: Ctrl + Shift + V)");
         assert_eq!(autostart, "开机启动 ✅");
         let off = menu_labels(&settings("Alt+X", false));
@@ -253,5 +296,42 @@ mod tests {
         assert_eq!(off.autostart, "开机启动 ❌");
         // 空快捷键归一为默认键，与存档契约同一口径
         assert_eq!(menu_labels(&settings("", true)).shortcut, "更换快捷键(当前: Ctrl + Shift + V)");
+    }
+
+    #[test]
+    fn 主题子菜单恰好一项打勾_且能映射回当前偏好() {
+        for selected in [Theme::System, Theme::Light, Theme::Dark] {
+            let items = theme_items(selected);
+            let checked: Vec<&str> =
+                items.iter().filter(|(_, _, on)| *on).map(|(id, _, _)| *id).collect();
+            assert_eq!(checked.len(), 1, "{selected:?} 应有且只有一项打勾");
+            assert_eq!(theme_of_menu_id(checked[0]), Some(selected), "打勾项必须映射回当前偏好");
+            let labels: Vec<&str> = items.iter().map(|(_, label, _)| *label).collect();
+            assert!(labels.iter().all(|label| !label.is_empty()), "三项文案不能空");
+            assert_eq!(
+                labels.iter().collect::<std::collections::HashSet<_>>().len(),
+                3,
+                "三项文案必须互不相同"
+            );
+        }
+    }
+
+    #[test]
+    fn 主题菜单id只认三条_其余一律不改设置() {
+        assert_eq!(theme_of_menu_id("theme-system"), Some(Theme::System));
+        assert_eq!(theme_of_menu_id("theme-light"), Some(Theme::Light));
+        assert_eq!(theme_of_menu_id("theme-dark"), Some(Theme::Dark));
+        // 子菜单本身的 id、其余菜单项 id、大小写与近似拼写都不算
+        for id in ["", "theme", "autostart", "clear-history", "theme-bright", "Theme-Light"] {
+            assert_eq!(theme_of_menu_id(id), None, "{id} 不该被当成主题项");
+        }
+    }
+
+    #[test]
+    fn 主题子菜单标题带当前态() {
+        let mut dark = settings("Control+Shift+V", true);
+        dark.theme = Theme::Dark;
+        assert_eq!(menu_labels(&dark).theme, "主题(当前: 暗色)");
+        assert_eq!(menu_labels(&settings("Control+Shift+V", true)).theme, "主题(当前: 跟随系统)");
     }
 }

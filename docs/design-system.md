@@ -19,7 +19,9 @@
 | `--window-ring` | #757575 | #757575 | 应用边框描边（返修 4/5 追加，非源 UI 值）：亮暗同值中灰实线，对齐系统窗口边框，两主题必须肉眼可辨 |
 | `--shadow-card/toast/inset` | 黑重深影 | 着色低扩散 | 层级（**无窗口级阴影 token**：原生 shadow 关闭，描边与圆角由 CSS 承担） |
 
-**主题**：纯跟随系统，无应用内开关。index.html 内联脚本按 `prefers-color-scheme` 首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时换肤。
+**主题**：三态偏好（亮色 / 暗色 / 跟随系统，默认跟随），入口是**托盘右键菜单的「主题」子菜单，面板内零开关**。偏好住 `settings.json` 的 `theme` 键，落地经 WebView2 的 `put_PreferredColorScheme` 改**网页自己的** `prefers-color-scheme`，所以渲染层不持有主题状态，换肤机制与「纯跟随系统」时期逐字相同：index.html 内联脚本按媒体查询在首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时同步，另在每次呼出时重刷一次作保险（运行时那一下是否触发 change 事件，官方未承诺）。理由与被否决方案见 [ADR-0012](adr/0012-theme-preference-in-main-process.md)。
+
+托盘图标仍读**系统**主题而非面板皮肤（它该配任务栏）；面板手动设成亮色、系统是暗任务栏时，托盘保持白图。这条是刻意的不同源。
 
 **排版**：Inter（人的内容）+ JetBrains Mono（机器数据：meta、chip、文件名、计数）。正文 13/1.55 三行 clamp；meta 10.5 mono；类型标签 9.5 mono 大写；页脚 10.5 mono。界面全中文（时间词、toast、aria-label、键名「空格」；Ctrl/Alt/⇧ 保留拉丁）。
 

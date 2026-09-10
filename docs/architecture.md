@@ -39,12 +39,13 @@
 | `clipboard_events.rs` | 剪贴板变化的事件源：建 `HWND_MESSAGE` 消息窗、注册格式监听、阻塞等 `WM_CLIPBOARDUPDATE`；没搞定的一轮用 `SetTimer` 显式排重试（纯事件下没有「下一轮」可等） | `run(on_change)`（消息窗建不起来 / 注册不上时返回 Err，调用方据此退回轮询兜底） | — |
 | `paste_chain.rs` | 复制并粘贴链路的顺序与结果文案；失败文案的唯一映射处 | `run(&mut port, id)` + `PastePort`（7 个效果）+ `focus_error_message` | 9 |
 | `startup.rs` | 静默启动通道的三态判定、意图/事实分离、「拉起→退出」舞步 | `channel` `apply_intent` `set_auto_start` `relaunch_via_task` `relaunch_if_not_elevated` `current_exe_path`（通道决策 `decide` 与 `sync_fact` 在 module 内部，任务注册经参数注入） | 6 |
-| `settings.rs` | `settings.json` 的读写与 camelCase 键名契约、坏档兜底 | `load` `save` `parse` `Settings::default` | 6 |
+| `settings.rs` | `settings.json` 的读写与 camelCase 键名契约、坏档兜底。`Theme` 三态枚举（`system`/`light`/`dark`）也住这里：默认 System，缺键与非法值统一回落，中文名 `label()` | `load` `save` `parse` `Settings::default`；`Theme` 与纯判定 `parse_theme` | 9 |
 | `focus_paste.rs` | 进程内 Win32 的焦点快照与恢复 + `Ctrl+V` 注入 | `snapshot` `restore_and_paste`（失败带 `RestoreFailure{stage,reason}`） | — |
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
 | `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
-| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
+| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案与主题子菜单的判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC；主题子菜单三项走 `CheckMenuItem`，当前态写进子菜单标题。图标亮暗取的是**系统**主题 `is_dark_theme`，与面板的主题偏好刻意不同源） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` `theme_items` `theme_of_menu_id` | 6 |
+| `webview_theme.rs` | 主题偏好的落地出口：三态 → WebView2 常量，并经 `ICoreWebView2_13::Profile` 写进去——改的是**网页的 `prefers-color-scheme`**，不是窗口边框（tauri 的 `set_theme` 在 Windows 上只到 tao 的 DWM 属性，用它面板皮肤不动）。cast 失败（Runtime < 109）只写 stderr，后果是继续跟随系统 | 纯判定 `scheme_of`；效果 `apply` | 1 |
 
 `clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」那个决策的真机量具（结论见 [ADR-0011](adr/0011-clipboard-watch-via-events.md)）——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知（判据是**序列号增量**而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）。跑法见 README「待真机验证」。
 
@@ -88,6 +89,8 @@
 | `window_hide` / `window_set_ignore_mouse` | 隐藏面板 / 切换鼠标穿透 | `bool` |
 
 > 「清空历史」与「进入备注编辑态」**没有命令**，各自只有一个入口：前者由托盘菜单回调直调 `store.clear()` + `commit()`，后者由面板 `B` 键在 `panel_modes.rs` 状态机内消化、转投 `note-edit-enter` 事件。两条都曾有过同名命令（`clipboard_clear` / `note_begin_edit`），因零调用方在 2026-09-10 的冗余清理中删除——别照旧文档再把命令加回来。
+>
+> 「主题」同样**没有命令也没有事件**：托盘子菜单直调 `webview_theme::apply`，改的是网页自己的 `prefers-color-scheme`，渲染层跟着媒体查询换肤即可、不需要知道有偏好这回事。给它加 `theme_get` / `theme` 事件是把同一事实记到第二处（决策与否决项见 [ADR-0012](adr/0012-theme-preference-in-main-process.md)）。
 
 事件（Rust → 渲染层，全部经 `emit_panel` 这一个出口，窗口不存在时静默丢弃）：
 
