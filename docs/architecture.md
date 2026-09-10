@@ -44,7 +44,7 @@
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
 | `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
-| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
+| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC）。图标亮暗取的是**系统**主题（`is_dark_theme`），与面板的主题偏好是两回事：用户把手动暗压到亮色任务栏上，托盘仍该是亮底那套，别把它接到面板皮肤上 | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
 `clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」那个决策的真机量具（结论见 [ADR-0011](adr/0011-clipboard-watch-via-events.md)）——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知（判据是**序列号增量**而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）。跑法见 README「待真机验证」。
 
@@ -60,11 +60,12 @@
 |---|---|---|
 | `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb`；31 例 plain node |
 | `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 5 例 + 对表 1 例 |
+| `theme.ts` | 主题三态的判定侧：偏好（亮 / 暗 / 跟随系统）→ 生效皮肤、存档值归一、点击后继（成环）、图标 id、标签 / 提示框文案 / `aria-label`、默认值不落盘。**没有 IPC 命令，也不进 `settings.json`**——皮肤是纯渲染层事实，偏好住 `localStorage`（[ADR-0012](adr/0012-theme-preference-in-renderer.md)）。`index.html` 的内联脚本是同一判定的第二份实现（跑在打包产物之前，防 FOUC），同源由对表测真跑一遍钉住 | 判定 7 例 + 内联脚本对表 1 例 + 图标精灵对表 1 例（plain node） |
 | `useKeyboard.ts` | 渲染层唯一按键入口：`panel:key` 动作名 → 注册表处理函数的单点分发（ref 转发，不重订阅）。面板导航键由 Rust 全局拦截（浏览态窗口不持焦点），渲染层没有 keydown 监听——快捷键捕获覆盖层是唯一的例外，那是录入键值的编辑器行为 | — |
 | `clipStore.ts` | ClipStore 契约适配层：`RendererEntry` → `ClipItem` 投影 + `createClipStore`（query / total / getNote 只读视图）。组件不碰 invoke；copy / remove 等效果留在 App 接线（ADR-0008） | — |
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
-| `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
-| `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运） | — |
+| `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` / `theme` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入；主题的换肤（改 `data-theme` + 写 `localStorage`）与 `matchMedia` 监听也住在这里，判定在 `theme.ts` | 由 `first-item-top-clip.spec.js` 守 |
+| `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上；井右外一枚主题钮 + 自绘提示框节点）、text/image 两态卡片 + meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 原样搬运；主题三态的三枚是同族补图） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
 | `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI）+ 透明窗口壳层（`.desktop` 圆角裁切与 1 CSS px 一律留边、`.app-window` 1px 中灰实线描边 `--window-ring`——壳层机制原样保留，描边强度与留边契约 2026-09-08 两次返修）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 28px | — |
 | `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
@@ -72,6 +73,7 @@
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 | `tests/window-ring-width.spec.js` | 截图解码后纯像素扫描量窗口描边四边的表观宽度（预乘红积分，`getBoundingClientRect` 给不出来的信息） | 3 例 Playwright |
 | `tests/note-input-ring.spec.js` | 回归备注框焦点环：只有一圈（全局 `:focus-visible` outline 让位）、环完整不被 meta 行裁断且不出卡片边框 | 2 例 Playwright |
+| `tests/theme-toggle.spec.js` | 主题三态的浏览器回归：点击真的换肤并落盘、提示框底面/文字/描边三条都随生效主题变（两套各自实算 WCAG 对比度 ≥4.5:1）、提示框几何不越窗口、主题钮不落在圆角外穿透区、手动两态盖过系统而跟随系统才跟着翻、首帧定色者是内联脚本（读 `__themeTrace`） | 7 例 Playwright |
 
 ## IPC 契约
 

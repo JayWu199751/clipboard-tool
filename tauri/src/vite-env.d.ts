@@ -45,6 +45,9 @@ interface ClipboardAPI {
 declare global {
   interface Window {
     clipboardAPI: ClipboardAPI;
+    /** 主题定色轨迹：index.html 内联脚本写第一位 'inline:<theme>'，App 的换肤效果往后追加
+        'app:<theme>'。存在只为把「首帧前已定过色」这件事变成可断言的事实（防 FOUC），不参与渲染。 */
+    __themeTrace?: string[];
   }
 }
 

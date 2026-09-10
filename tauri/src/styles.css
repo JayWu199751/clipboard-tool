@@ -127,6 +127,9 @@ p { font-weight: inherit; font-size: inherit; }
   background: var(--bg-app);
   border-bottom: 1px solid var(--border-subtle);
   user-select: none;
+  /* 主题提示框要浮在列表之上：头与 .cards-wrap 都是定位元素且同级，
+     z-index:auto 时按 DOM 序后画的列表会盖住它，故给头一档。 */
+  position: relative; z-index: 2;
 }
 
 /* Compact search well — the focus ring lives here (contained, never
@@ -160,6 +163,62 @@ p { font-weight: inherit; font-size: inherit; }
 }
 .hud-search__clear:hover { background: var(--bg-active); color: var(--text-primary); }
 .hud-search__kbd { flex: none; }
+
+/* 主题钮（亮 / 暗 / 跟随系统）：与「清除」同一枚 quiet 图标钮的配方，只是 28px 见圆。
+   三态图标与文案由 theme.ts 判出，色值全走 token。slot 是提示框的定位父级。 */
+.hud-search__theme-slot {
+  position: relative;
+  display: flex; flex: none;
+  margin-left: var(--space-2);
+}
+.hud-search__theme {
+  display: grid; place-items: center;
+  width: 28px; height: 28px;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.hud-search__theme:hover { color: var(--text-primary); background: var(--bg-active); }
+.hud-search__theme:active { background: var(--border-subtle); }
+
+/* 悬停提示框自绘成一个真节点（不是 CSS content）：几何与颜色都要能量——
+   「提示框适应亮暗」是用户明确要求，原生 title 由系统绘制、不跟应用换肤，故不用它。
+   底面走 --pop-bg / --pop-border，与 toast 同一族浮层材质；出现延迟 90ms（鼠标扫过头部
+   不该甩出 tip），消失无延迟。pointer-events:none：tip 悬在列表上时不吃点击，代价是它
+   不可悬停——同一份文案已随 aria-label 给出去，披露不依赖悬停。 */
+.hud-search__tip {
+  position: absolute; top: calc(100% + var(--space-2)); right: 0;
+  z-index: 120;
+  padding: 5px var(--space-2);
+  font-family: var(--font-ui); font-size: 11.5px; font-weight: 500; line-height: 1.3;
+  letter-spacing: 0; white-space: nowrap;
+  color: var(--text-primary);
+  background: var(--pop-bg);
+  border: 1px solid var(--pop-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-toast);
+  pointer-events: none;
+  user-select: none;
+  opacity: 0; visibility: hidden; transform: translateY(-2px);
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out),
+              visibility 0s linear var(--dur-fast);
+}
+/* 8px 方块转 45°成菱形尖：中心正落在提示框上缘（right 10px = (28px 钮宽 − 8px) / 2，
+   尖与钮同心），上半截露在缝隙里。transform 不参与本元素的动画，否则与旋转打架。 */
+.hud-search__tip::before {
+  content: "";
+  position: absolute; top: -4px; right: 10px;
+  width: 8px; height: 8px;
+  background: var(--pop-bg);
+  border-top: 1px solid var(--pop-border);
+  border-left: 1px solid var(--pop-border);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+.hud-search__theme-slot:hover .hud-search__tip,
+.hud-search__theme:focus-visible ~ .hud-search__tip {
+  opacity: 1; visibility: visible; transform: none; transition-delay: 90ms;
+}
 
 /* ------------------------------------------------------------
    3. Card list（源 §4）

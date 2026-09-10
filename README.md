@@ -6,7 +6,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 ## 操作
 
-界面是 ClipFlow HUD：无边框浮层，尺寸随屏自适应——**高 = 屏幕高的 7/8、宽 = 高的一半**（在 DIP 空间计算，任何 DPI 下占同样的屏幕比例；每次呼出按光标所在显示器重算）。内容 = 60px 搜索头 / 卡片列表 / 30px 快捷键页脚，窗口四缘带 2px 中灰描边（`--window-ring`，亮暗同值、对齐系统窗口边框），主题纯跟随系统（亮暗实时切换，无应用内开关）。呼出键默认 `Ctrl+Shift+V`，可在托盘里换。面板显示期间：
+界面是 ClipFlow HUD：无边框浮层，尺寸随屏自适应——**高 = 屏幕高的 7/8、宽 = 高的一半**（在 DIP 空间计算，任何 DPI 下占同样的屏幕比例；每次呼出按光标所在显示器重算）。内容 = 60px 搜索头 / 卡片列表 / 30px 快捷键页脚，窗口四缘带 2px 中灰描边（`--window-ring`，亮暗同值、对齐系统窗口边框）。呼出键默认 `Ctrl+Shift+V`，可在托盘里换。面板显示期间：
 
 | 键 | 浏览态 | 搜索态 |
 |---|---|---|
@@ -28,6 +28,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 - 图片复制与文字一样进历史（含 PixPin、`Win+Shift+S` 这类截图工具产出的位图），条目身份按图片内容判定，见 [ADR-0009](docs/adr/0009-clipboard-image-decoded-in-house.md)。图片卡为 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）。
 - 点击面板外任意处即隐藏；置顶条目固定在最前的置顶块里，新复制插在置顶块之后；HUD 里置顶只以 meta 行的图钉图标呈现。
 - 点击卡片 = 仅选中；复制并粘贴走 Enter / 双击 / 「复制」胶囊（用户拍板保留原应用鼠标语义，未采用源 UI 的「点击即复制」）。
+- 主题三态在搜索框右端那枚图标上：一次点击走一格（跟随系统 → 亮 → 暗 → 回到跟随系统），图标本身就是当前态（显示器 / 太阳 / 月）。悬停出的提示框报出当前态与下一态，**它跟应用一起换肤**——原生 `title` 那套由系统绘制、不跟皮肤，所以自绘（材质与 toast 同族）。手动两态盖过系统；跟随系统时系统翻亮暗即刻跟着翻。
 
 托盘菜单：显示剪贴板面板 / 更换快捷键 / 开机启动 / 清空历史 / 退出。「清空历史」由菜单回调直调存储层（标题栏随 HUD 退役，不走 IPC）。
 
@@ -73,6 +74,8 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 | `settings.json` | `autoStart` / `shortcut`，camelCase 键名不可改，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
 | `diag.log` / `panic.log` | 诊断日志 / release 崩溃落点，见下节 |
 
+> 主题偏好**不在**这个目录：它是纯渲染层事实，存在 WebView2 自己的 `localStorage` 里（键 `clipflow.theme`，默认「跟随系统」不落盘）。清 WebView2 用户数据会丢它，历史与设置不受影响；理由与被否决的方案见 [ADR-0012](docs/adr/0012-theme-preference-in-renderer.md)。
+
 ## 诊断
 
 | 变量 | 时机 | 作用 |
@@ -88,14 +91,14 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 ```bash
 cd tauri
 npm run test        # = test:view + test:rust
-npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
-npm run test:rust   # cargo test —— 83 例（另有 1 例真机探针 #[ignore]）
-npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwright install chromium）
+npm run test:view   # node scripts/panel-view-unit.mjs —— 47 例
+npm run test:rust   # cargo test —— 86 例（另有 2 例真机探针 #[ignore]）
+npm run test:browser # Playwright UI 回归 —— 15 例（首次需 npx playwright install chromium）
 ```
 
-124 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 6 / startup 6 / panel_window 6 / tray 3 / clipboard 1，加渲染层 34（panelView：搜索过滤与高亮 14、圆角外穿透 6、相对时间 4、按键码映射 4；keyboard 注册表 5 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+133 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 6 / startup 6 / panel_window 6 / tray 3 / clipboard 1，加渲染层 47（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1；theme 9：判定 7 + 内联脚本对表 1 + 图标精灵对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注框焦点环只有一圈且不被 meta 行裁断；它不并入纯模块测试的 124 例统计。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽、备注框焦点环只有一圈且不被 meta 行裁断，以及主题三态点下去真的换肤并落盘、提示框底面随生效主题换色（两套各自实算 WCAG 对比度）且几何不越窗口；它不并入纯模块测试的 133 例统计。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -117,7 +120,7 @@ npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwri
 |---|---|
 | [CONTEXT.md](CONTEXT.md) | 术语的唯一出处；改代码前先对齐说法 |
 | [docs/architecture.md](docs/architecture.md) | 改主进程前必读：线程模型与死锁防线、module 清单、IPC 契约 |
-| [docs/adr/](docs/adr/) | 11 条难回退的决策与被否决的方案；想推翻任何一条先看对应 ADR |
+| [docs/adr/](docs/adr/) | 12 条难回退的决策与被否决的方案；想推翻任何一条先看对应 ADR |
 | [docs/changelog.md](docs/changelog.md) | 每次改动的动机、取舍与行数/例数变化 |
 | [docs/design-system.md](docs/design-system.md) | 改视觉前必读：token、排版、圆角、动效与减少动态、组件映射、Do / Don't |
 | [docs/desktop-tool-pitfalls.md](docs/desktop-tool-pitfalls.md) | Windows 桌面工具的通用坑，跨项目复用 |
@@ -129,7 +132,8 @@ npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwri
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。
-- HUD 迁移（2026-09-08）后：亮 / 暗两主题整体观感对照 `clipboard-app/` 源 UI（token 面为不透明实底，旧毛玻璃与「降低透明度」分支已退役）；OS 切亮暗应即时换肤、无刷新、无 FOUC；列表自绘滚动条细条的观感与「滚动后约 1 秒自动隐藏」的节奏一并确认（卡片左右缘到边框对称由浏览器探针守住，真机滚动条占位差异正是这次修复的动机）。
+- HUD 迁移（2026-09-08）后：亮 / 暗两主题整体观感对照 `clipboard-app/` 源 UI（token 面为不透明实底，旧毛玻璃与「降低透明度」分支已退役）；OS 切亮暗应即时换肤、无刷新、无 FOUC（默认是跟随系统；手动两态下不该跟，见下一条）；列表自绘滚动条细条的观感与「滚动后约 1 秒自动隐藏」的节奏一并确认（卡片左右缘到边框对称由浏览器探针守住，真机滚动条占位差异正是这次修复的动机）。
+- 主题三态开关（2026-09-11 新增，[ADR-0012](docs/adr/0012-theme-preference-in-renderer.md)）：点搜索框右端那枚图标应在跟随系统 → 亮 → 暗 → 跟随系统之间循环，图标跟着换、面板立刻换肤；在 Windows 设置里翻系统亮暗，**只有跟随系统那一态该跟着翻**。悬停提示框在两套皮肤下都应与 toast 同族（暗底浅字 / 白底深字，尖角指向那枚钮），且**重启应用后偏好仍在**——`localStorage` 跨进程重启的持久性只有真机验得了（dev 与安装包是不同 origin，各存一份属预期）。16px 太阳图标的清晰度在 125% / 150% / 175% / 200% 各档一并看。
 - 应用边框描边（2026-09-08 返修 4–9）：亮 / 暗两主题下四缘中灰实线（#757575，2px，返修 9 由 1px 加粗换圆弧 AA 翼）应清晰可见、等宽，四角弧段与直边观感等宽一并确认；`.desktop` 一律留 1 CSS px 内边距（真机 175% 实证设备像素级「恰好」会被取整方向吃掉右缘描边，档位媒体查询阶梯已废）；页脚六组提示末组与右缘应留出可见空隙（真机字体比 headless 宽，组距已收进 8px）。100% / 125% / 150% / 175% / 200% 各档位一并确认。
 - 圆角穿透半径改由样式表读出（2026-09-07）后：面板四角「看不见的圆弧外」点击应落到下层窗口，且穿透边界与看到的圆角重合（HUD 迁移后样式表值为 14px）。
 - 删除撤销（HUD 迁移新增）：Del 后条目立即从列表消失、红色 toast 带「撤销」，6 秒内点撤销条目回到原位置；到点后重启应用确认该条确已删除。
