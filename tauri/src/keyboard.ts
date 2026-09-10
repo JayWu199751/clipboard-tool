@@ -9,8 +9,8 @@
 
 import type { PanelKeyAction } from './types';
 
-export const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform || '');
-export const MOD_LABEL = IS_MAC ? '⌘' : 'Ctrl';
+const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform || '');
+const MOD_LABEL = IS_MAC ? '⌘' : 'Ctrl';
 
 // 面板导航键位表（渲染层镜像）。值 = Rust NAV_SHORTCUTS 的 accelerator 协议字符串。
 // 注意 note / search 两个动作在 Rust 状态机内消化（转成 note-edit-enter /

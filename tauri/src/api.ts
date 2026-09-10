@@ -44,9 +44,7 @@ window.clipboardAPI = {
   copy: (id) => invoke('clipboard_copy', { id }),
   remove: (id) => invoke('clipboard_remove', { id }),
   pin: (id) => invoke('clipboard_pin', { id }),
-  clear: () => invoke('clipboard_clear'),
   setNote: (id, note) => invoke('note_set', { id, note }),
-  beginNoteEdit: (id) => invoke('note_begin_edit', { id }),
   endNoteEdit: () => invoke('note_end_edit'),
 
   // 更换快捷键

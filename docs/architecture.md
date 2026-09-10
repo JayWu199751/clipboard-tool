@@ -44,7 +44,7 @@
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
 | `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
-| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——`clipboard_clear` 的唯一入口） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
+| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案三条判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` | 3 |
 
 `clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」那个决策的真机量具（结论见 [ADR-0011](adr/0011-clipboard-watch-via-events.md)）——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知（判据是**序列号增量**而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）。跑法见 README「待真机验证」。
 
@@ -81,11 +81,13 @@
 |---|---|---|
 | `clipboard_get` | 全量历史 | `RendererEntry[]` |
 | `clipboard_copy` | 复制并粘贴（三入口共用） | `{ ok, message }` |
-| `clipboard_remove` / `clipboard_pin` / `clipboard_clear` | 删除 / 置顶切换 / 清空 | `bool` |
-| `note_set` / `note_begin_edit` / `note_end_edit` | 写备注 / 进入备注编辑态 / 退出 | `bool` |
+| `clipboard_remove` / `clipboard_pin` | 删除 / 置顶切换 | `bool` |
+| `note_set` / `note_end_edit` | 写备注 / 退出备注编辑态 | `bool` |
 | `shortcut_try` / `shortcut_cancel` | 试设呼出键 / 取消捕获 | `{ ok, formatted }` / `bool` |
 | `search_activate` / `search_set_composing` | 进入搜索态 / 同步 IME 组合状态 | `bool` |
 | `window_hide` / `window_set_ignore_mouse` | 隐藏面板 / 切换鼠标穿透 | `bool` |
+
+> 「清空历史」与「进入备注编辑态」**没有命令**，各自只有一个入口：前者由托盘菜单回调直调 `store.clear()` + `commit()`，后者由面板 `B` 键在 `panel_modes.rs` 状态机内消化、转投 `note-edit-enter` 事件。两条都曾有过同名命令（`clipboard_clear` / `note_begin_edit`），因零调用方在 2026-09-10 的冗余清理中删除——别照旧文档再把命令加回来。
 
 事件（Rust → 渲染层，全部经 `emit_panel` 这一个出口，窗口不存在时静默丢弃）：
 

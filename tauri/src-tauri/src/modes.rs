@@ -348,10 +348,6 @@ impl Modes {
         self.submit(move |modes, host| modes.set_composing(host, composing))
     }
 
-    pub fn begin_note_edit(&self, id: Option<String>) -> Reply<bool> {
-        self.submit(move |modes, host| modes.enter_input(host, Mode::NoteEdit, id.as_deref()))
-    }
-
     pub fn end_note_edit(&self) -> Reply<()> {
         self.submit(|modes, host| modes.exit_input(host, Mode::NoteEdit, true))
     }

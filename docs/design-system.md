@@ -17,7 +17,7 @@
 | `--success` / `--error` | #57C08A / #E05A52 | #2E9E68 / #C9443C | 复制闪光与 toast 勾 / 删除 toast 叉 |
 | `--type-text / --type-image` | #8FA6C9 / #57A8C0 | #4A6A96 / #2E7D96 | 卡片类型 chip（仅图标，着色走 token） |
 | `--window-ring` | #757575 | #757575 | 应用边框描边（返修 4/5 追加，非源 UI 值）：亮暗同值中灰实线，对齐系统窗口边框，两主题必须肉眼可辨 |
-| `--shadow-window/card/toast/inset` | 黑重深影 | 着色低扩散 | 层级 |
+| `--shadow-card/toast/inset` | 黑重深影 | 着色低扩散 | 层级（**无窗口级阴影 token**：原生 shadow 关闭，描边与圆角由 CSS 承担） |
 
 **主题**：纯跟随系统，无应用内开关。index.html 内联脚本按 `prefers-color-scheme` 首帧前定 `html[data-theme]`（防 FOUC），App 的 `matchMedia` 监听实时换肤。
 

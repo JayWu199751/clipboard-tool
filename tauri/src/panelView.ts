@@ -18,8 +18,8 @@ export interface HighlightSpan {
 
 export type NavDirection = 'up' | 'down';
 
-// 查询分词：去空白、大小写归一。空查询 = 不过滤。
-export function queryTerms(query: string): string[] {
+// 查询分词：去空白、大小写归一。空查询 = 不过滤。（filterEntries / highlight 共用，不外抛）
+function queryTerms(query: string): string[] {
   return query.trim().toLowerCase().split(/\s+/).filter(Boolean);
 }
 

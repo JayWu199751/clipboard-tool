@@ -14,7 +14,7 @@ export type ClipItem =
   | { id: string; type: 'image'; content: string; src: string; source: string; ts: number; note: string; pinned: boolean };
 
 /** 图片条目在磁盘上就叫 <id>.png（%APPDATA%\ClipboardTool\images），mono 文件名行用真名。 */
-export function toClipItem(entry: ClipboardEntry): ClipItem | null {
+function toClipItem(entry: ClipboardEntry): ClipItem | null {
   const source = entry.sourceApp?.appName?.trim() || '未知来源';
   const base = {
     id: entry.id,

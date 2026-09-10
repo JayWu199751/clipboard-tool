@@ -535,17 +535,8 @@ async fn clipboard_pin(app: AppHandle, state: State<'_, AppState>, id: String) -
     Ok(true)
 }
 
-#[tauri::command]
-async fn clipboard_clear(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
-    {
-        let mut store = state.store.lock().unwrap();
-        store.clear();
-    }
-    commit(&app, &state);
-    Ok(true)
-}
-
-// 备注：保存、进入编辑、退出编辑
+// 备注：保存与退出编辑（进入编辑态由面板 B 键在模式状态机内消化，
+// 不经 IPC：见 panel_modes.rs 的 NavAction::Note 分支）
 #[tauri::command]
 async fn note_set(app: AppHandle, state: State<'_, AppState>, id: String, note: String) -> Result<bool, String> {
     let ok = {
@@ -557,19 +548,6 @@ async fn note_set(app: AppHandle, state: State<'_, AppState>, id: String, note: 
     }
     commit(&app, &state);
     Ok(true)
-}
-
-#[tauri::command]
-async fn note_begin_edit(app: AppHandle, state: State<'_, AppState>, id: Option<String>) -> Result<bool, String> {
-    if !panel(&app).exists() {
-        return Ok(false);
-    }
-    let ok = state
-        .modes
-        .begin_note_edit(id)
-        .await
-        .unwrap_or(false);
-    Ok(ok)
 }
 
 #[tauri::command]
@@ -850,9 +828,7 @@ fn main() {
             clipboard_copy,
             clipboard_remove,
             clipboard_pin,
-            clipboard_clear,
             note_set,
-            note_begin_edit,
             note_end_edit,
             shortcut_try,
             shortcut_cancel,

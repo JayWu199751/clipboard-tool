@@ -29,9 +29,7 @@ interface ClipboardAPI {
   copy(id: string): Promise<CopyResult>;
   remove(id: string): Promise<boolean>;
   pin(id: string): Promise<boolean>;
-  clear(): Promise<boolean>;
   setNote(id: string, note: string): Promise<boolean>;
-  beginNoteEdit(id?: string): Promise<boolean>;
   endNoteEdit(): Promise<void>;
 
   onShortcutCaptureStart(callback: (info: { current: string }) => void): void;
