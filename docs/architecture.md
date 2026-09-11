@@ -72,7 +72,7 @@
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 | `tests/window-ring-width.spec.js` | 截图解码后纯像素扫描量窗口描边四边的表观宽度（预乘红积分，`getBoundingClientRect` 给不出来的信息） | 3 例 Playwright |
-| `tests/note-input-ring.spec.js` | 回归备注框焦点环：只有一圈（全局 `:focus-visible` outline 让位）、环完整不被 meta 行裁断且不出卡片边框（meta 行 2026-09-11 搬到内容下方，裁切契约不变） | 2 例 Playwright |
+| `tests/note-input-ring.spec.js` | 回归备注内联编辑：按 B 前后卡片几何逐条相等（输入框与 meta 行等高，2026-09-11 返修「按 B 复制项大小会改变」）、焦点环只有一圈（全局 `:focus-visible` outline 让位）、环完整不被 meta 行裁断且不出卡片边框（meta 行 2026-09-11 搬到内容下方，裁切契约不变） | 3 例 Playwright |
 
 ## IPC 契约
 

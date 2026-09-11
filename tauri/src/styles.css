@@ -225,6 +225,11 @@ p { font-weight: inherit; font-size: inherit; }
   display: flex; align-items: center; gap: 6px;
   font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary);
   margin-top: var(--space-2);
+  /* 行高是显式的**高度契约**：内联备注框（.note-input）与这一行等高，按下 B 才不推挤卡片。
+     不写死行高时行盒由内容决定（10.5 × 1.45 ≈ 15.2），22px 的输入框一进来就把行撑到 22px，
+     卡片高度 89.5 → 96.28、下方每条跟着跳 6.8px（2026-09-11 用户报「按下 B 复制项大小会改变」）。
+     16px 比自然行盒高 0.8px，代价是每张卡恒定高 0.8px，换来编辑态零位移。 */
+  line-height: 16px;
   white-space: nowrap; overflow: hidden;
 }
 /* 类型标识（仅图标的 chip）2026-09-11 随用户要求删除：文字/图片由内容形态本身区分，
@@ -272,10 +277,14 @@ p { font-weight: inherit; font-size: inherit; }
   color: var(--text-tertiary);
 }
 
+/* 内联备注框 = meta 行本身那么高（16px），字号取与 meta 文本同号（10.5px）。
+   原为 22px / 11.5px：比 meta 行高出 6.8px，一按 B 就把卡片撑高（见 .card__meta 的注释）。
+   行高必须显式写回 14px（= 16 − 上下各 1px 边框）——不写会继承 meta 行的 16px，行盒比内容盒
+   还高，文字被上下裁掉。 */
 .note-input {
   flex: 1; min-width: 0;
-  height: 22px; padding: 0 var(--space-2);
-  font-family: var(--font-ui); font-size: 11.5px; color: var(--text-primary);
+  height: 16px; padding: 0 var(--space-2);
+  font-family: var(--font-ui); font-size: 10.5px; line-height: 14px; color: var(--text-primary);
   background: var(--bg-app);
   border: 1px solid var(--border-selected);
   border-radius: var(--radius-sm);

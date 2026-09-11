@@ -93,12 +93,12 @@ cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
 npm run test:rust   # cargo test —— 93 例（另有 2 例真机探针 #[ignore]）
-npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwright install chromium）
+npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwright install chromium）
 ```
 
 131 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 6 / tray 6 / clipboard 1 / webview_theme 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注框焦点环只有一圈且不被 meta 行裁断；它不并入纯模块测试的 131 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 131 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -147,6 +147,7 @@ npm run test:browser # Playwright UI 回归 —— 8 例（首次需 npx playwri
 - 快捷键捕获覆盖层（2026-09-07 输入态收口后）：捕获中改从托盘或渲染层进入搜索 / 备注时，覆盖层应随 `shortcut:capture-end` 收起，不再留在屏幕上。
 - 热键记账并成一份（2026-09-07，第三轮深化候选 6）后：呼出键、面板导航键、托盘「更换快捷键」三条路都要照常生效；重点看「按住 `↑` / `↓` 连发、松开即停」——连发的武装与解除现在都走执行线程（登记住在 `modes.rs` 的宿主里，不再由主线程持有），松开事件排在长任务后面时停手会略晚一帧。
 - 动态窗口尺寸（2026-09-08）：不同分辨率 / DPI 的显示器上呼出，面板高应为屏幕高约 7/8、宽为高一半且居中不压任务栏；拖到另一块不同缩放的屏再呼出，尺寸应跟着那块屏重算。窄屏（<400px 宽）下页脚应逐级收紧而非裁掉右边的组。
+- 备注编辑态（2026-09-11）：按 `B` 时卡片与下方列表应**纹丝不动**（修前输入框比 meta 行高 6.8px，一按就撑高卡片、下方整列下跳），输入框与 meta 文本等高、里面的字上下不被裁；真机字体比 headless 宽，100%–200% 各缩放档一并看（几何由 `note-input-ring` 的编辑态用例守住）。
 - 备注框焦点环（2026-09-08 返修）：按 `B` 进内联编辑，输入框应只有一圈柔光焦点环、上下完整不伸出 meta 行（修前被裁成左右两截「括号」）；100%–200% 各缩放档一并看（几何由 `note-input-ring` 两例守住，`overflow-clip-margin` 在分数缩放下的取整仍需眼看）。
 - 托盘图标在 125% / 150% / 175% 各缩放档位的清晰度。判定半边已由 `tray` 3 例单测兜住（缩放取档、去重键、菜单文案），剩下的「最终 HICON 是否仍糊」只能眼看。
 - NSIS 安装器全流程：perMachine 安装、开机启动开关、卸载后任务与存档残留。
