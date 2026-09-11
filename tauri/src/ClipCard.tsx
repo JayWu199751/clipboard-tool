@@ -1,6 +1,8 @@
-// 卡片（源 UI §4）：meta 行 = 仅图标的类型 chip · 来源 · 时间 ·（可选）置顶/内联备注，
-// 单行省略号；文字卡 3 行 clamp，图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名；
-// hover/选中浮现「复制」胶囊。点击 = 仅选中、双击/胶囊 = 复制并粘贴（用户确认按原应用）。
+// 卡片（源 UI §4，2026-09-11 局部改版）：内容在上、meta 行在下——meta 行 = 仅图标的类型 chip ·
+// 来源应用 · 时间 ·（可选）置顶 ·（可选）内联备注，单行省略号；文字卡内容 3 行 clamp，
+// 图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名。改版动机与取舍见 docs/changelog.md 同日条目。
+// 复制胶囊仍在卡片右上角（hover/选中浮现）——文字卡由 styles.css 在选中态让出右端，
+// 免得多行文字被压在胶囊下面。点击 = 仅选中、双击/胶囊 = 复制并粘贴（用户确认按原应用）。
 // 选中态 = accent tint + accent 描边（禁止实心大色块）。
 
 import type { ReactNode } from 'react';
@@ -43,6 +45,16 @@ export function ClipCard({ item, selected, copied, query, noteDraft, onSelect, o
       onClick={onSelect}
       onDoubleClick={onCopy}
     >
+      {item.type === 'image' ? (
+        <>
+          <div className="card__thumb">
+            <img src={item.src} alt="剪贴板图片" draggable={false} />
+          </div>
+          <div className="card__name">{item.content}</div>
+        </>
+      ) : (
+        <div className="card__body">{query ? renderHighlight(item.content, query) : item.content || '（空内容）'}</div>
+      )}
       <div className="card__meta">
         <span className="card__type"><Icon id={item.type === 'image' ? 'i-image' : 'i-text'} size={12} /></span>
         {sep('s1')}<span className="src">{item.source}</span>
@@ -73,16 +85,6 @@ export function ClipCard({ item, selected, copied, query, noteDraft, onSelect, o
           <>{sep('s5')}<span className="card__note" title={item.note}>{query ? renderHighlight(item.note, query) : item.note}</span></>
         ) : null}
       </div>
-      {item.type === 'image' ? (
-        <>
-          <div className="card__thumb">
-            <img src={item.src} alt="剪贴板图片" draggable={false} />
-          </div>
-          <div className="card__name">{item.content}</div>
-        </>
-      ) : (
-        <div className="card__body">{query ? renderHighlight(item.content, query) : item.content || '（空内容）'}</div>
-      )}
       <button
         type="button"
         className="card__copy"

@@ -218,10 +218,13 @@ p { font-weight: inherit; font-size: inherit; }
   100% { background: var(--bg-selected); border-color: var(--border-selected); }
 }
 
+/* meta 行（类型 · 来源 · 时间 · 图钉 · 备注）住在内容**下方**（2026-09-11 用户要求）：
+   间距一律取 margin-top，内容块自己不留底边距——图片卡「缩略图 → 文件名」之间仍靠
+   .card__thumb 的 margin-bottom 维持 12px。 */
 .card__meta {
   display: flex; align-items: center; gap: 6px;
   font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary);
-  margin-bottom: var(--space-2);
+  margin-top: var(--space-2);
   white-space: nowrap; overflow: hidden;
 }
 .card__type {
@@ -248,7 +251,7 @@ p { font-weight: inherit; font-size: inherit; }
    HUD 换真图后已无赋值点，写回固定底即可。 */
 .card__thumb {
   position: relative;
-  height: 150px; margin-bottom: var(--space-3);
+  height: 150px; margin-bottom: var(--space-3); /* 只隔开下面的文件名；meta 行的间距归它自己的 margin-top */
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background:
@@ -287,12 +290,14 @@ p { font-weight: inherit; font-size: inherit; }
    两圈蓝环。与搜索井同一口径——环住在控件上，裸输入框抑制自己的 outline（返修：用户报
    「备注框蓝色边框超出界面」，2026-09-08）。 */
 .note-input:focus-visible { outline: none; }
-/* keep the inline editor clear of the absolutely-positioned Copy chip */
-/* 编辑态把 meta 的单行裁切由 hidden 换成 clip 并放行 4px：hidden 把 3px 环的上下两边拦腰
-   切掉，只剩左右两截「括号」伸出输入框——用户看到的「超出界面」正是这个断环。4px > 3px
-   环宽，留 1px 抗锯齿余量；放行带仍在卡片 16px 留白内，不碰右侧复制胶囊，零布局位移。 */
+/* 编辑态：meta 的单行裁切由 hidden 换成 clip 并放行 4px——hidden 把 3px 环的上下两边拦腰
+   切掉，只剩左右两截「括号」伸出输入框（用户看到的「蓝色边框超出界面」正是这个断环，
+   2026-09-08 返修）。4px > 3px 环宽，留 1px 抗锯齿余量；输入框左右各 3px 的环都落在
+   卡片 16px 留白内，零布局位移。
+   改版前这里还留着 padding-right: 76px 给右上角的复制胶囊让位；meta 行搬到内容下方后，
+   胶囊在最上一行的带内（卡片顶 12px 起、24px 高），输入框在最下一行，两者永不相交，
+   该让位随之删除——留着只是白丢一截输入宽度。 */
 .card:has(.note-input) .card__meta {
-  padding-right: 76px;
   overflow: clip;
   overflow-clip-margin: 4px;
 }
@@ -313,6 +318,12 @@ p { font-weight: inherit; font-size: inherit; }
 .card:hover .card__copy,
 .card.is-selected .card__copy { opacity: 1; transform: none; }
 .card__copy:hover { background: rgba(123, 119, 224, 0.25); }
+/* 文字卡的内容现在从卡片顶边起排，长文本的末行会伸到右上角胶囊底下（改版前它上面垫着
+   meta 行，胶囊压的是 meta、压不到正文）。只在「胶囊可见」的两态给正文让出右端，展开式
+   文本重新断行 17 个字符——hover 本来就是观感态，非 hover 的静止态不欠这段留白。
+   图片卡不用让：150px 缩略图比胶囊高，正文（文件名）在缩略图之下。 */
+.card[data-type="text"]:hover .card__body,
+.card[data-type="text"].is-selected .card__body { padding-right: 68px; }
 
 /* 命中高亮（原应用搜索能力的皮肤，色值全走 token） */
 .card mark {
