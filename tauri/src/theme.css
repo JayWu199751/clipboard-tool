@@ -56,8 +56,12 @@
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
   --space-4: 16px; --space-5: 24px; --space-6: 32px;
 
-  /* 14→28px（用户 2026-09-08：边框四角圆角加倍）。穿透判定读 computed 值，自动跟上 */
-  --radius-window: 28px;
+  /* 14→28→36px（2026-09-08 用户要求边框四角圆角加倍；2026-09-11 用户指定 36px）。
+     穿透判定读 .desktop 的 computed 值，自动跟上，零代码改动 */
+  --radius-window: 36px;
+  /* 复制项（列表行）专用 12px（2026-09-11 用户指定）。刻意不并进 --radius-md：那枚 10px
+     还归空态图标与快捷键覆盖层卡片，而用户是一个面一个面点名的——共用一枚就会互相牵连。 */
+  --radius-card: 12px;
   --radius-md: 10px;
   --radius-sm: 6px;
   --radius-pill: 999px;

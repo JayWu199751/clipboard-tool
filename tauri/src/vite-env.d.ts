@@ -7,7 +7,7 @@ interface ShortcutTryResult {
   formatted: string;
 }
 
-// clipboard:copy 的结果契约：三个入口（键盘 Enter / 双击 / 复制按钮）共用，
+// clipboard:copy 的结果契约：两个入口（键盘 Enter / 双击）共用——卡片右上角的「复制」按钮 2026-09-11 已删，
 // message 为主进程给出的可展示文案（错误文案与 panel:focus-error 事件同源）。
 interface CopyResult {
   ok: boolean;

@@ -26,7 +26,7 @@ pub enum CopyContent {
     Image(String),
 }
 
-/// 链路结果。三个入口（键盘 Enter / 双击 / 复制按钮）共用同一个契约 { ok, message }，
+/// 链路结果。两个入口（键盘 Enter / 双击卡片）共用同一个契约 { ok, message }，
 /// 渲染层按契约渲染提示，不再各自拼文案。
 #[derive(Debug, Clone, Serialize)]
 pub struct CopyResult {

@@ -8,6 +8,6 @@
 
 ## Consequences
 
-- 三个入口（键盘 Enter / 双击 / 复制按钮）共用同一结果契约 `{ ok, message }`，失败路径假报成功是最伤信任的缺陷，所以文案与 `panel:focus-error` 事件必须同源（见 [desktop-tool-pitfalls.md](../desktop-tool-pitfalls.md) 第 2 节）。
+- 各入口（键盘 Enter、双击卡片）共用同一结果契约 `{ ok, message }`，失败路径假报成功是最伤信任的缺陷，所以文案与 `panel:focus-error` 事件必须同源（见 [desktop-tool-pitfalls.md](../desktop-tool-pitfalls.md) 第 2 节）。
 - 这条链路由 `paste_chain` module 独占，顺序与文案由 9 例单测钉住；改任何一步之前先看它们。
 - 呼出面板时先记录前台窗口/焦点控件再显示面板，避免面板自己成为「原输入框」。

@@ -1,9 +1,11 @@
 // 卡片（源 UI §4，2026-09-11 局部改版）：内容在上、meta 行在下——meta 行 = 来源应用 · 时间 ·
 //（可选）置顶 ·（可选）内联备注，单行省略号；文字卡内容 3 行 clamp，图片卡 150px 真实缩略图
 //（棋盘格底）+ mono 文件名。类型（文字/图片）不再有 chip 标识，只由内容形态本身区分；
-// 两项改版的动机与取舍见 docs/changelog.md 同日两条。
-// 复制胶囊仍在卡片右上角（hover/选中浮现）——文字卡由 styles.css 在选中态让出右端，
-// 免得多行文字被压在胶囊下面。点击 = 仅选中、双击/胶囊 = 复制并粘贴（用户确认按原应用）。
+// 上文两项改版的动机与取舍见 docs/changelog.md 同日两条（复制胶囊的删除见同日第三条）。
+// 点击 = 仅选中、双击 = 复制并粘贴（用户确认按原应用鼠标语义）。
+// 右上角的「复制」胶囊 2026-09-11 随用户要求删除（「hover 与选中都不再显示」）——鼠标复制的
+// 入口只剩双击一条；连带退役 .card__copy 一族样式、i-copy 图标符号、文字卡的 68px 让位，
+// 以及只被那条让位规则读的 data-type 属性（零引用者成套退役，见 docs/changelog.md 同日条目）。
 // 选中态 = accent tint + accent 描边（禁止实心大色块）。
 
 import type { ReactNode } from 'react';
@@ -42,7 +44,6 @@ export function ClipCard({ item, selected, copied, query, noteDraft, onSelect, o
       role="option"
       aria-selected={selected}
       data-selected={selected ? 'true' : 'false'}
-      data-type={item.type}
       onClick={onSelect}
       onDoubleClick={onCopy}
     >
@@ -85,15 +86,6 @@ export function ClipCard({ item, selected, copied, query, noteDraft, onSelect, o
           <>{sep('s5')}<span className="card__note" title={item.note}>{query ? renderHighlight(item.note, query) : item.note}</span></>
         ) : null}
       </div>
-      <button
-        type="button"
-        className="card__copy"
-        aria-label={item.type === 'image' ? '复制图片' : '复制文字'}
-        onClick={(event) => { event.stopPropagation(); onSelect(); onCopy(); }}
-      >
-        <Icon id="i-copy" size={12} />
-        复制
-      </button>
     </li>
   );
 }

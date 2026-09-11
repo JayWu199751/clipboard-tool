@@ -17,3 +17,6 @@ Thumbs.db
 *.local
 # 本地诊断脚本与截图
 .scratch/
+
+# 助手会话记忆（DSH，非项目代码）
+.workbuddy/

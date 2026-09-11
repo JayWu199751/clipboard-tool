@@ -40,7 +40,7 @@ window.clipboardAPI = {
   onPanelKey: (cb) => onEvent('panel:key', cb, (p) => [p.action, p.noteEntryId ?? null]),
   onPanelShown: (cb) => onEvent('panel:shown', cb),
   onFocusError: (cb) => onEvent('panel:focus-error', cb),
-  // 返回结果契约 { ok, message }：键盘 Enter / 双击 / 复制按钮共用
+  // 返回结果契约 { ok, message }：键盘 Enter / 双击共用（卡片右上角的「复制」按钮 2026-09-11 已删）
   copy: (id) => invoke('clipboard_copy', { id }),
   remove: (id) => invoke('clipboard_remove', { id }),
   pin: (id) => invoke('clipboard_pin', { id }),
