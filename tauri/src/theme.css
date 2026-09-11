@@ -44,10 +44,6 @@
   --success-soft: rgba(87, 192, 138, 0.16);
   --error:        #E05A52;
 
-  /* Type colors */
-  --type-text:  #8FA6C9;
-  --type-image: #57A8C0;
-
   /* Typography */
   --font-ui:   "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
@@ -120,9 +116,6 @@ html[data-theme="light"] {
   --success:      #2E9E68;
   --success-soft: rgba(46, 158, 104, 0.14);
   --error:        #C9443C;
-
-  --type-text:  #4A6A96;
-  --type-image: #2E7D96;
 
   --shadow-card:   0 1px 3px rgba(30, 30, 60, 0.08);
   --shadow-toast:  0 10px 28px rgba(30, 30, 60, 0.22);

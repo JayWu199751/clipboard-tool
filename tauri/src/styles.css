@@ -227,13 +227,9 @@ p { font-weight: inherit; font-size: inherit; }
   margin-top: var(--space-2);
   white-space: nowrap; overflow: hidden;
 }
-.card__type {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; font-size: 9.5px;
-}
-.card[data-type="text"]  .card__type { color: var(--type-text); }
-.card[data-type="image"] .card__type { color: var(--type-image); }
-.card__type svg { width: 12px; height: 12px; }
+/* 类型标识（仅图标的 chip）2026-09-11 随用户要求删除：文字/图片由内容形态本身区分，
+   meta 行现在直接从来源应用起头，故 .card__type 一族与 --type-text/--type-image 一并退役。
+   .card 上的 data-type 属性保留——文字卡让开复制胶囊的那条规则还在读它。 */
 .card__meta .sep { color: var(--text-disabled); }
 .card__meta .src { color: var(--text-secondary); }
 /* 置顶标记（原应用 Z 键的可见态，HUD 里只留图标） */
