@@ -12,7 +12,8 @@
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT,
 };
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, Wry};
 
@@ -243,26 +244,35 @@ impl PanelWindow {
 
     /// 显示窗口（ready-to-show 热身用）。投递主线程执行。
     ///
-    /// 这是本窗口整个生命周期里唯一一次从不可见变可见，故「别上任务栏」必须办在这里：
-    /// `skipTaskbar: true` 只是让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
-    /// 可那时窗口还不可见、任务栏上根本没有按钮可删；按钮是外壳在窗口**变可见**时补的。
-    /// 而这里的「隐藏」是把窗口移到屏幕外（可见位始终为真），补上来的按钮就会挂满一整个
-    /// 会话，点它只是把一个看不见的窗口切到前台 = 看着像没反应。
-    /// `WS_EX_TOOLWINDOW` 让外壳在评估阶段就把这个窗口排除，不必和补按钮的时机抢先后；
-    /// 顺带把它从 Alt+Tab 里也摘掉——从 Alt+Tab 切进一个屏外窗口是同一个问题的另一半。
+    /// 这是本窗口整个生命周期里唯一一次从不可见变可见，「别上任务栏」必须办在这里、
+    /// 而且必须办在 `win.show()` **之后**：
+    /// - 配置里的 `skipTaskbar` 只让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
+    ///   那时窗口还不可见、任务栏上没有按钮可删，等于空操作；
+    /// - 更关键的是 tao 对「无父窗口」的窗口一律置 `ON_TASKBAR`（`window.rs:1164`，
+    ///   与 skip_taskbar 无关），并在 `set_visible` 里按内部 flags **整体重写** `GWL_EXSTYLE`
+    ///   （`window_state.rs:440`）→ 窗口带着 `WS_EX_APPWINDOW`（强制上按钮）显形，
+    ///   挂在 show 之前的样式位会被它抹掉（真机实测：ex=0x00040118，只有 APPWINDOW 没有 TOOLWINDOW）。
+    /// 外壳在窗口变可见时补按钮、开机时又会把已存在的可见窗口逐个登记一遍，所以事后
+    /// `DeleteTab` 在自启场景下也不可靠（那一刻 explorer 可能还不存在，没人记下这次删除）。
+    /// 于是补两步：样式位改对（让外壳在评估阶段就排除它，且本窗口此后不再切换可见性、
+    /// tao 不会再重写样式），再调一次框架的 `set_skip_taskbar` 把已建的按钮删掉——
+    /// tao 会记住这个状态，explorer 重启时（`TaskbarCreated`）它自己会再删一次。
+    /// 顺带：`WS_EX_TOOLWINDOW` 也把它从 Alt+Tab 里摘掉——从 Alt+Tab 切进一个屏外窗口
+    /// 是同一个问题的另一半。
     pub fn show(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
             let panel = PanelWindow::new(&app);
             let Some(win) = panel.window() else { return };
-            // 样式必须在 ShowWindow 之前落地，晚了就是补完按钮再删（谁后手谁赢）
+            let _ = win.show();
             if let Ok(hwnd) = win.hwnd() {
                 unsafe {
                     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW.0) as isize);
+                    let style = (style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
                 }
             }
-            let _ = win.show();
+            let _ = win.set_skip_taskbar(true);
         });
     }
 

@@ -32,7 +32,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 托盘菜单：显示剪贴板面板 / 更换快捷键 / 开机启动 / **主题 ▸（亮色、暗色、跟随系统）** / 清空历史 / 退出。「清空历史」由菜单回调直调存储层（标题栏随 HUD 退役，不走 IPC）。
 
-常驻期间应用的图标**只在托盘**，任务栏不该有它的面板按钮：面板以不可见创建，第一次变可见（ready-to-show 热身）之前先给它 `WS_EX_TOOLWINDOW`。少了这一步，外壳会在窗口变可见的那一刻补上任务栏按钮，而面板的「关闭」只是[停靠](CONTEXT.md)到屏外（窗口始终可见），按钮就挂满整个会话——点它只是把一个看不见的面板切到前台，看着像没反应，开机启动后没人呼出面板时最显眼。机制与为什么不靠 `skipTaskbar` 见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md)。
+常驻期间应用的图标**只在托盘**，任务栏不该有它的面板按钮。这件事没法只靠配置：`tauri.conf.json` 的 `skipTaskbar: true` 会被 tao 自己抵消——它对「无父窗口」的窗口一律置 `ON_TASKBAR`（→ `WS_EX_APPWINDOW`，强制上任务栏），并在 `set_visible` 里按内部 flags 整体重写 `GWL_EXSTYLE`（真机实测面板窗口 `ex=0x00040000|0x100|0x10|0x8`）。所以样式位由 `PanelWindow::show()` 在 `win.show()` **之后**改回来，并补一次框架的 `set_skip_taskbar`。开机启动最容易撞见：那一刻 explorer 还没建任务栏，它建好后会把当时已可见的窗口逐个登记一遍，而面板的「关闭」只是[停靠](CONTEXT.md)到屏外（窗口始终可见），于是任务栏上多一个点了没反应的按钮。机制与为什么不补 `DeleteTab` 就完事见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md)。
 
 主题偏好存 `settings.json`，切换即时生效（面板当时必然是隐藏的：点开托盘菜单那一下就先把它关掉了）。「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（图标该配任务栏，不该配面板）。这条链路的实现方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)：偏好经 WebView2 的 preferred color scheme 改网页自己的 `prefers-color-scheme`，渲染层不持有主题状态，所以面板里没有开关、也没有一处代码在读偏好。
 
@@ -113,7 +113,8 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 | 内容进了剪贴板但没粘贴进输入框 | 看 `diag.log` 的失败阶段：`restore` 是没找回原窗口，`paste` 是找回来了但注入失败；此时面板保持显示是刻意的（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)） |
 | 粘贴后列表闪一下、同内容记成两条 | 轮询基线没同步，即 `paste_chain` 的落位一步没做到 |
 | 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
-| 任务栏（不是托盘）挂着一个图标，点了没反应 | 那是面板自己的按钮：窗口以「停靠到屏外」代替隐藏、始终可见，外壳就给它补了按钮。`PanelWindow::show` 里那次 `WS_EX_TOOLWINDOW` 没生效即为此，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
+| 任务栏（不是托盘）挂着一个图标，点了没反应 | 那是面板自己的按钮：窗口以「停靠到屏外」代替隐藏、始终可见，开机时 explorer 建任务栏会把它登记一遍。样式位在 `PanelWindow::show` 的 `win.show()` 之后改（`skipTaskbar` 配置会被 tao 的 `ON_TASKBAR` 抵消），读数见下一行 |
+| 开机启动后热键与托盘「显示剪贴板面板」都呼不出界面（**未定位**，2026-09-19） | 跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 按 `Ctrl+Shift+V` 后）对比：`rect` 移到屏内却仍看不见 = WebView2 没画出东西；`rect` 不动 = 呼出动作没跑起来；`respond=False` = 主线程卡住（托盘菜单是外壳画的，点了不执行）。三种成因的处置完全不同，别猜 |
 | 渲染层收不到任何事件但命令正常 | `src-tauri/capabilities/default.json` 缺 `core:default`：v2 的 ACL 默认拒绝 `plugin:event\|listen`，脚手架模板自带此文件，手工搭建容易漏 |
 | 托盘图标发糊 | 非整数缩放下必须按主屏 `scaleFactor` 取恰好物理尺寸的图，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
 
@@ -132,7 +133,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 
 ## 待真机验证
 
-- 开机启动不再挂任务栏图标（2026-09-19）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 的窗口列表里也不该出现一个看不见的面板。顺带确认这次改窗口样式没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出，进搜索态后键盘确实打进搜索框（`WS_EX_TOOLWINDOW` 摘的是任务栏与 Alt+Tab 两项，按文档不影响 `SetForegroundWindow` / `SetFocus`，但只有真机能证明）。
+- 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**另有一条独立未定位的问题：开机启动后两路都呼不出界面**——同一份探针跑两次（呼出前 / 后）按「故障排查」新增那行分流。
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。
