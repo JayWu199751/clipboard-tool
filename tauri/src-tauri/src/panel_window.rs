@@ -1,4 +1,4 @@
-// 面板浮层窗口：几何、焦点与鼠标穿透的唯一归属。
+// 面板浮层窗口：几何、焦点、鼠标穿透与「上不上任务栏」的唯一归属。
 //
 // 为什么要收成 module：面板是 WS_EX_LAYERED + 默认不可激活的透明浮层，任何一次
 // 几何 / 焦点 / 窗口样式改动都必须发生在主线程（跨线程直接调用会向主线程发同步消息，
@@ -12,7 +12,7 @@
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
+    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, Wry};
 
@@ -242,13 +242,27 @@ impl PanelWindow {
     }
 
     /// 显示窗口（ready-to-show 热身用）。投递主线程执行。
+    ///
+    /// 这是本窗口整个生命周期里唯一一次从不可见变可见，故「别上任务栏」必须办在这里：
+    /// `skipTaskbar: true` 只是让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
+    /// 可那时窗口还不可见、任务栏上根本没有按钮可删；按钮是外壳在窗口**变可见**时补的。
+    /// 而这里的「隐藏」是把窗口移到屏幕外（可见位始终为真），补上来的按钮就会挂满一整个
+    /// 会话，点它只是把一个看不见的窗口切到前台 = 看着像没反应。
+    /// `WS_EX_TOOLWINDOW` 让外壳在评估阶段就把这个窗口排除，不必和补按钮的时机抢先后；
+    /// 顺带把它从 Alt+Tab 里也摘掉——从 Alt+Tab 切进一个屏外窗口是同一个问题的另一半。
     pub fn show(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
             let panel = PanelWindow::new(&app);
-            if let Some(win) = panel.window() {
-                let _ = win.show();
+            let Some(win) = panel.window() else { return };
+            // 样式必须在 ShowWindow 之前落地，晚了就是补完按钮再删（谁后手谁赢）
+            if let Ok(hwnd) = win.hwnd() {
+                unsafe {
+                    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW.0) as isize);
+                }
             }
+            let _ = win.show();
         });
     }
 

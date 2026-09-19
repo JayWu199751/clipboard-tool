@@ -32,6 +32,8 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 托盘菜单：显示剪贴板面板 / 更换快捷键 / 开机启动 / **主题 ▸（亮色、暗色、跟随系统）** / 清空历史 / 退出。「清空历史」由菜单回调直调存储层（标题栏随 HUD 退役，不走 IPC）。
 
+常驻期间应用的图标**只在托盘**，任务栏不该有它的面板按钮：面板以不可见创建，第一次变可见（ready-to-show 热身）之前先给它 `WS_EX_TOOLWINDOW`。少了这一步，外壳会在窗口变可见的那一刻补上任务栏按钮，而面板的「关闭」只是[停靠](CONTEXT.md)到屏外（窗口始终可见），按钮就挂满整个会话——点它只是把一个看不见的面板切到前台，看着像没反应，开机启动后没人呼出面板时最显眼。机制与为什么不靠 `skipTaskbar` 见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md)。
+
 主题偏好存 `settings.json`，切换即时生效（面板当时必然是隐藏的：点开托盘菜单那一下就先把它关掉了）。「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（图标该配任务栏，不该配面板）。这条链路的实现方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)：偏好经 WebView2 的 preferred color scheme 改网页自己的 `prefers-color-scheme`，渲染层不持有主题状态，所以面板里没有开关、也没有一处代码在读偏好。
 
 ## 安装与构建
@@ -111,6 +113,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 | 内容进了剪贴板但没粘贴进输入框 | 看 `diag.log` 的失败阶段：`restore` 是没找回原窗口，`paste` 是找回来了但注入失败；此时面板保持显示是刻意的（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)） |
 | 粘贴后列表闪一下、同内容记成两条 | 轮询基线没同步，即 `paste_chain` 的落位一步没做到 |
 | 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
+| 任务栏（不是托盘）挂着一个图标，点了没反应 | 那是面板自己的按钮：窗口以「停靠到屏外」代替隐藏、始终可见，外壳就给它补了按钮。`PanelWindow::show` 里那次 `WS_EX_TOOLWINDOW` 没生效即为此，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
 | 渲染层收不到任何事件但命令正常 | `src-tauri/capabilities/default.json` 缺 `core:default`：v2 的 ACL 默认拒绝 `plugin:event\|listen`，脚手架模板自带此文件，手工搭建容易漏 |
 | 托盘图标发糊 | 非整数缩放下必须按主屏 `scaleFactor` 取恰好物理尺寸的图，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
 
@@ -129,6 +132,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 
 ## 待真机验证
 
+- 开机启动不再挂任务栏图标（2026-09-19）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 的窗口列表里也不该出现一个看不见的面板。顺带确认这次改窗口样式没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出，进搜索态后键盘确实打进搜索框（`WS_EX_TOOLWINDOW` 摘的是任务栏与 Alt+Tab 两项，按文档不影响 `SetForegroundWindow` / `SetFocus`，但只有真机能证明）。
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。

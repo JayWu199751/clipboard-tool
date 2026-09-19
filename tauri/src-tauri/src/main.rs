@@ -762,7 +762,8 @@ fn main() {
             webview_theme::apply(app.handle(), saved_theme);
 
             // ready-to-show 热身：先在 (0,0) 显示一次让 WebView 完成首帧渲染，120ms 后移到屏外，
-            // 避免首次呼出时内容空白闪烁（与 main.js 的 ready-to-show 舞步一致）
+            // 避免首次呼出时内容空白闪烁（与 main.js 的 ready-to-show 舞步一致）。
+            // 这是面板唯一一次从不可见变可见，「别上任务栏」的样式改动挂在 PanelWindow::show 里。
             let warmup = panel(app.handle());
             if warmup.exists() {
                 warmup.set_position(0.0, 0.0);
