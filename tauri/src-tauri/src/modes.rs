@@ -19,7 +19,9 @@
 
 use crate::focus_paste;
 use crate::hotkeys::{format_shortcut, Hotkeys};
-use crate::panel_modes::{is_repeatable_navigation, FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes};
+use crate::panel_modes::{
+    hides_on_click, is_repeatable_navigation, FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes,
+};
 use crate::{
     diag_log, emit_panel, panel, send_focus_error, AppState,
     ShortcutCaptureStartPayload, PanelKeyPayload,
@@ -28,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
@@ -49,6 +51,9 @@ struct Host {
     // 按住 ↑/↓ 的连发登记。标志置位 = 该连发线程已结束，下一次按下换上新标志；
     // 可连发的键只有上下方向键，表里最多留两条已停的登记，不会无限增长。
     repeating: HashMap<Shortcut, Arc<AtomicBool>>,
+    // 最近一次呼出的时刻，用来把「把面板开出来的那一下点击」和「点了面板外」分开
+    // （判定在 panel_modes::hides_on_click，成因见那里的注释）。同样住在执行线程上，不锁。
+    shown_at: Option<Instant>,
 }
 
 impl Host {
@@ -57,6 +62,7 @@ impl Host {
             app: app.clone(),
             hotkeys: Hotkeys::new(),
             repeating: HashMap::new(),
+            shown_at: None,
         }
     }
 
@@ -104,6 +110,11 @@ impl ModesHost for Host {
         let app = self.app.clone();
         let outcome =
             self.hotkeys.register(accel, action, &mut |s| app.global_shortcut().register(s).is_ok());
+        // 只记失败与呼出键：呼出键没注册上是「开机那次热键没反应」的头号嫌疑，而 release 是
+        // GUI 子系统、eprintln 进的是黑洞；导航键每次显示面板都要注册八枚，全记会冲满 diag.log。
+        if !outcome.is_ok() || matches!(action, HotkeyAction::Toggle) {
+            diag_log(&format!("hotkey_register accel={accel} -> {outcome:?}"));
+        }
         if let Some(message) = outcome.diagnostic(accel) {
             eprintln!("{message}");
         }
@@ -179,6 +190,8 @@ impl ModesHost for Host {
 
 fn show_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, capture: bool) {
     diag_log(&format!("show_panel capture={capture}"));
+    // 先记时刻再动窗口：这一瞬间之后的点击才是「点了面板外」，之前的都是把面板开出来那一下
+    host.shown_at = Some(Instant::now());
     if capture {
         // 呼出时序：先记录前台窗口与焦点控件，再显示面板（失败静默，面板照常显示）
         modes.ensure_focus_target(host, false);
@@ -318,12 +331,17 @@ impl Modes {
         self.submit(move |_modes, host| host.disarm_repeat(shortcut))
     }
 
-    /// 全局鼠标钩子回调：点击面板外即隐藏。
-    /// 命中判定（含按显示器缩放换算 DIP）在 PanelWindow 内部；判不出来时不隐藏。
-    pub fn hide_if_clicked_outside(&self, x: i32, y: i32) -> Reply<()> {
+    /// 全局鼠标钩子回调：点击面板外即隐藏。`clicked_at` 是那一下按下的时刻（在钩子里取的）。
+    /// 命中判定（含按显示器缩放换算 DIP）在 PanelWindow 内部。
+    /// 返回 None = 窗口缺失或几何读不到；判不出来时不隐藏（沿用原行为：免得面板莫名收起）。
+    pub fn hide_if_clicked_outside(&self, x: i32, y: i32, clicked_at: Instant) -> Reply<()> {
         let app = self.app.clone();
         self.submit(move |modes, host| {
             if !modes.is_panel_visible() {
+                return;
+            }
+            if !hides_on_click(host.shown_at, clicked_at) {
+                diag_log("click_ignored predates_show");
                 return;
             }
             if !matches!(panel(&app).hit_test(x, y), Some(false)) {

@@ -161,7 +161,10 @@ fn save_settings(state: &AppState, settings: &Settings) {
 // ---------- 诊断日志 ----------
 
 pub(crate) fn diag_log(msg: &str) {
-    if std::env::var("CLIPBOARD_TOOL_DIAG").is_err() {
+    // cfg(test) 那一档不是多余装饰：`cargo test` 跑的就是这个 bin，而本机环境变量里常驻着
+    // CLIPBOARD_TOOL_DIAG=1 —— 不挡住的话一次测试会把上百条假事件混进 diag.log，
+    // 而那份日志是「开机那次为什么呼不出」唯一的现场读数（2026-09-20 实测被测试输出冲满过）。
+    if cfg!(test) || std::env::var("CLIPBOARD_TOOL_DIAG").is_err() {
         return;
     }
     let dir = data_dir();
@@ -777,10 +780,11 @@ fn main() {
 
             Tray::new(app.handle()).create()?;
 
-            // 全局点击监听（点击面板外关闭面板）
+            // 全局点击监听（点击面板外关闭面板）。按下时刻一路带到执行线程：
+            // 判「这一下是不是把面板开出来的那一下」靠它，不靠两条链谁先到。
             let app2 = app.handle().clone();
-            let watcher = click_watcher::ClickWatcher::start(move |x, y| {
-                app2.state::<AppState>().modes.hide_if_clicked_outside(x, y);
+            let watcher = click_watcher::ClickWatcher::start(move |x, y, at| {
+                app2.state::<AppState>().modes.hide_if_clicked_outside(x, y, at);
             });
             app.manage(Mutex::new(watcher));
 

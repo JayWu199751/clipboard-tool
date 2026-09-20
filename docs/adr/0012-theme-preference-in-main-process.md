@@ -14,7 +14,7 @@
 
 ## Consequences
 
-- **托盘图标不跟着手动主题走**：它继续读系统色（`panel_window.rs::is_dark_theme`），因为图标该配任务栏。用户把面板设成亮色、系统是暗色任务栏时，托盘仍是深色任务栏那套白图。这条是刻意的不同源，别「顺手统一」（`tray.rs` 注释里也写了）。
+- **托盘图标不跟着手动主题走**：它继续读系统色，因为图标该配任务栏。用户把面板设成亮色、系统是暗色任务栏时，托盘仍是深色任务栏那套白图。这条是刻意的不同源，别「顺手统一」（`tray.rs` 注释里也写了）。**读的是哪一份系统色于 2026-09-20 更正过一次**：原先取的 `panel_window.rs::is_dark_theme`（现已删）其实是 tao 那份**建窗时算好、之后靠 `WM_SETTINGCHANGE` 广播刷新**的窗口主题缓存，而它读的键是**应用模式**（`AppsUseLightTheme`）——任务栏那块面板跟的是 **Windows 模式**（`SystemUsesLightTheme`），「自定义」下两者可以相反。现在 `tray.rs::taskbar_is_dark` 直读这两个键（缺前者才退后者）。「不同源」这条决策本身不变，变的是「系统色」的权威出处，见 [CONTEXT.md](../../CONTEXT.md)「任务栏主题」与 pitfalls 第 7 节。
 - **要求 WebView2 Runtime ≥ 109**（`ICoreWebView2_13`）。cast 失败只写 stderr，后果是「面板继续跟随系统」，不崩、不锁死。
 - **运行时改这一下会不会触发页面的 `change` 事件，文档没承诺**。所以 `App.tsx` 在每次 `panel:shown` 里用同一个 `applyTheme()` 重刷一次 `data-theme`：面板显示前是离屏的，这次重刷用户看不见，但它兜住「事件没来」那种情况。
 - **启动顺序有先后**：`setup` 里必须在 ready-to-show 热身的 `show()` **之前** apply。热身会把窗口在 (0,0) 真显示 120ms，晚一步就可能让人看见带旧配色的一帧。

@@ -1,23 +1,30 @@
-// 托盘：图标尺寸阶梯、去重键、菜单文案三条判定，加上图标与菜单落地的效果入口。
+// 托盘：图标尺寸阶梯、明暗来源、去重键、菜单文案与「哪一发事件算呼出」这几条判定，
+// 加上图标与菜单落地的效果入口。
 //
 // 为什么要收成 module：docs/architecture.md 早就把「托盘」写进 main.rs 的职责清单，
 // 但它一直没有 module —— 八个自由函数摊在编排里，调用方得自己记住「算 key → 比 key →
 // setImage → 换窗口图标」，而「同主题同尺寸不重复 setImage」这条去重规则在仓库里有两种
 // 写法（AppState::tray_icon_key 用 round(16×scale)，选图用阶梯里最近的一档）。
-// 现在三条判定都是纯函数、可表驱动直测，效果只剩 create / sync_icon / rebuild_menu。
+// 现在这些判定都是纯函数、可表驱动直测，效果只剩 create / sync_icon / rebuild_menu。
 //
 // 图标不是一张图缩放出来的：src-tauri/icons/tray/ 下 16/20/24/28/32 五档 × 亮暗两套，
 // 由 npm run gen:tray 解析直出；这里按主屏 scaleFactor 取「恰好物理尺寸」的那张交给
 // HICON，零重采样（非整数缩放下 1:1 才不糊，见 pitfalls 第 3 节）。
+//
+// 亮暗判的是**任务栏**那块面板的颜色，直读注册表，不经窗口主题缓存（成因见 taskbar_is_dark）。
 
 use crate::panel_window::PanelWindow;
 use crate::settings::{Settings, Theme};
 use crate::hotkeys::format_shortcut;
-use crate::{commit, set_auto_start, set_theme, AppState};
+use crate::{commit, diag_log, set_auto_start, set_theme, AppState};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+use windows::core::PCWSTR;
+use windows::Win32::System::Registry::{
+    RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD,
+};
 
 pub const TRAY_ID: &str = "main-tray";
 
@@ -42,7 +49,43 @@ pub fn icon_key(dark: bool, scale: f64) -> String {
     format!("{}@{}", if dark { "light" } else { "dark" }, size_for_scale(scale))
 }
 
-/// 判定三：菜单里三条随状态变化的文案（其余是常量）
+/// 判定三：任务栏那块面板是不是深色（是 → 该用浅色描边那套图）。
+///
+/// 读的是 Windows 模式的 `SystemUsesLightTheme`（任务栏、开始菜单跟它走），不是应用模式的
+/// `AppsUseLightTheme`（管窗口内容与标题栏）：「个性化 → 颜色 → 选择默认模式 = 自定义」时
+/// 两者可以相反，而托盘图标是画在任务栏上的。原先这里取的是 `window.theme()`——那份缓存
+/// 既是应用模式（键就不对），又只在窗口建起来时算一次、之后靠 WM_SETTINGCHANGE 广播刷新
+/// （广播可能收不到），开机启动那次读到的就是建窗那一刻的旧值。
+/// 两个键都没写（精简过的系统 / GPO 管过）就退回浅色任务栏。
+pub fn taskbar_is_dark(system_uses_light: Option<u32>, apps_use_light: Option<u32>) -> bool {
+    match system_uses_light.or(apps_use_light) {
+        Some(light) => light == 0,
+        None => false,
+    }
+}
+
+/// 判定四：哪一发托盘事件算「把面板呼出来」。
+///
+/// 外壳对一次左键点击发来 Click(Down) + Click(Up) 两条，只认抬起那条：两条都认就是同一次
+/// 点击投两次呼出（真机 diag.log 里那对相隔 41µs 的 show_panel 就是这么来的）。
+/// 右键与中键都不算——右键那一下是要弹菜单的，顺带呼出面板等于把菜单压到面板底下。
+/// 双击时外壳额外发一条 DoubleClick，认（一次双击的最后一发是抬起，落在呼出上才收得住）。
+pub fn opens_panel(event: &TrayIconEvent) -> bool {
+    match event {
+        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
+            true
+        }
+        TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => true,
+        _ => false,
+    }
+}
+
+/// 判定五：指针进到了图标上——正是核一遍配色的时机（见 create 里那条的说明）
+pub fn pointer_entered(event: &TrayIconEvent) -> bool {
+    matches!(event, TrayIconEvent::Enter { .. })
+}
+
+/// 判定六：菜单里三条随状态变化的文案（其余是常量）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuLabels {
     pub shortcut: String,
@@ -95,7 +138,8 @@ impl Tray {
 
     /// 创建托盘（左键呼出、右键菜单），并落地初始图标与菜单
     pub fn create(&self) -> tauri::Result<()> {
-        let icon = self.icon_image().ok_or_else(|| std::io::Error::other("tray icon missing"))?;
+        let (dark, scale) = (self.is_dark(), self.scale());
+        let icon = icon_image(dark, scale).ok_or_else(|| std::io::Error::other("tray icon missing"))?;
         let menu = self.build_menu()?;
         let _tray = TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
@@ -135,8 +179,13 @@ impl Tray {
                 }
             })
             .on_tray_icon_event(|tray, event| {
-                if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
+                if opens_panel(&event) {
                     tray.app_handle().state::<AppState>().modes.show();
+                } else if pointer_entered(&event) {
+                    // 指针进图标就核一遍配色：常规的刷新入口是面板窗口的 ThemeChanged
+                    // （tao 靠 WM_SETTINGCHANGE 广播），广播可能收不到——开机那次就是。
+                    // 悬停正是用户即将看这个图标的瞬间，同键时 sync_icon 自己会跳过。
+                    Tray::new(tray.app_handle()).sync_icon();
                 }
             })
             .build(&self.app)?;
@@ -148,17 +197,18 @@ impl Tray {
     /// 分开同步就会漂移）。
     pub fn sync_icon(&self) {
         let Some(tray) = self.app.tray_by_id(TRAY_ID) else { return };
-        let dark = self.is_dark();
-        let key = icon_key(dark, self.scale());
+        let (dark, scale) = (self.is_dark(), self.scale());
+        let key = icon_key(dark, scale);
         {
             let mut last = LAST_ICON_KEY.lock().unwrap();
             if *last == key {
                 return;
             }
-            let Some(icon) = self.icon_image() else { return };
-            *last = key;
+            let Some(icon) = icon_image(dark, scale) else { return };
+            *last = key.clone();
             let _ = tray.set_icon(Some(icon));
         }
+        diag_log(&format!("tray-icon {key}"));
         self.sync_window_icon(dark);
     }
 
@@ -186,25 +236,10 @@ impl Tray {
     }
 
     fn is_dark(&self) -> bool {
-        PanelWindow::new(&self.app).is_dark_theme()
-    }
-
-    fn icon_image(&self) -> Option<tauri::image::Image<'static>> {
-        // 深色任务栏用白色图标，浅色用黑色图标；缺分尺寸图时回退 32px 基图
-        let bytes: &[u8] = match (self.is_dark(), size_for_scale(self.scale())) {
-            (true, 16) => include_bytes!("../icons/tray/tray-icon-light-16.png"),
-            (true, 20) => include_bytes!("../icons/tray/tray-icon-light-20.png"),
-            (true, 24) => include_bytes!("../icons/tray/tray-icon-light-24.png"),
-            (true, 28) => include_bytes!("../icons/tray/tray-icon-light-28.png"),
-            (true, 32) => include_bytes!("../icons/tray/tray-icon-light-32.png"),
-            (false, 16) => include_bytes!("../icons/tray/tray-icon-16.png"),
-            (false, 20) => include_bytes!("../icons/tray/tray-icon-20.png"),
-            (false, 24) => include_bytes!("../icons/tray/tray-icon-24.png"),
-            (false, 28) => include_bytes!("../icons/tray/tray-icon-28.png"),
-            (false, 32) => include_bytes!("../icons/tray/tray-icon-32.png"),
-            _ => include_bytes!("../icons/tray-icon.png"),
-        };
-        tauri::image::Image::from_bytes(bytes).ok()
+        taskbar_is_dark(
+            light_flag("SystemUsesLightTheme"),
+            light_flag("AppsUseLightTheme"),
+        )
     }
 
     fn sync_window_icon(&self, dark: bool) {
@@ -248,13 +283,82 @@ impl Tray {
     }
 }
 
+// —— 效果：把「明暗 + 缩放」这两个判定落成一张图 / 一次注册表读取 ——
+
+/// 深色任务栏用白色图，浅色用黑色图；缺对应尺寸的图时回退 32px 基图。
+/// 档位与 icon_key 走同一个 size_for_scale，两处不会各算一份而漂开。
+fn icon_image(dark: bool, scale: f64) -> Option<tauri::image::Image<'static>> {
+    let bytes: &[u8] = match (dark, size_for_scale(scale)) {
+        (true, 16) => include_bytes!("../icons/tray/tray-icon-light-16.png"),
+        (true, 20) => include_bytes!("../icons/tray/tray-icon-light-20.png"),
+        (true, 24) => include_bytes!("../icons/tray/tray-icon-light-24.png"),
+        (true, 28) => include_bytes!("../icons/tray/tray-icon-light-28.png"),
+        (true, 32) => include_bytes!("../icons/tray/tray-icon-light-32.png"),
+        (false, 16) => include_bytes!("../icons/tray/tray-icon-16.png"),
+        (false, 20) => include_bytes!("../icons/tray/tray-icon-20.png"),
+        (false, 24) => include_bytes!("../icons/tray/tray-icon-24.png"),
+        (false, 28) => include_bytes!("../icons/tray/tray-icon-28.png"),
+        (false, 32) => include_bytes!("../icons/tray/tray-icon-32.png"),
+        _ => include_bytes!("../icons/tray-icon.png"),
+    };
+    tauri::image::Image::from_bytes(bytes).ok()
+}
+
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// 读 HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize 下的一个 DWORD。
+/// 键不存在或类型不对返回 None——那是「这台机器没写过这个键」，不是「值为 0」。
+fn light_flag(name: &str) -> Option<u32> {
+    const SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+    let subkey = wide(SUBKEY);
+    let value_name = wide(name);
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(value_name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut data as *mut _ as *mut std::ffi::c_void),
+            Some(&mut size),
+        )
+    };
+    status.is_ok().then_some(data)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)] // 测试名用中文描述规则，snake_case 检查不适用
     use super::{
-        icon_key, menu_labels, size_for_scale, theme_items, theme_of_menu_id, MenuLabels,
+        icon_key, menu_labels, opens_panel, pointer_entered, size_for_scale, taskbar_is_dark,
+        theme_items, theme_of_menu_id, MenuLabels, TRAY_ID,
     };
     use crate::settings::{Settings, Theme};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent, TrayIconId};
+    use tauri::{PhysicalPosition, Rect};
+
+    fn click(button: MouseButton, button_state: MouseButtonState) -> TrayIconEvent {
+        TrayIconEvent::Click {
+            id: TrayIconId::new(TRAY_ID),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+            button,
+            button_state,
+        }
+    }
+
+    fn double(button: MouseButton) -> TrayIconEvent {
+        TrayIconEvent::DoubleClick {
+            id: TrayIconId::new(TRAY_ID),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+            button,
+        }
+    }
 
     fn settings(accel: &str, auto_start: bool) -> Settings {
         // 主题走默认值（跟随系统），要测手动态的文案在各自用例里改
@@ -333,5 +437,41 @@ mod tests {
         dark.theme = Theme::Dark;
         assert_eq!(menu_labels(&dark).theme, "主题(当前: 暗色)");
         assert_eq!(menu_labels(&settings("Control+Shift+V", true)).theme, "主题(当前: 跟随系统)");
+    }
+
+    #[test]
+    fn 任务栏明暗看_windows_模式键_缺键才退应用模式() {
+        // 「自定义」下两个键相反：图标跟任务栏（Windows 模式），不跟应用模式
+        assert!(!taskbar_is_dark(Some(1), Some(0)), "亮任务栏 + 暗应用：该用深色描边的图");
+        assert!(taskbar_is_dark(Some(0), Some(1)), "暗任务栏 + 亮应用：该用白色描边的图");
+        assert!(taskbar_is_dark(None, Some(0)));
+        assert!(!taskbar_is_dark(None, Some(1)));
+        // 两个键都没写：按浅色任务栏处理（宁可深描边，也别把白图贴到可能亮的条上）
+        assert!(!taskbar_is_dark(None, None));
+    }
+
+    #[test]
+    fn 一次左键点击只投一次呼出_右键与按下都不算() {
+        assert!(opens_panel(&click(MouseButton::Left, MouseButtonState::Up)));
+        assert!(
+            !opens_panel(&click(MouseButton::Left, MouseButtonState::Down)),
+            "外壳对一次左键点击发来 Down + Up 两条，两条都认就是一次点击两次呼出"
+        );
+        assert!(!opens_panel(&click(MouseButton::Right, MouseButtonState::Up)), "右键那一下是弹菜单的");
+        assert!(!opens_panel(&click(MouseButton::Middle, MouseButtonState::Up)));
+        assert!(opens_panel(&double(MouseButton::Left)));
+        assert!(!opens_panel(&double(MouseButton::Right)));
+    }
+
+    #[test]
+    fn 指针进图标算核配色的时机_不算呼出() {
+        let enter = TrayIconEvent::Enter {
+            id: TrayIconId::new(TRAY_ID),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+        };
+        assert!(pointer_entered(&enter));
+        assert!(!opens_panel(&enter));
+        assert!(!pointer_entered(&click(MouseButton::Left, MouseButtonState::Up)));
     }
 }

@@ -34,7 +34,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 常驻期间应用的图标**只在托盘**，任务栏不该有它的面板按钮。这件事没法只靠配置：`tauri.conf.json` 的 `skipTaskbar: true` 会被 tao 自己抵消——它对「无父窗口」的窗口一律置 `ON_TASKBAR`（→ `WS_EX_APPWINDOW`，强制上任务栏），并在 `set_visible` 里按内部 flags 整体重写 `GWL_EXSTYLE`（真机实测面板窗口 `ex=0x00040000|0x100|0x10|0x8`）。所以样式位由 `PanelWindow::show()` 在 `win.show()` **之后**改回来，并补一次框架的 `set_skip_taskbar`。开机启动最容易撞见：那一刻 explorer 还没建任务栏，它建好后会把当时已可见的窗口逐个登记一遍，而面板的「关闭」只是[停靠](CONTEXT.md)到屏外（窗口始终可见），于是任务栏上多一个点了没反应的按钮。机制与为什么不补 `DeleteTab` 就完事见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md)。
 
-主题偏好存 `settings.json`，切换即时生效（面板当时必然是隐藏的：点开托盘菜单那一下就先把它关掉了）。「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（图标该配任务栏，不该配面板）。这条链路的实现方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)：偏好经 WebView2 的 preferred color scheme 改网页自己的 `prefers-color-scheme`，渲染层不持有主题状态，所以面板里没有开关、也没有一处代码在读偏好。
+主题偏好存 `settings.json`，切换即时生效（面板当时必然是隐藏的：点开托盘菜单那一下就先把它关掉了）。「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（图标该配任务栏，不该配面板；判的是[任务栏主题](CONTEXT.md) `SystemUsesLightTheme`，直读注册表，不经窗口主题缓存）。这条链路的实现方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)：偏好经 WebView2 的 preferred color scheme 改网页自己的 `prefers-color-scheme`，渲染层不持有主题状态，所以面板里没有开关、也没有一处代码在读偏好。
 
 ## 安装与构建
 
@@ -53,7 +53,7 @@ npm run gen:tray   # 重新生成托盘图标阶梯图（改过图标后必跑�
 - 可执行文件 `tauri/src-tauri/target/release/clipboard-tool.exe`
 - 安装包 `tauri/src-tauri/target/release/bundle/nsis/ClipboardTool_<version>_x64-setup.exe`（perMachine 安装）
 
-托盘图标不是一张图缩放出来的：`src-tauri/icons/tray/` 下 16/20/24/28/32 五档 × 亮暗两套，加上两张 32px 基图共 12 张，主进程按主屏 `scaleFactor` 取恰好物理尺寸的那张交给 HICON。`gen:tray` 用参数化 SDF 在每个尺寸上各自解析求值直出，绝不做重采样；几何参数是拿 32px 基图坐标下降拟合出来的（`--fit` 可重跑），落盘后逐张回读自校。换图形的手顺写在 [scripts/gen-tray-icons.mjs](tauri/scripts/gen-tray-icons.mjs) 的文件头。
+托盘图标不是一张图缩放出来的：`src-tauri/icons/tray/` 下 16/20/24/28/32 五档 × 亮暗两套，加上两张 32px 基图共 12 张，主进程按主屏 `scaleFactor` 取恰好物理尺寸的那张交给 HICON；亮暗两套按**任务栏主题**挑，缩放或明暗变了才重设（同键不动，见 `tray.rs::icon_key`）。`gen:tray` 用参数化 SDF 在每个尺寸上各自解析求值直出，绝不做重采样；几何参数是拿 32px 基图坐标下降拟合出来的（`--fit` 可重跑），落盘后逐张回读自校。换图形的手顺写在 [scripts/gen-tray-icons.mjs](tauri/scripts/gen-tray-icons.mjs) 的文件头。
 
 ## 提权与管理员窗口
 
@@ -98,9 +98,9 @@ npm run test:rust   # cargo test —— 93 例（另有 2 例真机探针 #[igno
 npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwright install chromium）
 ```
 
-131 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 15 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 6 / tray 6 / clipboard 1 / webview_theme 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+135 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 6 / tray 9 / clipboard 1 / webview_theme 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 131 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 135 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -109,12 +109,14 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 | 现象 | 先查什么 |
 |---|---|
 | 管理员窗口里热键不响应、粘贴不进去 | 跑的是不是提权产物（`npm run dev` 必然不提权） |
-| 普通窗口里呼出键也没反应 | 该键被其它程序占用；用托盘「更换快捷键」重设，注册失败会写 stderr |
+| 普通窗口里呼出键也没反应 | 该键被其它程序占用；用托盘「更换快捷键」重设。注册成没成看 `diag.log` 的 `hotkey_register` 那行（release 是 GUI 子系统，stderr 进黑洞，所以这条同时写进日志） |
 | 内容进了剪贴板但没粘贴进输入框 | 看 `diag.log` 的失败阶段：`restore` 是没找回原窗口，`paste` 是找回来了但注入失败；此时面板保持显示是刻意的（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)） |
 | 粘贴后列表闪一下、同内容记成两条 | 轮询基线没同步，即 `paste_chain` 的落位一步没做到 |
 | 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
 | 任务栏（不是托盘）挂着一个图标，点了没反应 | 那是面板自己的按钮：窗口以「停靠到屏外」代替隐藏、始终可见，开机时 explorer 建任务栏会把它登记一遍。样式位在 `PanelWindow::show` 的 `win.show()` 之后改（`skipTaskbar` 配置会被 tao 的 `ON_TASKBAR` 抵消），读数见下一行 |
-| 开机启动后热键与托盘「显示剪贴板面板」都呼不出界面（**未定位**，2026-09-19） | 跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 按 `Ctrl+Shift+V` 后）对比：`rect` 移到屏内却仍看不见 = WebView2 没画出东西；`rect` 不动 = 呼出动作没跑起来；`respond=False` = 主线程卡住（托盘菜单是外壳画的，点了不执行）。三种成因的处置完全不同，别猜 |
+| 开机启动那一次热键、托盘菜单、托盘图标三路都呼不出界面（退出重开就好） | 2026-09-20 两处已按「必落地 + 留读数」改：`show_at_cursor` 拿不到显示器不再静默 return（改按「光标所在 → 窗口所在 → 主屏」三级兜底，结果写 `diag.log`），呼出时也补一次「确认可见」（原先整条链只赌 ready-to-show 热身那一次 `show()`）。下次开机再撞，跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）按脚本头那六条分流：`show-at-cursor: rect=` 没动 = 执行线程没收到任务；写了拿不到显示器 / 光标 = 兜底也没落地；`rect` 进了屏内却看不见东西 = WebView2 没画出东西（对 `webview2 =` 那行）；`hotkey_register` 不是 `Registered` = 键被占；`instances` 大于 1 = 同时活着两份；`respond=False` = 主线程卡住。**别跳过这一步去猜**——三种成因处置完全不同 |
+| 点托盘图标没反应，但右键菜单正常 | 外壳对一次左键点击发来 `Click(Down)` + `Click(Up)` 两条事件：两条都投呼出就是同一次点击开两次面板。更隐蔽的是全局鼠标钩子那条链是异步的，同一次点击的「按下」可能**晚于**呼出到达执行线程，于是面板刚显形就被判成「点了面板外」收起——机器忙（开机那一刻）就中，空闲时不中。现在只认左键抬起，且早于最近一次呼出的点击一律不收（`panel_modes::hides_on_click`）；`diag.log` 里那对相隔几十微秒的 `show_panel` 与紧随的 `hide_panel` 就是这个竞态 |
+| 深色任务栏上图标是深色的（看不清） | 托盘图标看的是**任务栏主题**（`SystemUsesLightTheme`，Windows 模式），不是应用模式（`AppsUseLightTheme`）——「个性化 → 颜色 = 自定义」下两者可以相反。探针的 `theme =` 那行同时打两个值，再对 `diag.log` 的 `tray-icon` 行看选了哪一套。运行中翻系统主题靠 `WM_SETTINGCHANGE` 广播刷新，广播收不到时悬停一次图标就会重核（`pointer_entered`） |
 | 渲染层收不到任何事件但命令正常 | `src-tauri/capabilities/default.json` 缺 `core:default`：v2 的 ACL 默认拒绝 `plugin:event\|listen`，脚手架模板自带此文件，手工搭建容易漏 |
 | 托盘图标发糊 | 非整数缩放下必须按主屏 `scaleFactor` 取恰好物理尺寸的图，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
 
@@ -133,7 +135,9 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 
 ## 待真机验证
 
-- 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**另有一条独立未定位的问题：开机启动后两路都呼不出界面**——同一份探针跑两次（呼出前 / 后）按「故障排查」新增那行分流。
+- 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**同日另一条独立问题（开机启动后两路呼不出界面）已在下一轮动手改，见下一条与「故障排查」那三行。**
+- 开机那一次不再「三路呼不出」（2026-09-20 改动，**必须重启一次才有结论**）：登录后先别手动重开应用，直接按 `Ctrl+Shift+V` → 点托盘图标 → 托盘菜单「显示剪贴板面板」，三条都要能把面板叫出来。任一条不中就跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）并把输出贴回来——本轮把「静默 return」都换成了日志，所以现在的 `diag.log` 能直接指认是哪一段没落地（分流口径写在脚本头）。顺带看 `diag.log` 里有没有 `hotkey_register accel=... -> Registered`：没有就说明呼出键被别的开机程序占了，那是另一条处置。
+- 托盘图标跟的是任务栏而不是面板皮肤（2026-09-20 改判）：把「个性化 → 颜色 → 选择默认模式」设成**自定义**、让「Windows 模式」与「应用模式」相反（例如 Windows 暗、应用亮），托盘图标该是**白色**那套（跟任务栏），面板皮肤该是**亮色**那套（跟主题偏好＝跟随系统时看应用模式）。再在运行中翻一次系统主题：图标应跟着换；若不动，把鼠标移到图标上悬停一下（那次 `Enter` 是广播收不到时的兜底），看 `diag.log` 有没有新的 `tray-icon` 行。
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。

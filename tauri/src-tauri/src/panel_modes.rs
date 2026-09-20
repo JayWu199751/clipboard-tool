@@ -83,6 +83,18 @@ pub fn is_repeatable_navigation(accel: &str) -> bool {
     matches!(accel, "Up" | "Down")
 }
 
+/// 判定：面板正开着，这一下点击算不算「点了面板外」（算则收起）。
+///
+/// 只认「晚于最近一次呼出」的点击。全局鼠标钩子那条链是异步的（钩子线程 → channel →
+/// 转发线程 → 执行线程），而托盘那一下的呼出走的是另一条链（托盘窗口 → 执行线程）：
+/// 同一次物理点击的「按下」和「抬起」谁先到执行线程，完全看调度。抬起先把面板呼出、
+/// 按下随后被当成点了面板外 → 面板刚显形就被收起，肉眼看就是「点托盘没反应」。
+/// 机器空闲时按下先到（那会儿面板还没开，判为不动作），所以只在开机那一刻复现。
+/// 靠到达顺序判没有出路，靠点击发生的时刻判才有确定性：时刻在钩子里就取好了。
+pub fn hides_on_click(shown_at: Option<std::time::Instant>, clicked_at: std::time::Instant) -> bool {
+    shown_at.is_some_and(|shown| clicked_at > shown)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Browse,
@@ -791,6 +803,20 @@ mod tests {
         assert!(!is_repeatable_navigation("Enter"));
         assert!(!is_repeatable_navigation("Esc"));
         assert!(!is_repeatable_navigation("Control+Up"));
+    }
+
+    #[test]
+    fn 点击早于呼出不收起面板_晚于呼出才收起() {
+        // 同一台机器上的两个时刻：按下在前、呼出在后（托盘那一下的真实顺序）
+        let clicked = std::time::Instant::now();
+        let shown = clicked + std::time::Duration::from_millis(20);
+        assert!(
+            !hides_on_click(Some(shown), clicked),
+            "抬起先呼出、按下后到达：这一下点击就是把面板开出来的，不能反过来收起它"
+        );
+        assert!(hides_on_click(Some(shown), shown + std::time::Duration::from_millis(1)));
+        // 从没呼出过（没有时刻可比）→ 不动作
+        assert!(!hides_on_click(None, clicked));
     }
 
     #[test]

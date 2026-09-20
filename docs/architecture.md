@@ -29,10 +29,10 @@
 |---|---|---|---|
 | `main.rs` | 效果编排：持久化与广播、IPC 注册、`AppState` | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `new(max, Ports, Clock)` + `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
-| `panel_modes.rs` | 面板四态状态机 + 该注册哪些键的推导与差量指令（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`）；已生效集合不在本 module，差量的另一侧读 `host.current_keys()` | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation`；seam `ModesHost`（`register_key` `unregister_key` `current_keys` + 面板/渲染层/焦点/领域查询） | 15 |
+| `panel_modes.rs` | 面板四态状态机 + 该注册哪些键的推导与差量指令（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`）；已生效集合不在本 module，差量的另一侧读 `host.current_keys()` | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation` `hides_on_click`（点击早于最近一次呼出就不算「点了面板外」）；seam `ModesHost`（`register_key` `unregister_key` `current_keys` + 面板/渲染层/焦点/领域查询） | 16 |
 | `hotkeys.rs` | 「现在哪些全局键生效」的唯一真源：accel ↔ Shortcut 双向表 + 动作，两个方向都是 O(1)；注册三步（查重 / 调插件 / 记账）原子，插件拒绝一分不记；accel → 展示文案 | `register` `unregister` `action_of` `accel_of` `bindings`；纯函数 `format_shortcut`；插件调用经端口传入 | 9 |
-| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys` 与方向键连发登记） | `spawn` + 17 个具名操作（见下） | — |
-| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；主线程投递与 DIP 换算。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸） | `show_at_cursor`（含 set_size）`park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `is_dark_theme` `set_icon` `set_position` `show`（唯一一次可见转换：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂上 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，手顺理由见 pitfalls 第 3 节）；纯函数 `sized` `centered` `parked` `contains_point` | 6 |
+| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys`、方向键连发登记与**最近一次呼出的时刻**——后者用来把「把面板开出来那一下点击」和「点了面板外」分开） | `spawn` + 17 个具名操作（见下） | — |
+| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；主线程投递与 DIP 换算。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸） | `show_at_cursor`（按「光标所在 → 窗口所在 → 主屏」三级取显示器，重算 `set_size` + `set_position` 后**确认可见**；任何一级拿不到都写 diag.log，不再静默 return）、`park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `set_icon` `set_position` `show`（热身用，与 `show_at_cursor` 共用 module 内的 `make_visible`：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂上 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，幂等，手顺理由见 pitfalls 第 3 节）；纯函数 `sized` `centered` `parked` `contains_point` | 6 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 欠着的一轮（读不可信 / 写盘失败）的标记 | `observe` `confirm` `skip_unchanged` `note_seq` `note_untrusted` `retry_pending` `sync_now` | 9 |
 | `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
 | `clipboard.rs` | 剪贴板独占窗口的唯一归属：`OpenClipboard` 小步重试、`CF_DIBV5`→`CF_DIB` 退让、`Drop` 必关、取字节即释放守卫（解码在剪贴板之外）、arboard 文字读写、序列号；「读不到」与「剪贴板里就是没内容」在这里分开 | `read()` → `ReadOutcome{Known(Snapshot), Occupied}`、`write_text`、`write_image_file`、`sequence`；纯判定 `occupied`（`ClipboardGuard`、`DibBytes` / `ImageRead` 与格式常量在 module 内部） | 1 |
@@ -42,9 +42,9 @@
 | `settings.rs` | `settings.json` 的读写与 camelCase 键名契约、坏档兜底。`Theme` 三态枚举（`system`/`light`/`dark`）也住这里：默认 System，缺键与非法值统一回落，中文名 `label()` | `load` `save` `parse` `Settings::default`；`Theme` 与纯判定 `parse_theme` | 9 |
 | `focus_paste.rs` | 进程内 Win32 的焦点快照与恢复 + `Ctrl+V` 注入 | `snapshot` `restore_and_paste`（失败带 `RestoreFailure{stage,reason}`） | — |
 | `source_app.rs` | 前台应用信息与图标提取（`SHGetFileInfo` / `ExtractAssociatedIconW`） | `get_foreground_app_info` | — |
-| `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子 | `ClickWatcher::start` `stop` | — |
+| `click_watcher.rs` | `WH_MOUSE_LL` 全局点击钩子：上报坐标**与该次按下的时刻**（时刻必须在钩子里取，见 `hides_on_click` 的成因） | `ClickWatcher::start` `stop` | — |
 | `tasks.rs` | 计划任务注册脚本与提权事实查询 | `ps_register_task` `run_elevated_task` `task_exists` `is_elevated` | — |
-| `tray.rs` | 托盘：图标尺寸阶梯、去重键、菜单文案与主题子菜单的判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC；主题子菜单三项走 `CheckMenuItem`，当前态写进子菜单标题。图标亮暗取的是**系统**主题 `is_dark_theme`，与面板的主题偏好刻意不同源） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `menu_labels` `theme_items` `theme_of_menu_id` | 6 |
+| `tray.rs` | 托盘：图标尺寸阶梯、明暗来源、去重键、菜单文案、「哪一发事件算呼出」的判定 + 图标与菜单落地（HUD 迁移后菜单含「清空历史」——直调 `store.clear()` + `commit()`，不走 IPC；主题子菜单三项走 `CheckMenuItem`，当前态写进子菜单标题。图标亮暗判的是**任务栏主题**：直读注册表 `SystemUsesLightTheme`（缺键才退 `AppsUseLightTheme`），与面板的主题偏好、也与 tao 那份窗口主题缓存都不同源——后者只在建窗时算一次，之后靠 `WM_SETTINGCHANGE` 广播刷新，开机那次读到的是旧值） | `Tray::create` `Tray::sync_icon` `Tray::rebuild_menu`；纯判定 `size_for_scale` `icon_key` `taskbar_is_dark` `opens_panel` `pointer_entered` `menu_labels` `theme_items` `theme_of_menu_id` | 9 |
 | `webview_theme.rs` | 主题偏好的落地出口：三态 → WebView2 常量，并经 `ICoreWebView2_13::Profile` 写进去——改的是**网页的 `prefers-color-scheme`**，不是窗口边框（tauri 的 `set_theme` 在 Windows 上只到 tao 的 DWM 属性，用它面板皮肤不动）。cast 失败（Runtime < 109）只写 stderr，后果是继续跟随系统 | 纯判定 `scheme_of`；效果 `apply` | 1 |
 
 `clipboard_probe.rs` 不在上表：它只在 `#[cfg(test)]` 下编译、没有对外 interface、也不被任何生产代码调用。它是「600ms 轮询要不要换成 `AddClipboardFormatListener`」那个决策的真机量具（结论见 [ADR-0011](adr/0011-clipboard-watch-via-events.md)）——只读不写，量三件事：提权进程收不收得到 `WM_CLIPBOARDUPDATE`、通知到「能打开剪贴板」的等待、一次复制产生几条通知（判据是**序列号增量**而非时间间隔：一次完整复制让序列号前进「格式数 + 1」次）。跑法见 README「待真机验证」。
@@ -112,8 +112,10 @@ Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `comm
 
 ## 待真机复核
 
-三条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
+五条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
 
 - **托盘图标清晰度**：按主屏 `scaleFactor` 取恰好物理尺寸的图 1:1 渲染，但最终 HICON 由 tray-icon 的生成路径决定，非整数缩放下是否仍糊必须眼看。
+- **开机那一次的三路呼出**：`Ctrl+Shift+V`、托盘菜单「显示剪贴板面板」、托盘图标左键——只有开机自启那次全哑，退出重开就好（2026-09-20 用户口径）。本轮把两条静默路径改成必落地并留读数（`show_at_cursor` 的三级显示器兜底 + 每次都 `make_visible`；呼出键的注册结果写 diag.log），治没治好只能下次开机验；分流口径见 `tauri/scripts/panel-state.ps1` 头部那六条。
+- **托盘图标的明暗**：判定改成直读任务栏主题（`SystemUsesLightTheme`）后，要在「个性化 → 颜色 → 选择默认模式 = 自定义」下把 Windows 与应用两套设成相反色，看图标跟的是前者；再在运行中翻系统主题，看悬停一次图标（`Enter` 那次核配色）能不能补上——那条就是为「广播收不到」准备的兜底。
 - **浏览态不抢焦点**：靠 `focusable: true` 加焦点事件自动 `SetFocus(NULL)` 模拟，首帧激活次序需眼看。
 - **截图进历史**：`dib` 的解码覆盖面全部有单测钉住，但「某个截图工具到底写哪种 DIB 形状」只能真机看；断点定位用 `真机探针` 那条 `#[ignore]` 测试。

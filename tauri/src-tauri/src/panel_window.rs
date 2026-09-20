@@ -9,6 +9,7 @@
 //
 // 几何判定（居中 / 离屏停靠 / 命中测试）是纯函数，不碰 tauri，可表驱动直测。
 
+use crate::diag_log;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -102,13 +103,6 @@ impl PanelWindow {
         self.window().is_some()
     }
 
-    pub fn is_dark_theme(&self) -> bool {
-        self.window()
-            .and_then(|w| w.theme().ok())
-            .map(|t| t == tauri::Theme::Dark)
-            .unwrap_or(false)
-    }
-
     /// 物理像素点所在显示器的缩放比（找不到返回 None）
     pub fn scale_at(&self, x: i32, y: i32) -> Option<f64> {
         self.monitor_at(x, y).map(|m| m.scale_factor())
@@ -145,19 +139,36 @@ impl PanelWindow {
         Some(contains_point((x, y), scale, bounds))
     }
 
-    /// 呼出：移到光标所在显示器的工作区居中。投递主线程执行。
+    /// 呼出：移到光标所在显示器的工作区居中，并确保窗口真的在屏幕上显形。投递主线程执行。
+    ///
+    /// 「确保显形」是必须的，不能指望 ready-to-show 热身那一次成功：面板平时只是[停靠](CONTEXT.md)
+    /// 到屏外、从不 `hide()`，所以一旦热身那次 `show()` 没落地（开机那一刻最常见——外壳与显示
+    /// 配置都还没就绪），窗口就永远停在「不可见」，热键、托盘菜单、托盘图标三路呼出全都
+    /// 表现为「按了没反应」。这里每次呼出都补一次，幂等。
+    ///
+    /// 显示器按「光标所在 → 窗口所在 → 主屏」三级兜底，任何一级拿不到都写进 diag.log：
+    /// 静默 return 的话面板留在屏外，现场什么都不留下，只能靠猜。
     pub fn show_at_cursor(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
             let panel = PanelWindow::new(&app);
-            let Some(win) = panel.window() else { return };
-            let Ok(cursor) = app.cursor_position() else { return };
+            let Some(win) = panel.window() else {
+                diag_log("show-at-cursor: 面板窗口不存在");
+                return;
+            };
+            let Ok(cursor) = app.cursor_position() else {
+                diag_log("show-at-cursor: 取不到光标位置");
+                return;
+            };
             let (cx, cy) = (cursor.x as i32, cursor.y as i32);
-            // 光标所在显示器优先，取不到时退回窗口自己的显示器
             let monitor = panel
                 .monitor_at(cx, cy)
-                .or_else(|| win.current_monitor().ok().flatten());
-            let Some(monitor) = monitor else { return };
+                .or_else(|| win.current_monitor().ok().flatten())
+                .or_else(|| app.primary_monitor().ok().flatten());
+            let Some(monitor) = monitor else {
+                diag_log(&format!("show-at-cursor: 显示器拿不到 cursor={cx},{cy}"));
+                return;
+            };
             // 每次呼出按当前显示器重算尺寸与位置：换屏 / 改缩放后第一下就跟上。
             // set_size 在 resizable:false 下依然可编程调用（resizable 只管用户拖拽）。
             let scale = monitor.scale_factor();
@@ -165,6 +176,9 @@ impl PanelWindow {
             let _ = win.set_size(Size::Logical(LogicalSize::new(w, h)));
             let (x, y) = centered(work_area(&monitor), scale, w, h);
             let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
+            // 先落位再显形：反过来会在新位置之外闪一帧
+            make_visible(&win);
+            diag_log(&format!("show-at-cursor: rect={x},{y} {w}x{h} scale={scale}"));
         });
     }
 
@@ -178,6 +192,7 @@ impl PanelWindow {
                 Some(m) => parked(work_area(&m), m.scale_factor(), OFFSCREEN_GAP),
                 None => FALLBACK_PARK,
             };
+            diag_log(&format!("park-offscreen: x={x}"));
             let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
         });
     }
@@ -244,35 +259,14 @@ impl PanelWindow {
 
     /// 显示窗口（ready-to-show 热身用）。投递主线程执行。
     ///
-    /// 这是本窗口整个生命周期里唯一一次从不可见变可见，「别上任务栏」必须办在这里、
-    /// 而且必须办在 `win.show()` **之后**：
-    /// - 配置里的 `skipTaskbar` 只让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
-    ///   那时窗口还不可见、任务栏上没有按钮可删，等于空操作；
-    /// - 更关键的是 tao 对「无父窗口」的窗口一律置 `ON_TASKBAR`（`window.rs:1164`，
-    ///   与 skip_taskbar 无关），并在 `set_visible` 里按内部 flags **整体重写** `GWL_EXSTYLE`
-    ///   （`window_state.rs:440`）→ 窗口带着 `WS_EX_APPWINDOW`（强制上按钮）显形，
-    ///   挂在 show 之前的样式位会被它抹掉（真机实测：ex=0x00040118，只有 APPWINDOW 没有 TOOLWINDOW）。
-    /// 外壳在窗口变可见时补按钮、开机时又会把已存在的可见窗口逐个登记一遍，所以事后
-    /// `DeleteTab` 在自启场景下也不可靠（那一刻 explorer 可能还不存在，没人记下这次删除）。
-    /// 于是补两步：样式位改对（让外壳在评估阶段就排除它，且本窗口此后不再切换可见性、
-    /// tao 不会再重写样式），再调一次框架的 `set_skip_taskbar` 把已建的按钮删掉——
-    /// tao 会记住这个状态，explorer 重启时（`TaskbarCreated`）它自己会再删一次。
-    /// 顺带：`WS_EX_TOOLWINDOW` 也把它从 Alt+Tab 里摘掉——从 Alt+Tab 切进一个屏外窗口
-    /// 是同一个问题的另一半。
+    /// 热身不是唯一一次显形：`show_at_cursor` 每次都补一遍，谁先到算谁（见那里的说明）。
     pub fn show(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
             let panel = PanelWindow::new(&app);
-            let Some(win) = panel.window() else { return };
-            let _ = win.show();
-            if let Ok(hwnd) = win.hwnd() {
-                unsafe {
-                    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-                    let style = (style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
-                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
-                }
+            if let Some(win) = panel.window() {
+                make_visible(&win);
             }
-            let _ = win.set_skip_taskbar(true);
         });
     }
 
@@ -286,6 +280,37 @@ impl PanelWindow {
             }
         });
     }
+}
+
+/// 从不可见变可见那一步，连同「别上任务栏」的三个动作。必须在主线程上调用。
+/// 幂等：窗口已经可见就直接返回（面板平时只是停到屏外，从不 `hide()`，所以常态下是空转）。
+///
+/// 「别上任务栏」必须办在 `win.show()` **之后**：
+/// - 配置里的 `skipTaskbar` 只让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
+///   那时窗口还不可见、任务栏上没有按钮可删，等于空操作；
+/// - 更关键的是 tao 对「无父窗口」的窗口一律置 `ON_TASKBAR`（`window.rs:1164`，
+///   与 skip_taskbar 无关），并在 `set_visible` 里按内部 flags **整体重写** `GWL_EXSTYLE`
+///   （`window_state.rs:440`）→ 窗口带着 `WS_EX_APPWINDOW`（强制上按钮）显形，
+///   挂在 show 之前的样式位会被它抹掉（真机实测：ex=0x00040118，只有 APPWINDOW 没有 TOOLWINDOW）。
+/// 外壳在窗口变可见时补按钮、开机时又会把已存在的可见窗口逐个登记一遍，所以事后
+/// `DeleteTab` 在自启场景下也不可靠（那一刻 explorer 可能还不存在，没人记下这次删除）。
+/// 于是补两步：样式位改对（让外壳在评估阶段就排除它），再调一次框架的 `set_skip_taskbar`
+/// 把已建的按钮删掉——tao 会记住这个状态，explorer 重启时（`TaskbarCreated`）它自己会再删一次。
+/// 顺带：`WS_EX_TOOLWINDOW` 也把它从 Alt+Tab 里摘掉——从 Alt+Tab 切进一个屏外窗口
+/// 是同一个问题的另一半。
+fn make_visible(win: &tauri::WebviewWindow<Wry>) {
+    if win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = win.show();
+    if let Ok(hwnd) = win.hwnd() {
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let style = (style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
+        }
+    }
+    let _ = win.set_skip_taskbar(true);
 }
 
 fn work_area(m: &tauri::Monitor) -> WorkArea {

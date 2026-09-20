@@ -8,6 +8,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::OnceLock;
+use std::time::Instant;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -20,7 +21,13 @@ const WM_RBUTTONDOWN: usize = 0x204;
 const WM_MBUTTONDOWN: usize = 0x207;
 const WM_XBUTTONDOWN: usize = 0x20B;
 
-static CLICK_TX: OnceLock<mpsc::Sender<(i32, i32)>> = OnceLock::new();
+/// 一次按下：物理坐标 + 事件发生的时刻。
+/// 时刻必须在钩子里取：这条链是「钩子线程 → channel → 转发线程 → 执行线程」，
+/// 等消费者拿到时已经分不出先后，而「这次点击早不早于上一次呼出」正是判该不该收起的依据
+/// （见 panel_modes::hides_on_click）。
+type Click = (i32, i32, Instant);
+
+static CLICK_TX: OnceLock<mpsc::Sender<Click>> = OnceLock::new();
 static WATCHER_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
@@ -29,7 +36,7 @@ unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARA
         if matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN) {
             let info = &*(l_param.0 as *const MSLLHOOKSTRUCT);
             if let Some(tx) = CLICK_TX.get() {
-                let _ = tx.send((info.pt.x, info.pt.y));
+                let _ = tx.send((info.pt.x, info.pt.y, Instant::now()));
             }
         }
     }
@@ -42,9 +49,9 @@ pub struct ClickWatcher {
 }
 
 impl ClickWatcher {
-    // 启动钩子线程；on_click 在独立转发线程上被调用（参数为物理像素坐标）。
-    pub fn start<F: Fn(i32, i32) + Send + 'static>(on_click: F) -> ClickWatcher {
-        let (tx, rx) = mpsc::channel::<(i32, i32)>();
+    // 启动钩子线程；on_click 在独立转发线程上被调用（参数为物理像素坐标与该次按下的时刻）。
+    pub fn start<F: Fn(i32, i32, Instant) + Send + 'static>(on_click: F) -> ClickWatcher {
+        let (tx, rx) = mpsc::channel::<Click>();
         let _ = CLICK_TX.set(tx);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
@@ -70,7 +77,7 @@ impl ClickWatcher {
         // recv_timeout 让 stop 时 join 有界（长时间无点击也能退出）。
         let forward = std::thread::spawn(move || loop {
             match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                Ok((x, y)) => on_click(x, y),
+                Ok((x, y, at)) => on_click(x, y, at),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if stop_rx.try_recv().is_ok() {
                         break;

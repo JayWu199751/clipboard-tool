@@ -32,6 +32,8 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_System_Threading",
   "Win32_System_LibraryLoader",
+  # 托盘图标的亮暗读 Themes\Personalize 下的明暗键（见 tray.rs::taskbar_is_dark）
+  "Win32_System_Registry",
   "Win32_Storage_FileSystem",
   "Win32_Security",
   "Win32_System_SystemServices",
