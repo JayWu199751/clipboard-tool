@@ -23,11 +23,11 @@ use crate::panel_modes::{
     hides_on_click, is_repeatable_navigation, FocusTarget, HotkeyAction, Mode, ModesHost, PanelModes,
 };
 use crate::{
-    diag_log, emit_panel, panel, send_focus_error, AppState,
+    diag_log, diag_vital, emit_panel, panel, send_focus_error, AppState,
     ShortcutCaptureStartPayload, PanelKeyPayload,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -54,15 +54,20 @@ struct Host {
     // 最近一次呼出的时刻，用来把「把面板开出来的那一下点击」和「点了面板外」分开
     // （判定在 panel_modes::hides_on_click，成因见那里的注释）。同样住在执行线程上，不锁。
     shown_at: Option<Instant>,
+    // 最近一次「呼出请求」的时刻（epoch 毫秒，0 = 没有），由调用方线程写、执行线程读。
+    // 只用来算排队时延：请求方那一行与 summon-run 那一行的差就是投递 + 排队耗掉的时间，
+    // 「执行线程卡住了」与「窗口没落地」靠它分开。
+    summon_req_ms: Arc<AtomicU64>,
 }
 
 impl Host {
-    fn new(app: &AppHandle) -> Self {
+    fn new(app: &AppHandle, summon_req_ms: Arc<AtomicU64>) -> Self {
         Host {
             app: app.clone(),
             hotkeys: Hotkeys::new(),
             repeating: HashMap::new(),
             shown_at: None,
+            summon_req_ms,
         }
     }
 
@@ -112,8 +117,9 @@ impl ModesHost for Host {
             self.hotkeys.register(accel, action, &mut |s| app.global_shortcut().register(s).is_ok());
         // 只记失败与呼出键：呼出键没注册上是「开机那次热键没反应」的头号嫌疑，而 release 是
         // GUI 子系统、eprintln 进的是黑洞；导航键每次显示面板都要注册八枚，全记会冲满 diag.log。
+        // 这一行进 vital（无条件写）：它决定整个会话里热键灵不灵，不能只在开门禁时才有。
         if !outcome.is_ok() || matches!(action, HotkeyAction::Toggle) {
-            diag_log(&format!("hotkey_register accel={accel} -> {outcome:?}"));
+            diag_vital(&format!("hotkey_register accel={accel} -> {outcome:?}"));
         }
         if let Some(message) = outcome.diagnostic(accel) {
             eprintln!("{message}");
@@ -189,6 +195,19 @@ impl ModesHost for Host {
 // ---------- 具名操作（以下私有函数只在执行线程的任务闭包内调用） ----------
 
 fn show_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, capture: bool) {
+    // 从「呼出请求」到这一行的时间：投递 + 排队耗掉的全部。执行线程被卡住时，
+    // 这个数会大到一眼能看出来（请求行在调用方线程早就写下了）。
+    // 没有请求时刻（走到这儿而没人记过——比如托盘「更换快捷键」那条呼出）就不报时延：
+    // 拿 0 当基准会算出 1.7e12 这种假读数，而假读数比没有读数更坏。
+    let req = host.summon_req_ms.load(Ordering::Relaxed);
+    let latency = if req == 0 {
+        "n/a".to_string()
+    } else {
+        now_ms().saturating_sub(req).to_string()
+    };
+    let renderer =
+        if app.state::<AppState>().renderer_seen.load(Ordering::Relaxed) { "seen" } else { "never" };
+    diag_vital(&format!("summon-run capture={capture} latency_ms={latency} renderer={renderer}"));
     diag_log(&format!("show_panel capture={capture}"));
     // 先记时刻再动窗口：这一瞬间之后的点击才是「点了面板外」，之前的都是把面板开出来那一下
     host.shown_at = Some(Instant::now());
@@ -202,7 +221,11 @@ fn show_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, capture: bo
     // 不在这里 broadcast()：历史由 600ms 轮询实时推送，呼出时强制刷新反而导致列表重绘闪烁
 }
 
-fn hide_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, restore_focus: bool) {
+/// 收起面板的具名原因。它进 vital 读数：2026-09-20 那轮的现场证据正是一对相隔 41µs 的
+/// `show_panel` + `hide_panel`——「刚显形就被收起」与「根本没显形」从读数上看是两回事，
+/// 所以每一处收起都要说清是谁收的。
+fn hide_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, restore_focus: bool, reason: &str) {
+    diag_vital(&format!("hide reason={reason} restore_focus={restore_focus}"));
     diag_log(&format!("hide_panel restore_focus={restore_focus}"));
     // 状态机负责：逐层退出捕获/备注/搜索（发对退出事件）、注销导航键、消费焦点快照
     modes.hide(host, restore_focus);
@@ -211,7 +234,7 @@ fn hide_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host, restore_foc
 
 fn toggle_on(app: &AppHandle, modes: &mut PanelModes, host: &mut Host) {
     if modes.is_panel_visible() {
-        hide_on(app, modes, host, true);
+        hide_on(app, modes, host, true, "toggle");
     } else {
         show_on(app, modes, host, true);
     }
@@ -246,10 +269,20 @@ fn perform_hotkey(
 
 // ---------- 入口 ----------
 
+/// 墙钟毫秒（0 = 取不到）。只用于算排队时延，不参与任何判定。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct Modes {
     tx: std_mpsc::Sender<ModesJob>,
     app: AppHandle,
+    // 最近一次呼出请求的时刻，与执行线程共享（见 Host::summon_req_ms）
+    summon_req_ms: Arc<AtomicU64>,
 }
 
 impl Modes {
@@ -258,11 +291,13 @@ impl Modes {
     pub fn spawn(app: &AppHandle) -> Modes {
         let (tx, rx) = std_mpsc::channel::<ModesJob>();
         let app_handle = app.clone();
+        let summon_req_ms = Arc::new(AtomicU64::new(0));
+        let req_for_host = summon_req_ms.clone();
         let _ = std::thread::Builder::new()
             .name("modes-executor".into())
             .spawn(move || {
                 let mut modes = PanelModes::new();
-                let mut host = Host::new(&app_handle);
+                let mut host = Host::new(&app_handle, req_for_host);
                 while let Ok(job) = rx.recv() {
                     job(&mut modes, &mut host);
                     let st = modes.state();
@@ -271,8 +306,15 @@ impl Modes {
                         state.modes_input_active.store(st.input_active(), Ordering::Relaxed);
                     }
                 }
+                // 走到这儿 = 任务通道断了，此后所有模式操作（含三路呼出）都是静默空转
+                diag_vital("executor-exit");
             });
-        Modes { tx, app: app.clone() }
+        Modes { tx, app: app.clone(), summon_req_ms }
+    }
+
+    /// 记下「这一下是呼出请求」的时刻。调用方线程直接调用，不碰状态机。
+    fn mark_summon(&self) {
+        self.summon_req_ms.store(now_ms(), Ordering::Relaxed);
     }
 
     fn submit<R>(&self, f: impl FnOnce(&mut PanelModes, &mut Host) -> R + Send + 'static) -> Reply<R>
@@ -280,15 +322,25 @@ impl Modes {
         R: Send + 'static,
     {
         let (rtx, rrx) = tokio::sync::oneshot::channel();
-        let _ = self.tx.send(Box::new(move |modes, host| {
-            let _ = rtx.send(f(modes, host));
-        }));
+        // 投不出去 = 执行线程没了（或已退出），而所有模式操作都只经这一条通道：
+        // 从前这里 `let _ =` 一吞，热键、托盘、菜单三路呼出就都成了静默空转，一个字都不留。
+        if self
+            .tx
+            .send(Box::new(move |modes, host| {
+                let _ = rtx.send(f(modes, host));
+            }))
+            .is_err()
+        {
+            static DEAD: std::sync::Once = std::sync::Once::new();
+            DEAD.call_once(|| diag_vital("executor-dead"));
+        }
         rrx
     }
 
     // —— 呼出 / 隐藏 ——
 
     pub fn show(&self) -> Reply<()> {
+        self.mark_summon();
         let app = self.app.clone();
         self.submit(move |modes, host| {
             show_on(&app, modes, host, true);
@@ -299,7 +351,31 @@ impl Modes {
     pub fn hide(&self) -> Reply<()> {
         let app = self.app.clone();
         self.submit(move |modes, host| {
-            hide_on(&app, modes, host, true);
+            hide_on(&app, modes, host, true, "request");
+        })
+    }
+
+    /// 热身停靠：启动后 120ms 把热身用的面板停到屏外。**停靠要判「这 120ms 里有没有人呼出过」**：
+    /// 停靠是后发的，会盖掉那次呼出——模式状态说「可见」、窗口却在屏外，正好是「三路呼出都没反应」
+    /// 的另一半（判定与效果交错的老账，见 panel_window 的几何效果代数）。
+    /// 读数和停靠都交给执行线程按序发出：谁后发谁作数。
+    pub fn park_after_warmup(&self) -> Reply<()> {
+        let app = self.app.clone();
+        let requested = self.summon_req_ms.clone();
+        self.submit(move |_modes, _host| {
+            let panel = panel(&app);
+            if requested.load(Ordering::Relaxed) != 0 {
+                // 进 vital 而不是逐事件流水：这是开机路径上的一个判断（停靠让不让位），
+                // 出现它本身就说明「有人赶在热身停靠之前呼出过」。
+                // 行内一律 ASCII：PS 5.1 读 diag.log 按 ANSI 解码，中文会糊成一团并吃掉换行
+                // （与其余 vital 行同一条口径）。
+                diag_vital("warmup-park: summon already requested, park skipped");
+            } else {
+                panel.park_offscreen();
+            }
+            // 热身跑完留一条读数：窗口到底可不可见、停在哪儿。整条呼出链路的起点就是它，
+            // 而这一次「不可见 → 可见」整个会话只有一次（面板平时只是停到屏外）。
+            panel.log_geometry("warmup");
         })
     }
 
@@ -307,7 +383,7 @@ impl Modes {
     pub fn hide_after_paste(&self) -> Reply<()> {
         let app = self.app.clone();
         self.submit(move |modes, host| {
-            hide_on(&app, modes, host, false);
+            hide_on(&app, modes, host, false, "paste");
         })
     }
 
@@ -316,6 +392,7 @@ impl Modes {
     /// 热键按下：回调线程只交出 Shortcut、立即返回；「这是哪个动作」由 hotkeys 那张表在
     /// 执行线程上判（分发不再按 accel 查状态机，两份真源就此并成一份）。
     pub fn on_hotkey_pressed(&self, shortcut: Shortcut) -> Reply<()> {
+        self.mark_summon();
         let app = self.app.clone();
         self.submit(move |modes, host| perform_hotkey(&app, modes, host, shortcut, true))
     }
@@ -347,7 +424,7 @@ impl Modes {
             if !matches!(panel(&app).hit_test(x, y), Some(false)) {
                 return;
             }
-            hide_on(&app, modes, host, true);
+            hide_on(&app, modes, host, true, "outside");
         })
     }
 
@@ -372,6 +449,8 @@ impl Modes {
 
     /// 托盘「更换快捷键」：进入捕获态、呼出并聚焦面板、通知渲染层显示覆盖层
     pub fn begin_shortcut_capture(&self) -> Reply<()> {
+        // 这条路径也直接调 show_on：不记请求时刻的话 latency_ms 只能报 n/a
+        self.mark_summon();
         let app = self.app.clone();
         self.submit(move |modes, host| {
             if !modes.enter_input(host, Mode::ShortcutCapture, None) {

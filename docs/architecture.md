@@ -16,10 +16,15 @@
 | `modes-executor` | 唯一持有 `PanelModes`、效果宿主 `Host` 与热键双向表 `Hotkeys`；唯一允许调用热键 register/unregister | 把 `&mut PanelModes` 或 `&mut Hotkeys` 交出去（前者类型私有、后者只经 `Modes` 具名操作间接使用） |
 | 命令线程（tokio worker，`async #[tauri::command]`） | 向 `Modes` 投递具名操作并 `.await` 回执；跑慢的 Win32 粘贴注入 | 持有 store 锁的同时 await 模式回执 |
 | 回调线程（热键 / 鼠标钩子 / 托盘 / 单实例 / 窗口事件） | 向 `Modes` 投递具名操作，**不等待**（忽略返回值不影响投递） | 阻塞：回调必须立即返回 |
+| 单实例迟到线程（一次性，最多等 5 秒） | 第二实例若赶在 `setup` 的 `manage(AppState)` **之前**到，等状态挂上再呼出（`summon-req src=instance waited=<ms>`） | 直接 `app.state::<AppState>()`——那一刻它还不存在，会 panic 把进程带走（真机复现过，见 pitfalls 第 6 节） |
 | 方向键重复线程 | `Up` / `Down` 按住期间按定时器重复投递 `on_hotkey_repeated`；只读 `modes_visible`，面板隐藏后停止 | 持有模式状态、等待模式回执 |
+| 热身停靠线程（一次性，睡 120ms） | 到点投递 `park_after_warmup`，由执行线程判「这 120ms 里有没有人呼出过」再决定停不停靠、并按序留一条 `warmup` 读数 | 自己直接动窗口（几何一律经 `panel_window` 投主线程，且要与呼出排同一个序） |
+| 投递重投线程（`panel_window::dispatch` 失败时起，短命） | 主线程队列满导致投递失败后，每 50ms 重投同一个效果，最多 10 次；成功/用尽各留一条 vital 读数 | 重放会盖掉新意图的旧效果（判定交给几何效果代数：重投进主线程后仍要过 `superseded`） |
 | 剪贴板监听线程 | 等系统通知（`GetMessageW` 阻塞，收到 `WM_CLIPBOARDUPDATE` 才读）、判定新复制、写盘广播；单次异常经 `catch_unwind` 只跳过本轮；事件源起不来时退回 600ms 轮询 | 被任何模式锁拖住 |
 
 两条附带约束：窗口几何与样式变更必须投递主线程执行（这条现在由 `panel_window.rs` 的实现内部承担，调用方只管动作）；`store` 锁与模式状态绝不交叉持有。
+
+第三条：**几何效果有先后**。窗口几何/可见性这四类效果（`show_at_cursor` / `park_offscreen` / `set_position` / `show`）各自带一个递增序号，落地前发现已有更新的同类效果就丢弃自己——重投让旧效果可能晚到，而「迟到的旧意图盖掉新意图」的伤害正是最难收拾的那种（呼出重投迟到 → 状态机已收起、面板却显形，那块孤儿面板连「点外面收起」都不生效）。
 
 ## Rust module 地图
 
@@ -27,12 +32,13 @@
 
 | module | 职责（唯一归属） | interface | 单测 |
 |---|---|---|---|
-| `main.rs` | 效果编排：持久化与广播、IPC 注册、`AppState` | — | — |
+| `main.rs` | 效果编排：持久化与广播、IPC 注册、`AppState`、诊断的两档出口（`diag_vital` 无条件写 / `diag_log` 门禁后写，同写 `diag.log`，见 [ADR-0013](adr/0013-vital-readings-on-boot-path.md)） | — | — |
 | `history.rs` | 条目身份、去重提升、置顶块插入、裁剪豁免、备注归一化 | `new(max, Ports, Clock)` + `record_text` `record_image` `promote` `toggle_pin` `remove` `clear` `set_note` `load` `to_json` `find` `entries` | 15 |
 | `panel_modes.rs` | 面板四态状态机 + 该注册哪些键的推导与差量指令（纯逻辑，不依赖 tauri / Win32）。三个输入态共用一对 `enter_input` / `exit_input`，各态差异是 `Mode` 上的四条纯判定（`enter_event` `exit_event` `needs_focus` `requires_visible_panel`）；已生效集合不在本 module，差量的另一侧读 `host.current_keys()` | `show` `hide` `on_nav_action` `enter_input` `exit_input` `set_composing` `try_set_toggle_shortcut` `set_toggle_shortcut` `ensure_focus_target` `restore_original_focus` `focus_target_snapshot` `state` `is_panel_visible`；纯判定 `is_repeatable_navigation` `hides_on_click`（点击早于最近一次呼出就不算「点了面板外」）；seam `ModesHost`（`register_key` `unregister_key` `current_keys` + 面板/渲染层/焦点/领域查询） | 16 |
 | `hotkeys.rs` | 「现在哪些全局键生效」的唯一真源：accel ↔ Shortcut 双向表 + 动作，两个方向都是 O(1)；注册三步（查重 / 调插件 / 记账）原子，插件拒绝一分不记；accel → 展示文案 | `register` `unregister` `action_of` `accel_of` `bindings`；纯函数 `format_shortcut`；插件调用经端口传入 | 9 |
-| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys`、方向键连发登记与**最近一次呼出的时刻**——后者用来把「把面板开出来那一下点击」和「点了面板外」分开） | `spawn` + 17 个具名操作（见下） | — |
-| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；主线程投递与 DIP 换算。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸） | `show_at_cursor`（按「光标所在 → 窗口所在 → 主屏」三级取显示器，重算 `set_size` + `set_position` 后**确认可见**；任何一级拿不到都写 diag.log，不再静默 return）、`park_offscreen` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `set_icon` `set_position` `show`（热身用，与 `show_at_cursor` 共用 module 内的 `make_visible`：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂上 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，幂等，手顺理由见 pitfalls 第 3 节）；纯函数 `sized` `centered` `parked` `contains_point` | 6 |
+| `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys`、方向键连发登记与**最近一次呼出的时刻**——这个时刻有三处用途：与点击时刻比出「把面板开出来那一下」、给 `summon-run latency_ms=` 当基准、以及让热身停靠给已经发生的呼出让位） | `spawn` + 17 个具名操作（见下） | — |
+| `diag.rs` | 诊断日志的轮转判定：`diag.log` 超过上限就把旧文件挪成 `diag.log.1`（vital 行是常驻写入，不封顶即无界增长） | 纯判定 `should_rotate` | 1 |
+| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；主线程投递、DIP 换算与**几何效果代数**（`GEOM_SEQ`：迟到的旧效果自己作废）。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸）。**改窗口之前先过 `dispatch`**：投递主线程失败不再静默（记 vital 读数 + 重投），从前八处 `let _ = run_on_main_thread(..)` 是「按了没反应」的无声出口；取不到窗口一律经 `window_or_log` 留痕 | `show_at_cursor`（按「光标所在 → 窗口所在 → 主屏」三级取显示器，重算 `set_size` + `set_position`，**再回读 OS 真值判落位**：不可见由 `make_visible` 自己兜底、没生效就重设、意图本身在屏外就按**主屏自己的工作区与缩放**重算并据新值重判，结论写 vital 行 `summon-landed first= final= repair= scale= intent= actual=`；三级都取不到时留 `summon-no-monitor` / `summon-no-primary`）、`park_offscreen` `log_geometry` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `set_icon` `set_position` `show`（热身用，与 `show_at_cursor` 共用 module 内的 `make_visible`：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，幂等，手顺理由见 pitfalls 第 3 节；**自己读回 `IsWindowVisible` 确认**，没生效就退回 Win32 `ShowWindow(SW_SHOWNOACTIVATE)`，两层都不成留 `make-visible failed`）；纯判定 `sized` `centered` `parked` `contains_point` `landing_verdict` `superseded` | 10 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 欠着的一轮（读不可信 / 写盘失败）的标记 | `observe` `confirm` `skip_unchanged` `note_seq` `note_untrusted` `retry_pending` `sync_now` | 9 |
 | `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
 | `clipboard.rs` | 剪贴板独占窗口的唯一归属：`OpenClipboard` 小步重试、`CF_DIBV5`→`CF_DIB` 退让、`Drop` 必关、取字节即释放守卫（解码在剪贴板之外）、arboard 文字读写、序列号；「读不到」与「剪贴板里就是没内容」在这里分开 | `read()` → `ReadOutcome{Known(Snapshot), Occupied}`、`write_text`、`write_image_file`、`sequence`；纯判定 `occupied`（`ClipboardGuard`、`DibBytes` / `ImageRead` 与格式常量在 module 内部） | 1 |
@@ -51,7 +57,7 @@
 
 `history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
-**模式操作**（`modes.rs` 的 17 个具名方法）：`show` `hide` `hide_after_paste` `on_hotkey_pressed` `on_hotkey_repeated` `on_hotkey_released` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `begin_note_edit` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。热键回调交出的是插件的 `Shortcut`，不是 accel 字符串——「这是哪个动作」由执行线程查 `Hotkeys` 判，主线程不再持有那份表。
+**模式操作**（`modes.rs` 的 17 个具名方法）：`show` `hide` `park_after_warmup` `hide_after_paste` `on_hotkey_pressed` `on_hotkey_repeated` `on_hotkey_released` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。热键回调交出的是插件的 `Shortcut`，不是 accel 字符串——「这是哪个动作」由执行线程查 `Hotkeys` 判，主线程不再持有那份表。备注编辑态没有自己的具名操作：它是 `NavAction::Note` 落进 `PanelModes::on_nav_action` 后调 `enter_input(NoteEdit)`，调用方仍是 `on_hotkey_pressed` 那一条。
 
 ## 渲染层地图
 
@@ -115,7 +121,7 @@ Rust 侧是唯一真相。一次变更 = `store` 方法 + `commit()`，而 `comm
 五条结论只能靠真机拿到，读代码不算验证（完整清单见 [README.md](../README.md) 「待真机验证」）：
 
 - **托盘图标清晰度**：按主屏 `scaleFactor` 取恰好物理尺寸的图 1:1 渲染，但最终 HICON 由 tray-icon 的生成路径决定，非整数缩放下是否仍糊必须眼看。
-- **开机那一次的三路呼出**：`Ctrl+Shift+V`、托盘菜单「显示剪贴板面板」、托盘图标左键——只有开机自启那次全哑，退出重开就好（2026-09-20 用户口径）。本轮把两条静默路径改成必落地并留读数（`show_at_cursor` 的三级显示器兜底 + 每次都 `make_visible`；呼出键的注册结果写 diag.log），治没治好只能下次开机验；分流口径见 `tauri/scripts/panel-state.ps1` 头部那六条。
+- **开机那一次的三路呼出**：`Ctrl+Shift+V`、托盘菜单「显示剪贴板面板」、托盘图标左键——只有开机自启那次全哑，退出重开就好（2026-09-20 用户口径；2026-09-27 复现一次仍是三路全哑、进程健康、托盘正常，详见 [changelog](changelog.md)）。2026-09-20 那轮把「静默 return」换成兜底与日志，2026-09-27 那轮把读数改成**无条件写**（`vital pid=` 行，[ADR-0013](adr/0013-vital-readings-on-boot-path.md)）并给呼出加了回读验证：登录后先别重开应用，按顺序看 `diag.log`（先按 `pid=` 分组，两份实例的读数是交错写的）——`summon-req` 有而 `summon-run` 没有 = 执行线程没接手；`summon-no-*` = 已经到主线程、只是缺前提（`missing-window` / `no-cursor` / `no-monitor` / `no-primary`），**不**等于主线程没跑；`summon-run` 有而 `summon-landed` 没有 = 那一次被判给更新的几何效果（丢弃只进 verbose 档），也不是主线程没跑；`summon-landed final=Hidden/Moved/Offscreen` = 窗口没落地（后面跟着 `repair=`）；`renderer=never` = 网页没起来（窗口落地了也是白的）；`emit-failed` = 窗口落地了但事件送不出去。六条各是一种处置，**别跳过读数去猜**；探针 `tauri/scripts/panel-state.ps1` 的头里写着同一套分流。
 - **托盘图标的明暗**：判定改成直读任务栏主题（`SystemUsesLightTheme`）后，要在「个性化 → 颜色 → 选择默认模式 = 自定义」下把 Windows 与应用两套设成相反色，看图标跟的是前者；再在运行中翻系统主题，看悬停一次图标（`Enter` 那次核配色）能不能补上——那条就是为「广播收不到」准备的兜底。
 - **浏览态不抢焦点**：靠 `focusable: true` 加焦点事件自动 `SetFocus(NULL)` 模拟，首帧激活次序需眼看。
 - **截图进历史**：`dib` 的解码覆盖面全部有单测钉住，但「某个截图工具到底写哪种 DIB 形状」只能真机看；断点定位用 `真机探针` 那条 `#[ignore]` 测试。

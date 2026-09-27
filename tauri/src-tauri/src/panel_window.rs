@@ -9,12 +9,15 @@
 //
 // 几何判定（居中 / 离屏停靠 / 命中测试）是纯函数，不碰 tauri，可表驱动直测。
 
-use crate::diag_log;
+use crate::{diag_log, diag_vital};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
+    GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_SHOWNOACTIVATE,
+    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, Wry};
 
@@ -24,6 +27,11 @@ pub const PANEL_LABEL: &str = "panel";
 pub const OFFSCREEN_GAP: f64 = 20.0;
 /// 取不到显示器时的兜底停靠点
 pub const FALLBACK_PARK: (f64, f64) = (-10000.0, 0.0);
+/// 投递主线程失败后的重投次数与间隔（10 × 50ms = 最坏 0.5 秒追上一条排队满的主线程）
+const DISPATCH_RETRIES: u32 = 10;
+const DISPATCH_RETRY_DELAY: Duration = Duration::from_millis(50);
+/// 落位判定的容差（DIP）：分数缩放下 SetWindowPos 的取整会差一两个像素，那不算没落地
+pub const LANDING_TOLERANCE: f64 = 2.0;
 
 /// 显示器工作区（物理像素，已扣除任务栏）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +92,56 @@ pub fn contains_point(
     px >= bounds.x && px <= bounds.x + bounds.width && py >= bounds.y && py <= bounds.y + bounds.height
 }
 
+/// 窗口现状：OS 真值（`IsWindowVisible` + 实际矩形），不是框架缓存。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowTruth {
+    pub visible: bool,
+    pub rect: RectDip,
+}
+
+/// 一次呼出的落位判定。三种失败分开，因为处置完全不同：
+///   `Hidden`    窗口压根不可见 → 整条链上唯一那次「不可见 → 可见」没办成，要强制显形；
+///   `Moved`     投递到了、位置/尺寸没生效（还是停在屏外）→ 重设一次；
+///   `Offscreen` 位置与意图相符，但那个意图本身就在工作区外（工作区读歪了）→ 得重算。
+/// 「可见」与「落位」分开判：窗口可见却在屏外，肉眼看就是「按了没反应」，与不可见等价。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Landing {
+    Landed,
+    Hidden,
+    Moved,
+    Offscreen,
+}
+
+/// 判定：这次呼出落地了吗。容差按 DIP 给（分数缩放的取整不算失败）。
+pub fn landing_verdict(
+    intent: RectDip,
+    actual: WindowTruth,
+    work: WorkArea,
+    scale: f64,
+) -> Landing {
+    if !actual.visible {
+        return Landing::Hidden;
+    }
+    let moved = (actual.rect.x - intent.x).abs() > LANDING_TOLERANCE
+        || (actual.rect.y - intent.y).abs() > LANDING_TOLERANCE
+        || (actual.rect.width - intent.width).abs() > LANDING_TOLERANCE
+        || (actual.rect.height - intent.height).abs() > LANDING_TOLERANCE;
+    if moved {
+        return Landing::Moved;
+    }
+    // 与工作区有交集才算看得见（贴边算交集）
+    let (wx, wy) = (work.x as f64 / scale, work.y as f64 / scale);
+    let (ww, wh) = (work.width as f64 / scale, work.height as f64 / scale);
+    let disjoint = actual.rect.x + actual.rect.width <= wx
+        || actual.rect.x >= wx + ww
+        || actual.rect.y + actual.rect.height <= wy
+        || actual.rect.y >= wy + wh;
+    if disjoint {
+        return Landing::Offscreen;
+    }
+    Landing::Landed
+}
+
 /// 面板窗口。克隆廉价，每个调用点按 AppHandle 现取即可。
 #[derive(Clone)]
 pub struct PanelWindow {
@@ -139,25 +197,30 @@ impl PanelWindow {
         Some(contains_point((x, y), scale, bounds))
     }
 
-    /// 呼出：移到光标所在显示器的工作区居中，并确保窗口真的在屏幕上显形。投递主线程执行。
+    /// 呼出：移到光标所在显示器的工作区居中，并**确认它真的落地了**（不可见就强制显形、
+    /// 位置没生效就重设、算出来的位置本身在屏幕外就按主屏重算），整个过程写进 vital 读数。
+    /// 投递主线程执行。
     ///
-    /// 「确保显形」是必须的，不能指望 ready-to-show 热身那一次成功：面板平时只是[停靠](CONTEXT.md)
-    /// 到屏外、从不 `hide()`，所以一旦热身那次 `show()` 没落地（开机那一刻最常见——外壳与显示
-    /// 配置都还没就绪），窗口就永远停在「不可见」，热键、托盘菜单、托盘图标三路呼出全都
-    /// 表现为「按了没反应」。这里每次呼出都补一次，幂等。
+    /// 为什么要回读验证：`set_position` / `show` 都只是「请求」，返回 Ok 不等于生效，
+    /// 而这条链上任何一步没生效，对外都是同一件事——三路呼出都没反应。2026-09-20 那轮
+    /// 把三个静默 `return` 换成了兜底与日志，但**没有一处回读**，所以「必落地」当时只是
+    /// 一个愿望；2026-09-27 开机那次三路全哑且现场无读数，就是这条缝。
     ///
-    /// 显示器按「光标所在 → 窗口所在 → 主屏」三级兜底，任何一级拿不到都写进 diag.log：
-    /// 静默 return 的话面板留在屏外，现场什么都不留下，只能靠猜。
+    /// 显示器按「光标所在 → 窗口所在 → 主屏」三级兜底；任何一级拿不到都留读数。
     pub fn show_at_cursor(&self) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
+        let seq = next_geom_seq();
+        dispatch(&self.app, "show-at-cursor", move |app| {
+            if superseded(seq, GEOM_SEQ.load(Ordering::Relaxed)) {
+                diag_log("show-at-cursor: 已被更新的几何效果取代，丢弃");
+                return;
+            }
+            let panel = PanelWindow::new(app);
             let Some(win) = panel.window() else {
-                diag_log("show-at-cursor: 面板窗口不存在");
+                diag_vital("summon-missing-window");
                 return;
             };
             let Ok(cursor) = app.cursor_position() else {
-                diag_log("show-at-cursor: 取不到光标位置");
+                diag_vital("summon-no-cursor");
                 return;
             };
             let (cx, cy) = (cursor.x as i32, cursor.y as i32);
@@ -166,28 +229,69 @@ impl PanelWindow {
                 .or_else(|| win.current_monitor().ok().flatten())
                 .or_else(|| app.primary_monitor().ok().flatten());
             let Some(monitor) = monitor else {
-                diag_log(&format!("show-at-cursor: 显示器拿不到 cursor={cx},{cy}"));
+                diag_vital(&format!("summon-no-monitor cursor={cx},{cy}"));
                 return;
             };
             // 每次呼出按当前显示器重算尺寸与位置：换屏 / 改缩放后第一下就跟上。
             // set_size 在 resizable:false 下依然可编程调用（resizable 只管用户拖拽）。
-            let scale = monitor.scale_factor();
+            let mut scale = monitor.scale_factor();
+            let mut work = work_area(&monitor);
             let (w, h) = sized(monitor.size().height as f64, scale);
-            let _ = win.set_size(Size::Logical(LogicalSize::new(w, h)));
-            let (x, y) = centered(work_area(&monitor), scale, w, h);
-            let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
-            // 先落位再显形：反过来会在新位置之外闪一帧
+            let (x, y) = centered(work, scale, w, h);
+            let mut intent = RectDip { x, y, width: w, height: h };
+            apply_rect(&win, intent);
             make_visible(&win);
-            diag_log(&format!("show-at-cursor: rect={x},{y} {w}x{h} scale={scale}"));
+
+            let first = verdict_of(&win, intent, work, scale);
+            let mut repair = "-";
+            match first {
+                Landing::Landed => {}
+                // 不可见这一档不做二次显形：`make_visible` 刚刚已经把「框架 show + Win32 兜底」
+                // 两层都试过并自己留了痕（`make-visible via ShowWindow` / `make-visible failed`），
+                // 再调一次只是同一个调用，却会打出误导的 `repair=show`。
+                Landing::Hidden => {}
+                Landing::Moved => {
+                    apply_rect(&win, intent);
+                    repair = "reposition";
+                }
+                // 意图本身落在工作区外：工作区读歪了。改按主屏自己的工作区与缩放重算，
+                // 判 final 也用新的这一份——否则会把已经修好的落位读成 Offscreen。
+                Landing::Offscreen => match app.primary_monitor().ok().flatten() {
+                    Some(primary) => {
+                        work = work_area(&primary);
+                        scale = primary.scale_factor();
+                        let (pw, ph) = sized(primary.size().height as f64, scale);
+                        let (px, py) = centered(work, scale, pw, ph);
+                        intent = RectDip { x: px, y: py, width: pw, height: ph };
+                        apply_rect(&win, intent);
+                        make_visible(&win);
+                        repair = "refit";
+                    }
+                    None => {
+                        // 兜底也要留痕：这里静默等于「修了但没修」两件事都看不出来
+                        diag_vital("summon-no-primary");
+                    }
+                },
+            }
+            let truth = read_truth(&win);
+            let final_verdict = verdict_of(&win, intent, work, scale);
+            diag_vital(&format!(
+                "summon-landed first={first:?} final={final_verdict:?} repair={repair} scale={scale} intent={} actual={}",
+                fmt_rect(intent),
+                truth.map(|t| fmt_rect(t.rect)).unwrap_or_else(|| "unreadable".to_string()),
+            ));
         });
     }
 
     /// 隐藏：停到当前显示器工作区右侧之外。投递主线程执行。
     pub fn park_offscreen(&self) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            let Some(win) = panel.window() else { return };
+        let seq = next_geom_seq();
+        dispatch(&self.app, "park-offscreen", move |app| {
+            if superseded(seq, GEOM_SEQ.load(Ordering::Relaxed)) {
+                diag_log("park-offscreen: 已被更新的几何效果取代，丢弃");
+                return;
+            }
+            let Some(win) = window_or_log(app, "park-offscreen") else { return };
             let (x, y) = match win.current_monitor().ok().flatten() {
                 Some(m) => parked(work_area(&m), m.scale_factor(), OFFSCREEN_GAP),
                 None => FALLBACK_PARK,
@@ -197,12 +301,30 @@ impl PanelWindow {
         });
     }
 
+    /// 留一条窗口现状的读数（OS 真值）：可见性与实际矩形。投递主线程执行。
+    /// 热身之后、以及需要确认「窗口到底在哪儿」时用它——探针与 vital 日志都读这一条。
+    pub fn log_geometry(&self, tag: &'static str) {
+        dispatch(&self.app, "log-geometry", move |app| {
+            let Some(win) = PanelWindow::new(app).window() else {
+                diag_vital(&format!("{tag} window=missing"));
+                return;
+            };
+            match read_truth(&win) {
+                Some(t) => diag_vital(&format!(
+                    "{tag} vis={} rect={} scale={:.2}",
+                    t.visible,
+                    fmt_rect(t.rect),
+                    win.scale_factor().unwrap_or(1.0)
+                )),
+                None => diag_vital(&format!("{tag} window=unreadable")),
+            }
+        });
+    }
+
     /// 让面板获得焦点（输入态：搜索 / 备注编辑 / 快捷键捕获）。投递主线程执行。
     pub fn focus(&self) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            if let Some(win) = panel.window() {
+        dispatch(&self.app, "focus", move |app| {
+            if let Some(win) = window_or_log(app, "focus") {
                 let _ = win.set_focus();
             }
         });
@@ -211,10 +333,8 @@ impl PanelWindow {
     /// 把焦点还给原程序（仅当面板当前持有焦点时）。
     /// 归还焦点即 SetFocus(NULL)，且必须在窗口归属线程调用。
     pub fn release_focus(&self) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            let Some(win) = panel.window() else { return };
+        dispatch(&self.app, "release-focus", move |app| {
+            let Some(win) = window_or_log(app, "release-focus") else { return };
             if win.is_focused().unwrap_or(false) {
                 unsafe {
                     // SetFocus(NULL) 失败（无持有焦点的窗口）可安全忽略
@@ -227,12 +347,13 @@ impl PanelWindow {
     /// 透明窗口点击穿透：圆角外区域穿透到下层窗口（Windows 实现 = 切 WS_EX_TRANSPARENT）。
     /// 样式切换必须在主线程（跨线程改窗口样式同样是同步消息）。
     pub fn set_mouse_passthrough(&self, ignore: bool) {
-        let Some(win) = self.window() else { return };
-        let Ok(hwnd) = win.hwnd() else { return };
+        let Some(hwnd) = self.window().and_then(|w| w.hwnd().ok()) else {
+            // 窗口没了就没人需要穿透；留痕以免与「命令没生效」混为一谈
+            diag_vital("mouse-passthrough missing-window");
+            return;
+        };
         let hwnd_raw = hwnd.0 as isize; // HWND 含裸指针非 Send，取值后主线程重建
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let _ = app;
+        dispatch(&self.app, "mouse-passthrough", move |_app| {
             unsafe {
                 let hwnd = HWND(hwnd_raw as *mut _);
                 let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
@@ -248,10 +369,13 @@ impl PanelWindow {
 
     /// 直接设位置（ready-to-show 热身用：先在 (0,0) 显示让 WebView 出首帧）
     pub fn set_position(&self, x: f64, y: f64) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            if let Some(win) = panel.window() {
+        let seq = next_geom_seq();
+        dispatch(&self.app, "set-position", move |app| {
+            if superseded(seq, GEOM_SEQ.load(Ordering::Relaxed)) {
+                diag_log("set-position: 已被更新的几何效果取代，丢弃");
+                return;
+            }
+            if let Some(win) = window_or_log(app, "set-position") {
                 let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
             }
         });
@@ -261,10 +385,13 @@ impl PanelWindow {
     ///
     /// 热身不是唯一一次显形：`show_at_cursor` 每次都补一遍，谁先到算谁（见那里的说明）。
     pub fn show(&self) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            if let Some(win) = panel.window() {
+        let seq = next_geom_seq();
+        dispatch(&self.app, "show", move |app| {
+            if superseded(seq, GEOM_SEQ.load(Ordering::Relaxed)) {
+                diag_log("show: 已被更新的几何效果取代，丢弃");
+                return;
+            }
+            if let Some(win) = window_or_log(app, "show") {
                 make_visible(&win);
             }
         });
@@ -272,18 +399,114 @@ impl PanelWindow {
 
     /// 换窗口图标（跟随系统主题）。投递主线程执行。
     pub fn set_icon(&self, icon: tauri::image::Image<'static>) {
-        let app = self.app.clone();
-        let _ = self.app.run_on_main_thread(move || {
-            let panel = PanelWindow::new(&app);
-            if let Some(win) = panel.window() {
-                let _ = win.set_icon(icon);
+        // 重投要能重放同一个效果，所以图标按引用共享（Image 是 Clone 的）
+        let icon = Arc::new(icon);
+        dispatch(&self.app, "set-icon", move |app| {
+            if let Some(win) = window_or_log(app, "set-icon") {
+                let _ = win.set_icon((*icon).clone());
             }
         });
     }
 }
 
+/// 把一个效果投给主线程。**投不出去不是「算了」**：窗口几何、样式、焦点、图标这四类变更
+/// 都必须落在主线程，而 `run_on_main_thread` 会失败（主线程消息队列满、事件循环已退），
+/// 从前八处调用一律 `let _ =`，失败就等于这一步无声无息地没做——对外只看到「面板没出来」。
+/// 现在失败先记一条 vital 读数，再起一条短命线程重投；重投成功/用尽各记一条，
+/// 「投递失败过」与「一切正常」从此可分辨（任务本身都是幂等的「置成某个状态」）。
+fn dispatch<F>(app: &AppHandle, action: &'static str, task: F)
+where
+    F: Fn(&AppHandle) + Send + Sync + 'static,
+{
+    let task = Arc::new(task);
+    let for_first = task.clone();
+    let app_for_first = app.clone();
+    if app.run_on_main_thread(move || for_first(&app_for_first)).is_ok() {
+        return;
+    }
+    diag_vital(&format!("dispatch-failed action={action}"));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for attempt in 1..=DISPATCH_RETRIES {
+            std::thread::sleep(DISPATCH_RETRY_DELAY);
+            let for_retry = task.clone();
+            let app_for_retry = app.clone();
+            if app.run_on_main_thread(move || for_retry(&app_for_retry)).is_ok() {
+                diag_vital(&format!("dispatch-recovered action={action} attempt={attempt}"));
+                return;
+            }
+        }
+        diag_vital(&format!("dispatch-lost action={action} attempts={DISPATCH_RETRIES}"));
+    });
+}
+
+/// 窗口几何/可见性这类效果的投递代数。**幂等不等于可重放**：重复执行同一效果是安全的，
+/// 但迟到的旧效果盖掉新意图就是错的（典型伤害：呼出重投迟到 → 模式状态已收起、面板却显形，
+/// 那块孤儿面板连「点外面收起」都不生效，因为那个判定先看模式状态）。所以这几类效果各带
+/// 一个序号，落地前发现已有更新的同类效果就丢弃自己。焦点/穿透/图标不参与：它们不互相覆盖。
+static GEOM_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 取一个新的几何效果序号（严格递增）
+fn next_geom_seq() -> u64 {
+    GEOM_SEQ.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// 判定：这次投递是否已被更新的同类效果取代（是则丢弃）。
+pub fn superseded(mine: u64, latest: u64) -> bool {
+    mine != latest
+}
+
+/// 取面板窗口；拿不到就留一条读数。「窗口不存在」是呼出链路里最彻底的静默：
+/// 从前它只表现为「按了没反应」，连一条记录都没有（2026-09-27 那轮把这条补上）。
+fn window_or_log(app: &AppHandle, action: &'static str) -> Option<tauri::WebviewWindow<Wry>> {
+    let win = PanelWindow::new(app).window();
+    if win.is_none() {
+        diag_vital(&format!("{action} missing-window"));
+    }
+    win
+}
+
+/// 判一次落位（读不到窗口现状时按「不可见」记：正常不可达，真出问题会在 panic.log 里）。
+fn verdict_of(win: &tauri::WebviewWindow<Wry>, intent: RectDip, work: WorkArea, scale: f64) -> Landing {
+    read_truth(win)
+        .map(|t| landing_verdict(intent, t, work, scale))
+        .unwrap_or(Landing::Hidden)
+}
+
+/// 窗口现状（OS 真值）。读不到返回 None（窗口没了 / 句柄不可读）。
+fn read_truth(win: &tauri::WebviewWindow<Wry>) -> Option<WindowTruth> {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let visible = win.is_visible().unwrap_or(false);
+    let pos = win.outer_position().ok()?;
+    let size = win.outer_size().ok()?;
+    Some(WindowTruth {
+        visible,
+        rect: RectDip {
+            x: pos.x as f64 / scale,
+            y: pos.y as f64 / scale,
+            width: size.width as f64 / scale,
+            height: size.height as f64 / scale,
+        },
+    })
+}
+
+/// 按 DIP 矩形落尺寸与位置。先落位再显形：反过来会在新位置之外闪一帧。
+/// 两个调用都走 Logical：缩放由框架按窗口所在显示器换算，这里不再自己乘。
+fn apply_rect(win: &tauri::WebviewWindow<Wry>, rect: RectDip) {
+    let _ = win.set_size(Size::Logical(LogicalSize::new(rect.width, rect.height)));
+    let _ = win.set_position(Position::Logical(LogicalPosition::new(rect.x, rect.y)));
+}
+
+fn fmt_rect(r: RectDip) -> String {
+    format!("{:.0},{:.0} {:.0}x{:.0}", r.x, r.y, r.width, r.height)
+}
+
 /// 从不可见变可见那一步，连同「别上任务栏」的三个动作。必须在主线程上调用。
 /// 幂等：窗口已经可见就直接返回（面板平时只是停到屏外，从不 `hide()`，所以常态下是空转）。
+///
+/// **自己确认自己**：`win.show()` 只是请求，读回 `IsWindowVisible` 才算数；没生效就用
+/// Win32 `ShowWindow(SW_SHOWNOACTIVATE)` 再办一次（不再经 tao 的 flags），两次都不成就留读数。
+/// 这一步是整条呼出链路上唯一真正的「不可见 → 可见」，赌不起。
 ///
 /// 「别上任务栏」必须办在 `win.show()` **之后**：
 /// - 配置里的 `skipTaskbar` 只让 tao 在建窗那一刻调一次 `ITaskbarList::DeleteTab`，
@@ -303,6 +526,22 @@ fn make_visible(win: &tauri::WebviewWindow<Wry>) {
         return;
     }
     let _ = win.show();
+    if !win.is_visible().unwrap_or(false) {
+        // 框架那一步没落地。真机实测过这条：tao 的内部 flags 会与 OS 真值分家——它以为窗口
+        // 可见时 `set_window_flags` 发现「新 flags 与旧的一样」就早退、根本不发 `ShowWindow`，
+        // 于是从外部把窗口隐藏掉之后，`win.show()` 是个空操作。这里直接问 Win32 要。
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+        }
+        // 兜底成没成都留痕：这条正是「框架说可见、OS 说不可见」这种分家的证据
+        if win.is_visible().unwrap_or(false) {
+            diag_vital("make-visible via ShowWindow");
+        } else {
+            diag_vital("make-visible failed");
+        }
+    }
     if let Ok(hwnd) = win.hwnd() {
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
@@ -376,5 +615,82 @@ mod tests {
         assert!(!contains_point((99, 500), 1.0, bounds));
         // 2x 屏上的物理点 (400,400) -> DIP (200,200)，落在矩形内
         assert!(contains_point((400, 400), 2.0, bounds));
+    }
+
+    // —— 呼出落位：可见 + 与意图相符 + 在工作区内，三条合成一个「落地」 ——
+
+    fn truth(x: f64, y: f64, w: f64, h: f64, visible: bool) -> WindowTruth {
+        WindowTruth { visible, rect: RectDip { x, y, width: w, height: h } }
+    }
+
+    #[test]
+    fn 落位判定_可见相符才算落地_取整偏差不算失败() {
+        let intent = RectDip { x: 751.0, y: 129.0, width: 418.0, height: 823.0 };
+        assert_eq!(
+            landing_verdict(intent, truth(751.0, 129.0, 418.0, 823.0, true), FULL_HD, 1.0),
+            Landing::Landed
+        );
+        // 分数缩放下 SetWindowPos 的取整会差一两个像素：仍在容差内，不算没落地
+        assert_eq!(
+            landing_verdict(intent, truth(752.5, 127.5, 419.5, 824.5, true), FULL_HD, 1.0),
+            Landing::Landed
+        );
+    }
+
+    #[test]
+    fn 落位判定_不可见与没挪动与意图本身在屏外分成三种() {
+        let intent = RectDip { x: 751.0, y: 129.0, width: 418.0, height: 823.0 };
+        // 不可见：位置对不对都不算落地（整条链唯一那次「不可见 → 可见」没办成）
+        assert_eq!(
+            landing_verdict(intent, truth(751.0, 129.0, 418.0, 823.0, false), FULL_HD, 1.0),
+            Landing::Hidden
+        );
+        // 还停在屏外（工作区右缘之外就是停靠位）：投递到了，但没生效
+        assert_eq!(
+            landing_verdict(intent, truth(1940.0, 0.0, 418.0, 823.0, true), FULL_HD, 1.0),
+            Landing::Moved
+        );
+        // 位置对了、尺寸没跟上：同属「没生效」
+        assert_eq!(
+            landing_verdict(intent, truth(751.0, 129.0, 473.0, 945.0, true), FULL_HD, 1.0),
+            Landing::Moved
+        );
+        // 位置与意图相符，但那个意图本身在工作区之外（工作区读歪了）→ 得重算
+        let bogus = RectDip { x: 3000.0, y: 0.0, width: 418.0, height: 823.0 };
+        assert_eq!(
+            landing_verdict(bogus, truth(3000.0, 0.0, 418.0, 823.0, true), FULL_HD, 1.0),
+            Landing::Offscreen
+        );
+    }
+
+    #[test]
+    fn 落位判定_工作区按缩放换算_两个缩放给出不同结论() {
+        // 2x 下 1920x1080 物理 = 960x540 DIP：DIP x=1000 已在工作区之外
+        let right = RectDip { x: 1000.0, y: 0.0, width: 418.0, height: 200.0 };
+        assert_eq!(
+            landing_verdict(right, truth(1000.0, 0.0, 418.0, 200.0, true), FULL_HD, 2.0),
+            Landing::Offscreen,
+            "缩放没被当成 1.0"
+        );
+        // 同一组数按 1x 换算就落在区内（工作区 1920 宽）
+        assert_eq!(
+            landing_verdict(right, truth(1000.0, 0.0, 418.0, 200.0, true), FULL_HD, 1.0),
+            Landing::Landed
+        );
+        // 面板比工作区还高（居中会给负 y）仍有交集：竖直方向不是「不相交」
+        let tall = RectDip { x: 271.0, y: -142.0, width: 418.0, height: 823.0 };
+        assert_eq!(
+            landing_verdict(tall, truth(271.0, -142.0, 418.0, 823.0, true), FULL_HD, 2.0),
+            Landing::Landed
+        );
+    }
+
+    #[test]
+    fn 迟到的旧几何效果作废_只有最新一次能落地() {
+        // 投递代数：晚发的效果作废早发的（哪怕它先被投出去、重投更晚才到）
+        assert!(!superseded(7, 7), "自己就是最新的一次，照常落地");
+        assert!(superseded(6, 7), "已经有第 7 次几何效果了，第 6 次的重投必须丢弃");
+        assert!(!superseded(8, 8));
+        assert!(superseded(8, 9));
     }
 }

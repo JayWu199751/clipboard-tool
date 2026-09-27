@@ -16,7 +16,7 @@
 use crate::panel_window::PanelWindow;
 use crate::settings::{Settings, Theme};
 use crate::hotkeys::format_shortcut;
-use crate::{commit, diag_log, set_auto_start, set_theme, AppState};
+use crate::{commit, diag_log, diag_vital, set_auto_start, set_theme, AppState};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -149,6 +149,9 @@ impl Tray {
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
+                    // 呼出请求的调用方读数：它进了回调 ≠ 面板会出来（执行线程那侧还有一段），
+                    // 两行分开写才能指认卡在哪一段
+                    diag_vital("summon-req src=tray-menu");
                     app.state::<AppState>().modes.show();
                 }
                 "change-shortcut" => {
@@ -180,6 +183,7 @@ impl Tray {
             })
             .on_tray_icon_event(|tray, event| {
                 if opens_panel(&event) {
+                    diag_vital("summon-req src=tray-click");
                     tray.app_handle().state::<AppState>().modes.show();
                 } else if pointer_entered(&event) {
                     // 指针进图标就核一遍配色：常规的刷新入口是面板窗口的 ThemeChanged

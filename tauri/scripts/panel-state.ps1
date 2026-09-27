@@ -2,14 +2,33 @@
 #
 # 为什么要它：开机自启场景下「按了没反应」这类事跑不了自动化，肉眼又只看到一个现象。
 # 这个探针把那个现象拆成几条能分别证伪的读数，跑两次（呼出前 / 呼出后）即可定位：
-#   1) window 行 vis=True、ex 里没有 APPWINDOW     → 任务栏那个按钮的成因还在不在
+#   1) window 行 vis=True、ex 里没有 APPWINDOW      → 任务栏那个按钮的成因还在不在
 #   2) 呼出后 rect 从屏外移到屏内、仍看不到东西    → 窗口没问题，是 WebView2 没画出东西（看 webview2 行）
-#   3) 呼出后 rect 仍在屏外                        → 呼出这个动作没跑起来（对照 diag.log 的 show-at-cursor 行）
-#   4) diag.log 里有 show-at-cursor 且写了拿不到显示器 / 光标 → 三级兜底也没落地，那行末尾就是原因
-#   5) diag.log 里没有 hotkey_register ... Registered         → 呼出键压根没注册上（被别的程序占了）
-#   6) instances 大于 1                            → 同时活着两份，呼出键只可能被一份注册上（看 elevated=）
+#   3) 呼出后 rect 仍在屏外                        → 呼出这个动作没落地，按下面 diag.log 的 vital 行分流
+#   4) instances 大于 1                            → 同时活着两份，呼出键只可能被一份注册上（看 elevated=）
 #   respond=False                                  → 主线程卡住（托盘菜单能弹是外壳画的，点了不执行）
 #   theme 行与图标不符                             → 图标配色看 SystemUsesLightTheme，不看 AppsUseLightTheme
+#
+# diag.log 的 vital 行（无条件写，每行带 pid=，见 ADR-0013）按呼出链路逐段分流，缺哪一行就是卡在哪一段。
+# 先按 pid= 分组：同时活着两份时两边的读数是交错写的，同一段里混着两个 pid 会读成矛盾。
+#   hotkey_register 不是 Registered        → 呼出键没注册上（被别的程序占了；启动后 5s/20s 会自动重试，
+#                                            每次重试现读存档里的键，留 hotkey-retry n= accel= 一行）
+#   有 summon-req 没有 summon-run          → 执行线程没接手（找 executor-dead / executor-exit）
+#   summon-req src=instance waited=         → 第二实例赶在启动期到，等了那么久才把状态等到（这段等待
+#                                            不计进 latency_ms）；dropped = 5 秒都没等到，这次呼出丢了
+#   warmup-park: summon already requested  → 开机 120ms 内就有人呼出过，热身那次停靠让了位（面板不该在屏外）
+#   summon-no-*                            → 已经到主线程了，只是缺前提：missing-window（窗口没了）/
+#                                            no-cursor / no-monitor / no-primary 各差一样东西，措辞即结论。
+#                                            单独见到它不等于「主线程没跑」——恰恰相反
+#   dispatch-failed|recovered|lost         → 投递主线程失败过：recovered 是自己重投回来了，lost 才是没投出去
+#   有 summon-run 没有 summon-landed       → 那一次呼出被判给了更新的几何效果（丢弃只进 verbose 档的
+#                                            「已被更新的几何效果取代」），不是主线程没跑
+#   summon-landed final=Hidden/Moved/Offscreen → 窗口没落地，跟着看那一行的 repair= 补了哪一步
+#   make-visible via ShowWindow               → 框架说可见、OS 说不可见，Win32 兜底救回来了
+#   make-visible failed / mouse-passthrough missing-window → 连 Win32 那层也没成 / 穿透调用时窗口已不在
+#   summon-run renderer=never                 → 网页压根没起来，窗口落地也是白的（对 webview2 那行）
+#   emit-failed event=                        → 窗口在、事件送不出去，面板看着「落地了但什么都没有」
+#   summon-landed 紧跟 hide reason=outside    → 刚显形就被收起（点击竞态，见 README 故障排查）
 #
 # 本机执行策略禁跑 .ps1，所以这样调用（在仓库根目录）：
 #   powershell -NoProfile -Command "iex (Get-Content -Raw 'tauri\scripts\panel-state.ps1')"
@@ -101,11 +120,11 @@ foreach ($s in [System.Windows.Forms.Screen]::AllScreens) {
 }
 $dl = Join-Path $env:APPDATA 'ClipboardTool\diag.log'
 if (Test-Path $dl) {
-  '--- diag.log tail 25 (needs user env CLIPBOARD_TOOL_DIAG=1 before the app started) ---'
+  '--- diag.log tail 25 (vital lines need no env var; verbose lines need CLIPBOARD_TOOL_DIAG=1) ---'
   '    arrow-key repeat fills the tail on screen noise; Up/Down filtered out to keep the skeleton'
   Get-Content $dl -Tail 200 |
     Where-Object { $_ -notmatch 'dispatch_hotkey accel=(Up|Down)$' } |
     Select-Object -Last 25
 } else {
-  'diag.log : missing (CLIPBOARD_TOOL_DIAG not in effect for that instance)'
+  'diag.log : MISSING -- that instance never wrote a single vital line: wrong/old exe, or it never reached setup'
 }

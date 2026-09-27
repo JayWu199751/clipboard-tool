@@ -38,6 +38,8 @@ mod clipboard_events;
 #[cfg(test)]
 mod clipboard_probe;
 mod dib;
+// 诊断日志的判定侧（轮转上限）；写盘与两个门禁在下面的 diag_vital / diag_log
+mod diag;
 mod focus_paste;
 mod history;
 mod hotkeys;
@@ -90,6 +92,9 @@ struct AppState {
     image_url_cache: Arc<Mutex<HashMap<String, String>>>,
     // 「这次剪贴板算不算一次新复制」的基线（序列号短路、图片/文字基线、写盘失败重试）
     baseline: Mutex<PollBaseline>,
+    // 渲染层露过面没有：网页挂载后第一件事就是 clipboard_get，收到过就置位。
+    // 呼出时读它——窗口落地了却什么都看不见，最可能的一档就是渲染层压根没跑起来。
+    renderer_seen: AtomicBool,
     data_dir: PathBuf,
 }
 
@@ -159,6 +164,31 @@ fn save_settings(state: &AppState, settings: &Settings) {
 }
 
 // ---------- 诊断日志 ----------
+//
+// 两档，同一个文件 `%APPDATA%\ClipboardTool\diag.log`：
+//   diag_vital —— 开机关键路径的读数，**无条件写**（vital 前缀）。呼出链路的每一段各留一行，
+//     出事时能指认是哪一段没落地；代价是常驻写入，所以有轮转上限（diag.rs）。
+//   diag_log —— 逐事件诊断，门禁 `CLIPBOARD_TOOL_DIAG=1`。开着才好用，默认关。
+// 为什么 vital 不能也挂在门禁后面：2026-09-20 那轮就是这么设计的，而 2026-09-27 开机
+// 那次现场一个字都没留下——门禁靠用户级环境变量，按验证清单清掉之后门就是关的。
+// 决策见 ADR-0013。
+
+/// 追加一行；超过上限先把旧文件挪成 `diag.log.1`。落盘失败一律吞掉：诊断不许把主流程带下水。
+fn append_diag(line: &str) {
+    let dir = data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("diag.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if diag::should_rotate(meta.len()) {
+            let _ = std::fs::rename(&path, dir.join("diag.log.1"));
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let line = format!("[{:?}] {line}\n", std::time::SystemTime::now());
+        let _ = f.write_all(line.as_bytes());
+    }
+}
 
 pub(crate) fn diag_log(msg: &str) {
     // cfg(test) 那一档不是多余装饰：`cargo test` 跑的就是这个 bin，而本机环境变量里常驻着
@@ -167,15 +197,17 @@ pub(crate) fn diag_log(msg: &str) {
     if cfg!(test) || std::env::var("CLIPBOARD_TOOL_DIAG").is_err() {
         return;
     }
-    let dir = data_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) =
-        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("diag.log"))
-    {
-        use std::io::Write;
-        let line = format!("[{:?}] {}\n", std::time::SystemTime::now(), msg);
-        let _ = f.write_all(line.as_bytes());
+    append_diag(msg);
+}
+
+/// 开机关键路径的读数：无条件写。调用点应当是「这一段的成败决定整个会话能不能用」的那几处，
+/// 别拿它记逐事件流水（那是 diag_log 的活）。
+/// 每行都带 pid：探针专门要人查「同时活着两份」，而两份的读数是交错着写的，不带 pid 分不开。
+pub(crate) fn diag_vital(msg: &str) {
+    if cfg!(test) {
+        return; // 同 diag_log：测试跑的就是这个 bin，假事件不许混进真实现场
     }
+    append_diag(&format!("vital pid={} {msg}", std::process::id()));
 }
 
 fn poll_trace(msg: &str) {
@@ -245,10 +277,14 @@ fn persist(state: &AppState) {
     }
 }
 
-// 面板事件的唯一出口：窗口不存在时静默丢弃
+// 面板事件的唯一出口：窗口不存在时静默丢弃（那是刻意的——窗口都没了没什么可送的）
 fn emit_panel(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
     let Some(win) = app.get_webview_window(PANEL_LABEL) else { return };
-    let _ = win.emit(event, payload);
+    // 窗口在、事件却送不出去 = 渲染层收不到东西，面板看着是「落地了但什么都没有」。
+    // 这条以前是纯静默，而它恰好是 vital 里分辨不出的那一档，所以失败留痕（成功不记）。
+    if let Err(err) = win.emit(event, payload) {
+        diag_vital(&format!("emit-failed event={event} err={err}"));
+    }
 }
 
 fn broadcast(app: &AppHandle, state: &AppState) {
@@ -519,6 +555,11 @@ impl PastePort for Win32PastePort<'_> {
 
 #[tauri::command]
 fn clipboard_get(state: State<AppState>) -> Vec<RendererEntry> {
+    // 渲染层挂载后第一件事就是取全量历史：这一行是「网页真的跑起来了」的读数。
+    // 只在第一次记，之后每次呼出读这个原子判断渲染层有没有露过面。
+    if !state.renderer_seen.swap(true, Ordering::Relaxed) {
+        diag_vital("renderer-first-call");
+    }
     let store = state.store.lock().unwrap();
     store.entries().iter().filter_map(|e| to_renderer_entry(&state, e)).collect()
 }
@@ -622,6 +663,7 @@ async fn search_set_composing(_app: AppHandle, state: State<'_, AppState>, compo
 #[tauri::command]
 async fn window_hide(_app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     diag_log("window_hide command");
+    diag_vital("hide-req src=renderer");
     let _ = state.modes.hide().await;
     Ok(true)
 }
@@ -674,8 +716,32 @@ fn main() {
             // 单实例：第二次启动 → 呼出面板。必须最先注册。
             tauri_plugin_single_instance::Builder::new()
                 .callback(|app, _args, _cwd| {
-                    let state = app.state::<AppState>();
-                    state.modes.show();
+                    // 这个回调可能赶在 `setup` 的 `manage(AppState)` **之前**到：插件在 builder
+                    // 阶段就把收信窗口建好了，此时双开（开机那一刻两次拉起、或手快点了两下）
+                    // 的第二实例就能把消息投进来。原先这里直接 `app.state::<AppState>()`，
+                    // 结果是 `state() called before manage()` 的 panic 把整个进程带走——
+                    // 真机复现过，`panic.log` 里留着那一条。**启动期的回调不许假设状态已经挂上**：
+                    // 等它挂上再呼出，正常几十毫秒，最多等 5 秒。
+                    if let Some(state) = app.try_state::<AppState>() {
+                        diag_vital("summon-req src=instance");
+                        state.modes.show();
+                        return;
+                    }
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        for n in 1..=50 {
+                            std::thread::sleep(Duration::from_millis(100));
+                            if let Some(state) = app.try_state::<AppState>() {
+                                diag_vital(&format!(
+                                    "summon-req src=instance waited={}ms",
+                                    n * 100
+                                ));
+                                state.modes.show();
+                                return;
+                            }
+                        }
+                        diag_vital("summon-req src=instance dropped");
+                    });
                 })
                 .build(),
         )
@@ -685,12 +751,26 @@ fn main() {
             tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
                 let state = app.state::<AppState>();
                 match event.state() {
-                    ShortcutState::Pressed => { state.modes.on_hotkey_pressed(*shortcut); }
+                    ShortcutState::Pressed => {
+                        // 面板不可见时导航键没有注册，此刻能来的只可能是呼出键——所以这一行
+                        // 就是「呼出请求进了主线程」的读数（导航键不会把它刷满）。
+                        // 它与执行线程那侧的 summon-run 之间的间隔，就是排队/投递耗掉的时间。
+                        if !state.modes_visible.load(Ordering::Relaxed) {
+                            diag_vital("summon-req src=hotkey");
+                        }
+                        state.modes.on_hotkey_pressed(*shortcut);
+                    }
                     ShortcutState::Released => { state.modes.on_hotkey_released(*shortcut); }
                 }
             }).build(),
         )
         .setup(|app| {
+            // 第一行读数：进程起来了、走的哪条通道、是哪个 exe（pid 在 vital 行的统一前缀里）。
+            diag_vital(&format!(
+                "start channel={:?} exe={}",
+                startup::channel(),
+                startup::current_exe_path()
+            ));
             let data_dir = data_dir();
             let _ = std::fs::create_dir_all(data_dir.join("images"));
 
@@ -754,6 +834,7 @@ fn main() {
                 icon_cache: Mutex::new(icon_cache),
                 image_url_cache,
                 baseline: Mutex::new(PollBaseline::new()),
+                renderer_seen: AtomicBool::new(false),
                 data_dir,
             });
             let state = app.state::<AppState>();
@@ -767,6 +848,8 @@ fn main() {
             // ready-to-show 热身：先在 (0,0) 显示一次让 WebView 完成首帧渲染，120ms 后移到屏外，
             // 避免首次呼出时内容空白闪烁（与 main.js 的 ready-to-show 舞步一致）。
             // 这是面板唯一一次从不可见变可见，「别上任务栏」的样式改动挂在 PanelWindow::show 里。
+            // 停靠与读数都经模式执行线程发出（`park_after_warmup`）：这 120ms 里可能已经有人呼出过，
+            // 无脑停靠会把那次呼出顶到屏外。
             let warmup = panel(app.handle());
             if warmup.exists() {
                 warmup.set_position(0.0, 0.0);
@@ -774,8 +857,11 @@ fn main() {
                 let app2 = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(120));
-                    panel(&app2).park_offscreen();
+                    app2.state::<AppState>().modes.park_after_warmup();
                 });
+            } else {
+                // 面板窗口不存在 = 三路呼出都会静默地什么都不做，必须留下痕迹
+                diag_vital("panel-window missing-at-start");
             }
 
             Tray::new(app.handle()).create()?;
@@ -789,9 +875,28 @@ fn main() {
             app.manage(Mutex::new(watcher));
 
             // 呼出快捷键也归模式状态机的差量注册管理（捕获/恢复都由它推导）
+            let saved_shortcut = state.settings.lock().unwrap().shortcut.clone();
+            state.modes.set_toggle_shortcut(&saved_shortcut);
+
+            // 呼出键没注册上 = 这个会话里热键全哑，而开机那一刻可能撞上瞬时拒绝
+            // （键还被正在退场的程序占着、插件刚起来）。差量注册是幂等的：注册上了就一次
+            // 插件调用都不发，所以这里按间隔再问两遍，把「一次没成 → 整会话哑」这条路堵掉。
+            // 每次都**现读** settings 里的键，不用启动时那份快照：用户在这 5s / 20s 里
+            // 换过键的话，拿旧键去重试会把新键注册回来时顺手注销掉，而托盘与 settings
+            // 都还显示着新键——那种「设置说 A、系统里是 B」正是最难查的一类。
             {
-                let shortcut = state.settings.lock().unwrap().shortcut.clone();
-                state.modes.set_toggle_shortcut(&shortcut);
+                let app2 = app.handle().clone();
+                std::thread::spawn(move || {
+                    let state = app2.state::<AppState>();
+                    for (n, delay) in
+                        [Duration::from_secs(5), Duration::from_secs(20)].into_iter().enumerate()
+                    {
+                        std::thread::sleep(delay);
+                        let accel = { state.settings.lock().unwrap().shortcut.clone() };
+                        diag_vital(&format!("hotkey-retry n={} accel={accel}", n + 1));
+                        state.modes.set_toggle_shortcut(&accel);
+                    }
+                });
             }
 
             // 计划任务按持久化意图重建（dev / 未提权时的取舍由 startup 判定）
@@ -823,6 +928,7 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     // 面板窗口只隐藏不关闭，应用常驻托盘
                     api.prevent_close();
+                    diag_vital("hide-req src=close");
                     let state = app.state::<AppState>();
                     state.modes.hide();
                 }
@@ -864,6 +970,15 @@ fn main() {
             window_hide,
             window_set_ignore_mouse,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| match event {
+            // 「进程什么时候没的、是不是被要求退出的」以前一点痕迹都没有（2026-09-27 现场
+            // 就是应用不见了却查不出是被杀还是自己走的）。这两行把它变成可读的一件事。
+            tauri::RunEvent::ExitRequested { code, .. } => {
+                diag_vital(&format!("exit-requested code={code:?}"));
+            }
+            tauri::RunEvent::Exit => diag_vital("exit"),
+            _ => {}
+        });
 }

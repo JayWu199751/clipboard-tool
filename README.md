@@ -76,13 +76,23 @@ Windows 的 UIPI 会拦截非提权进程对高完整性（管理员）前台窗
 | `clipboard-history.json` | 历史条目（含置顶、备注、来源应用），schema 是持久化契约，改动须兼容旧档 |
 | `images/` | 图片条目的 PNG，文件名是条目 id；内容哈希只用于判定条目身份，不进文件名 |
 | `settings.json` | `autoStart` / `shortcut` / `theme`（`system`\|`light`\|`dark`，缺键与非法值回落 `system`），camelCase 键名不可改，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
-| `diag.log` / `panic.log` | 诊断日志 / release 崩溃落点，见下节 |
+| `diag.log` / `diag.log.1` | 诊断日志：`vital` 行无条件写，逐事件行要开关；超过 512 KB 轮转一代，见下节 |
+| `panic.log` | release 崩溃落点 |
 
 ## 诊断
 
+`diag.log` 里有两档，同写一个文件（决策与理由见 [ADR-0013](docs/adr/0013-vital-readings-on-boot-path.md)）：
+
+| 档 | 前缀 | 门禁 | 内容 |
+|---|---|---|---|
+| vital | `vital pid=<n> ` | **无条件写** | 呼出链路每一段的成败各一行：`start` / `renderer-first-call` / `hotkey_register` / `summon-req`（`src=hotkey\|tray-click\|tray-menu\|instance`；第二实例赶在启动期时带 `waited=<ms>`，始终没等到 `AppState` 就 `dropped`） / `summon-run`（含 `latency_ms=`、`renderer=`，无请求时刻时是 `n/a`） / `summon-landed`（含 `first=`/`final=`/`repair=`） / `summon-no-*` / `dispatch-failed\|recovered\|lost` / `*-missing-window` / `make-visible via ShowWindow\|failed` / `emit-failed` / `hide reason=` / `warmup` 与 `warmup-park` / `exit-requested` / `exit` |
+| verbose | — | `CLIPBOARD_TOOL_DIAG=1` | 逐事件流水（`show_panel`/`hide_panel`/`dispatch_hotkey`/`park-offscreen`/`click_ignored`/`tray-icon`/`apply_startup_intent`…） |
+
+前者是为「只在开机那一次出现」的问题准备的：现场只有一份，取不到就等于没有（2026-09-20 那轮把读数挂在环境变量上，结果 2026-09-27 那次开机一个字都没留下）。后者嘈杂，默认关。日志超过 512 KB 时旧文件挪成 `diag.log.1`，所以它不会无界增长。每行 vital 都带 `pid=`：探针要查「同时活着两份」，而两份的读数是交错写的，不按 pid 分组会把两条链读成自相矛盾的一条。
+
 | 变量 | 时机 | 作用 |
 |---|---|---|
-| `CLIPBOARD_TOOL_DIAG=1` | 运行期 | 把呼出 / 复制 / 粘贴各阶段追加写 `%APPDATA%\ClipboardTool\diag.log` |
+| `CLIPBOARD_TOOL_DIAG=1` | 运行期 | 打开 verbose 那一档 |
 | `CLIPBOARD_TOOL_POLL_TRACE=1` | 运行期 | 轮询各阶段追踪输出到 stderr |
 | `CLIPBOARD_TOOL_ELEVATED=0\|1` | 构建期 | 强制 asInvoker / 强制提权清单；不设时 release 提权、debug 不提权 |
 
@@ -94,13 +104,13 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
-npm run test:rust   # cargo test —— 93 例（另有 2 例真机探针 #[ignore]）
+npm run test:rust   # cargo test —— 102 例（另有 2 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwright install chromium）
 ```
 
-135 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 6 / tray 9 / clipboard 1 / webview_theme 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+140 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 10 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 135 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 140 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -109,13 +119,14 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 | 现象 | 先查什么 |
 |---|---|
 | 管理员窗口里热键不响应、粘贴不进去 | 跑的是不是提权产物（`npm run dev` 必然不提权） |
-| 普通窗口里呼出键也没反应 | 该键被其它程序占用；用托盘「更换快捷键」重设。注册成没成看 `diag.log` 的 `hotkey_register` 那行（release 是 GUI 子系统，stderr 进黑洞，所以这条同时写进日志） |
+| 普通窗口里呼出键也没反应 | `diag.log` 的 `vital hotkey_register` 那行：不是 `Registered` 就是没注册上（该键被别的程序占了，用托盘「更换快捷键」重设）。启动后 5 秒 / 20 秒各有一次自动重试（`vital hotkey-retry n= accel=`），瞬时占用会自愈；重试每次都现读存档里的键，所以它不会把用户刚换的键顶回去 |
+| 三条呼出路径（热键 / 托盘左键 / 托盘菜单）都呼不出界面 | 先按 `pid=` 分组，再逐段看（逐段判据的权威出处是 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 的脚本头，别背）：有 `summon-req` 没有 `summon-run` = 执行线程没接手（后面应有 `executor-dead` / `executor-exit`）；`summon-no-*` = 已经到主线程、只是缺前提（`missing-window` / `no-cursor` / `no-monitor` / `no-primary`），它**不**等于主线程没跑；有 `summon-run` 没有 `summon-landed` = 那一次被判给更新的几何效果（丢弃只在 verbose 档留痕），也不是主线程没跑；`summon-landed final=Hidden\|Moved\|Offscreen` = 窗口没落地（`repair=` 说明补过哪一步，`final` 仍是失败才有问题）；`summon-run renderer=never` = 网页压根没起来，窗口落地也是白的；`emit-failed` = 窗口落地了但事件送不出去，看着就是「出来了却什么都没有」。五种处置不同，别混着猜 |
 | 内容进了剪贴板但没粘贴进输入框 | 看 `diag.log` 的失败阶段：`restore` 是没找回原窗口，`paste` 是找回来了但注入失败；此时面板保持显示是刻意的（[ADR-0005](docs/adr/0005-focus-paste-order-contract.md)） |
 | 粘贴后列表闪一下、同内容记成两条 | 轮询基线没同步，即 `paste_chain` 的落位一步没做到 |
 | 开机启动开关重开就丢 | `settings.json` 键名契约，见 [ADR-0007](docs/adr/0007-storage-key-contract.md) |
 | 任务栏（不是托盘）挂着一个图标，点了没反应 | 那是面板自己的按钮：窗口以「停靠到屏外」代替隐藏、始终可见，开机时 explorer 建任务栏会把它登记一遍。样式位在 `PanelWindow::show` 的 `win.show()` 之后改（`skipTaskbar` 配置会被 tao 的 `ON_TASKBAR` 抵消），读数见下一行 |
-| 开机启动那一次热键、托盘菜单、托盘图标三路都呼不出界面（退出重开就好） | 2026-09-20 两处已按「必落地 + 留读数」改：`show_at_cursor` 拿不到显示器不再静默 return（改按「光标所在 → 窗口所在 → 主屏」三级兜底，结果写 `diag.log`），呼出时也补一次「确认可见」（原先整条链只赌 ready-to-show 热身那一次 `show()`）。下次开机再撞，跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）按脚本头那六条分流：`show-at-cursor: rect=` 没动 = 执行线程没收到任务；写了拿不到显示器 / 光标 = 兜底也没落地；`rect` 进了屏内却看不见东西 = WebView2 没画出东西（对 `webview2 =` 那行）；`hotkey_register` 不是 `Registered` = 键被占；`instances` 大于 1 = 同时活着两份；`respond=False` = 主线程卡住。**别跳过这一步去猜**——三种成因处置完全不同 |
-| 点托盘图标没反应，但右键菜单正常 | 外壳对一次左键点击发来 `Click(Down)` + `Click(Up)` 两条事件：两条都投呼出就是同一次点击开两次面板。更隐蔽的是全局鼠标钩子那条链是异步的，同一次点击的「按下」可能**晚于**呼出到达执行线程，于是面板刚显形就被判成「点了面板外」收起——机器忙（开机那一刻）就中，空闲时不中。现在只认左键抬起，且早于最近一次呼出的点击一律不收（`panel_modes::hides_on_click`）；`diag.log` 里那对相隔几十微秒的 `show_panel` 与紧随的 `hide_panel` 就是这个竞态 |
+| 应用不见了 / 不知道它什么时候没的 | `vital exit-requested` / `vital exit` 是它自己走的（带退出码）；两行都没有 = 被外部结束的（任务管理器 / 崩溃），崩溃另有 `panic.log`。顺带 `vital start` 记着每次启动的通道与 exe 路径（pid 在 vital 行的统一前缀里） |
+| 点托盘图标没反应，但右键菜单正常 | 外壳对一次左键点击发来 `Click(Down)` + `Click(Up)` 两条事件：两条都投呼出就是同一次点击开两次面板。更隐蔽的是全局鼠标钩子那条链是异步的，同一次点击的「按下」可能**晚于**呼出到达执行线程，于是面板刚显形就被判成「点了面板外」收起——机器忙（开机那一刻）就中，空闲时不中。现在只认左键抬起，且早于最近一次呼出的点击一律不收（`panel_modes::hides_on_click`）；vital 里 `summon-landed` 紧跟 `hide reason=outside` 就是这个竞态 |
 | 深色任务栏上图标是深色的（看不清） | 托盘图标看的是**任务栏主题**（`SystemUsesLightTheme`，Windows 模式），不是应用模式（`AppsUseLightTheme`）——「个性化 → 颜色 = 自定义」下两者可以相反。探针的 `theme =` 那行同时打两个值，再对 `diag.log` 的 `tray-icon` 行看选了哪一套。运行中翻系统主题靠 `WM_SETTINGCHANGE` 广播刷新，广播收不到时悬停一次图标就会重核（`pointer_entered`） |
 | 渲染层收不到任何事件但命令正常 | `src-tauri/capabilities/default.json` 缺 `core:default`：v2 的 ACL 默认拒绝 `plugin:event\|listen`，脚手架模板自带此文件，手工搭建容易漏 |
 | 托盘图标发糊 | 非整数缩放下必须按主屏 `scaleFactor` 取恰好物理尺寸的图，见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md) |
@@ -136,7 +147,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 ## 待真机验证
 
 - 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**同日另一条独立问题（开机启动后两路呼不出界面）已在下一轮动手改，见下一条与「故障排查」那三行。**
-- 开机那一次不再「三路呼不出」（2026-09-20 改动，**必须重启一次才有结论**）：登录后先别手动重开应用，直接按 `Ctrl+Shift+V` → 点托盘图标 → 托盘菜单「显示剪贴板面板」，三条都要能把面板叫出来。任一条不中就跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）并把输出贴回来——本轮把「静默 return」都换成了日志，所以现在的 `diag.log` 能直接指认是哪一段没落地（分流口径写在脚本头）。顺带看 `diag.log` 里有没有 `hotkey_register accel=... -> Registered`：没有就说明呼出键被别的开机程序占了，那是另一条处置。
+- 开机那一次不再「三路呼不出」（2026-09-20 首改、2026-09-27 加回读与无条件读数，**必须重启一次才有结论**）：登录后先别手动重开应用，直接按 `Ctrl+Shift+V` → 点托盘图标 → 托盘菜单「显示剪贴板面板」，三条都要能把面板叫出来。这次不管中不中，`diag.log` 都会有读数（vital 行无条件写、带 `pid=`，不需要设任何环境变量）：任一条不中就跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）并把输出贴回来，脚本头写着逐段分流（先按 `pid=` 分组）——`summon-req` 有而 `summon-run` 没有 = 执行线程没接手；`summon-no-*` = 到主线程了但缺前提（不等于主线程没跑）；`summon-run` 有而 `summon-landed` 没有 = 那一次被判给更新的几何效果（也不是主线程没跑）；`summon-landed final=` 不是 `Landed` = 窗口没落地（那行末尾有 `repair=`）；`summon-run renderer=never` = 网页没起来；`emit-failed` = 落地了但事件送不出去。呼出键注册成没成看 `vital hotkey_register ... Registered`；进程怎么没的看 `vital exit-requested` / `vital exit`；登录后 120ms 内的那次热身停靠若撞上呼出，会留 `vital warmup-park: summon already requested, park skipped`（有它说明让位逻辑生效，面板不该在屏外）。**热键不灵时先别急着下结论**：再启动一次应用（第二实例）走的是同一条 `show_on`——若这样能呼出、日志里出现 `summon-req src=instance`，说明卡的是热键注册那一段，而不是呼出链路（反过来也成立：`src=instance` 也不出来，才是链路本身的问题）。
 - 托盘图标跟的是任务栏而不是面板皮肤（2026-09-20 改判）：把「个性化 → 颜色 → 选择默认模式」设成**自定义**、让「Windows 模式」与「应用模式」相反（例如 Windows 暗、应用亮），托盘图标该是**白色**那套（跟任务栏），面板皮肤该是**亮色**那套（跟主题偏好＝跟随系统时看应用模式）。再在运行中翻一次系统主题：图标应跟着换；若不动，把鼠标移到图标上悬停一下（那次 `Enter` 是广播收不到时的兜底），看 `diag.log` 有没有新的 `tray-icon` 行。
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
