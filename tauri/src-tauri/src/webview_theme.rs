@@ -1,6 +1,6 @@
 // 主题偏好的落地出口：把三态写进 WebView2 的 preferred color scheme，
 // 于是网页里的 `prefers-color-scheme` 跟着变，渲染层现有的内联脚本与 matchMedia
-// 监听照常工作，它自己不持有主题状态（决策见 ADR-0012）。
+// 监听照常工作，它自己不参与生效主题判定（决策见 ADR-0012）。
 //
 // 为什么不用 tauri 的 `set_theme`：在 Windows 上它只落到 tao 的窗口属性
 // （tauri-runtime-wry 的 `WindowMessage::SetTheme` → tao `window.set_theme` →

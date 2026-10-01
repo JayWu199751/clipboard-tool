@@ -34,7 +34,9 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 
 常驻期间应用的图标**只在托盘**，任务栏不该有它的面板按钮。这件事没法只靠配置：`tauri.conf.json` 的 `skipTaskbar: true` 会被 tao 自己抵消——它对「无父窗口」的窗口一律置 `ON_TASKBAR`（→ `WS_EX_APPWINDOW`，强制上任务栏），并在 `set_visible` 里按内部 flags 整体重写 `GWL_EXSTYLE`（真机实测面板窗口 `ex=0x00040000|0x100|0x10|0x8`）。所以样式位由 `PanelWindow::show()` 在 `win.show()` **之后**改回来，并补一次框架的 `set_skip_taskbar`。开机启动最容易撞见：那一刻 explorer 还没建任务栏，它建好后会把当时已可见的窗口逐个登记一遍，而面板的「关闭」只是[停靠](CONTEXT.md)到屏外（窗口始终可见），于是任务栏上多一个点了没反应的按钮。机制与为什么不补 `DeleteTab` 就完事见 [pitfalls 第 3 节](docs/desktop-tool-pitfalls.md)。
 
-主题偏好存 `settings.json`，切换即时生效（面板当时必然是隐藏的：点开托盘菜单那一下就先把它关掉了）。「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（图标该配任务栏，不该配面板；判的是[任务栏主题](CONTEXT.md) `SystemUsesLightTheme`，直读注册表，不经窗口主题缓存）。这条链路的实现方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)：偏好经 WebView2 的 preferred color scheme 改网页自己的 `prefers-color-scheme`，渲染层不持有主题状态，所以面板里没有开关、也没有一处代码在读偏好。
+搜索井右侧、空格提示左侧有主题按钮，点击按**亮色 → 暗色 → 跟随系统 → 亮色**循环；太阳 / 月亮 / 显示器图标表示当前主题偏好，悬停提示当前与下一态。搜索态下按钮仍可用，切换保留搜索文字与输入焦点；浏览态点击按钮不会进入搜索。按钮与托盘「主题」子菜单同步，偏好继续存入 `settings.json`，重启后保留。
+
+「跟随系统」是默认值，也是唯一会被 Windows 亮暗设置带着走的一态；选了亮色或暗色，系统再翻也不影响面板，但**托盘图标仍跟任务栏**（判的是[任务栏主题](CONTEXT.md) `SystemUsesLightTheme`）。生效主题仍由网页的 `prefers-color-scheme` 决定，按钮读到的偏好仅用于展示；送达方式与理由见 [ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)。
 
 ## 安装与构建
 
@@ -103,14 +105,14 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 ```bash
 cd tauri
 npm run test        # = test:view + test:rust
-npm run test:view   # node scripts/panel-view-unit.mjs —— 38 例
+npm run test:view   # node scripts/panel-view-unit.mjs —— 39 例
 npm run test:rust   # cargo test —— 102 例（另有 2 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwright install chromium）
 ```
 
-140 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 10 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 38（panelView 31：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+141 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 10 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 39（panelView 32：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3 / 主题按钮 1；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，覆盖高频上下导航时选中框与列表滚动保持同步、滚到列表首尾时选中项不被裁掉、窗口描边四边等宽，以及备注内联编辑的三条契约（按 B 进编辑态卡片几何不变、焦点环只有一圈、环不被 meta 行裁断）；它不并入纯模块测试的 140 例统计。主题链路没有浏览器用例：开关在原生托盘菜单里，`window.clipboardAPI` 那套替身碰不到它，判定侧另有 Rust 单测，剩下的「点了真的换色」只能真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，12 例覆盖导航与滚动、窗口描边、备注编辑，以及主题按钮的三态循环、启动与外部同步、搜索焦点保留和失败重试；它不并入纯模块测试的 141 例统计。主题测试验证按钮与 IPC 接线，真实 WebView2 换色与存档重启仍需真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -152,6 +154,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 - 提权构建后的裸键热键对管理员前台窗口是否生效（若失效，回退方案是助手键盘钩子）。
 - 面板内长按 `↑` / `↓` 连续移动选中框，松开后停止；浏览态与搜索态的首尾边界都应停住。
 - 真机亮 / 暗主题下滚到列表首尾，选中卡片完整可见、顶部留在 scroll-padding 留白内（几何由 `test:browser` 守住，实际合成与 DPI 仍需眼看）。
+- 面板主题按钮（2026-10-01）：按「操作」节切换三态，确认面板保持可见时即时换肤、搜索输入继续接收文字；与托盘互相切换后图标一致，重启后保留偏好。浏览器替身不能证明真实 WebView2 换色、全局热键与焦点快照均正常，需人工验证。
 - HUD 迁移（2026-09-08）后：亮 / 暗两主题整体观感对照 `clipboard-app/` 源 UI（token 面为不透明实底，旧毛玻璃与「降低透明度」分支已退役）；OS 切亮暗应即时换肤、无刷新、无 FOUC（默认态就是跟随系统）；列表自绘滚动条细条的观感与「滚动后约 1 秒自动隐藏」的节奏一并确认（卡片左右缘到边框对称由浏览器探针守住，真机滚动条占位差异正是这次修复的动机）。
 - 主题三态（2026-09-11，[ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)）：托盘右键 → 「主题」子菜单，选「亮色」后面板应立刻变亮（把 Windows 本身设成暗色最能看出区别）；子菜单标题里的「当前: X」跟着变，三项中恰好一项打勾。选成手动亮之后在 Windows 设置里翻系统主题，**面板不该动、托盘图标该照旧跟任务栏**；再选回「跟随系统」，面板应立刻跟上系统色。重启应用确认偏好仍在（`settings.json` 里 `"theme":"light"`）。若切换后当下不变色、要重启才变，说明运行时那次 `put_PreferredColorScheme` 没触发页面重算（呼出时的重刷就是给这种情况兜底的）；连呼出重刷也不灵，就回 ADR-0012 重议送达方式。
 - 应用边框描边（2026-09-08 返修 4–9）：亮 / 暗两主题下四缘中灰实线（#757575，2px，返修 9 由 1px 加粗换圆弧 AA 翼）应清晰可见、等宽，四角弧段与直边观感等宽一并确认；`.desktop` 一律留 1 CSS px 内边距（真机 175% 实证设备像素级「恰好」会被取整方向吃掉右缘描边，档位媒体查询阶梯已废）；页脚六组提示末组与右缘应留出可见空隙（真机字体比 headless 宽，组距已收进 8px）。100% / 125% / 150% / 175% / 200% 各档位一并确认。

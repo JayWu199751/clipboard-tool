@@ -9,7 +9,7 @@
 // 以及 ADR-0008 的一条判据：能脱离 DOM 与 React 断言的，都是判定，都住在这里。
 // 渲染层只负责读 DOM、调判定、把结果画出来。
 
-import type { ClipboardEntry } from './types';
+import type { ClipboardEntry, ThemePreference } from './types';
 
 export interface HighlightSpan {
   text: string;
@@ -159,6 +159,16 @@ export interface ScrollbarThumb {
   visible: boolean;
   top: number;
   height: number;
+}
+
+// 按钮只展示主进程的主题偏好；生效主题仍由 prefers-color-scheme 决定。
+export function themeControl(preference: ThemePreference) {
+  const controls = {
+    light: { label: '亮色', icon: 'i-sun', next: 'dark' },
+    dark: { label: '暗色', icon: 'i-moon', next: 'system' },
+    system: { label: '跟随系统', icon: 'i-monitor', next: 'light' },
+  } as const;
+  return controls[preference];
 }
 
 export const MIN_THUMB_HEIGHT = 28;

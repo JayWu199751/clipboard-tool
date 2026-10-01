@@ -13,6 +13,7 @@
 | 线程 | 能做什么 | 绝不能做 |
 |---|---|---|
 | 主线程（tauri 事件循环） | 窗口几何/样式、托盘、插件投递的落地端；读 `modes_visible` / `modes_input_active` 两个原子快照 | 阻塞等待模式状态 |
+| 同步主题命令（主线程） | 读取主题偏好，或与托盘共用 `set_theme`：落盘 → WebView2 就地应用 → 重建菜单 → 广播偏好；不等待模式回执 | 调热键 register/unregister、阻塞等待模式状态 |
 | `modes-executor` | 唯一持有 `PanelModes`、效果宿主 `Host` 与热键双向表 `Hotkeys`；唯一允许调用热键 register/unregister | 把 `&mut PanelModes` 或 `&mut Hotkeys` 交出去（前者类型私有、后者只经 `Modes` 具名操作间接使用） |
 | 命令线程（tokio worker，`async #[tauri::command]`） | 向 `Modes` 投递具名操作并 `.await` 回执；跑慢的 Win32 粘贴注入 | 持有 store 锁的同时 await 模式回执 |
 | 回调线程（热键 / 鼠标钩子 / 托盘 / 单实例 / 窗口事件） | 向 `Modes` 投递具名操作，**不等待**（忽略返回值不影响投递） | 阻塞：回调必须立即返回 |
@@ -65,17 +66,18 @@
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
-| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb`；31 例 plain node |
+| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何、主题按钮的三态循环与展示。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb` `themeControl`；32 例 plain node |
 | `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 5 例 + 对表 1 例 |
 | `useKeyboard.ts` | 渲染层唯一按键入口：`panel:key` 动作名 → 注册表处理函数的单点分发（ref 转发，不重订阅）。面板导航键由 Rust 全局拦截（浏览态窗口不持焦点），渲染层没有 keydown 监听——快捷键捕获覆盖层是唯一的例外，那是录入键值的编辑器行为 | — |
 | `clipStore.ts` | ClipStore 契约适配层：`RendererEntry` → `ClipItem` 投影 + `createClipStore`（query / total / getNote 只读视图）。组件不碰 invoke；copy / remove 等效果留在 App 接线（ADR-0008） | — |
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
-| `App.tsx` | 视图状态机与效果接线：读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
-| `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片（内容在上、meta 行在下，2026-09-11 改版；类型标识已删）+ meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，源 UI 搬运；i-text/i-image 随类型标识退役，i-copy 随卡片右上角的「复制」胶囊退役） | — |
+| `App.tsx` | 视图状态机与效果接线：主题按钮偏好的读取 / 订阅 / 切换（生效主题仍只认媒体查询）；读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
+| `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片（内容在上、meta 行在下，2026-09-11 改版；类型标识已删）+ meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，主题按钮补太阳 / 月亮 / 显示器同族图标，其余源 UI 搬运；i-text/i-image 随类型标识退役，i-copy 随卡片右上角的「复制」胶囊退役） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
 | `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI；例外是卡片内部次序——meta 行由内容上方移到下方，2026-09-11）+ 透明窗口壳层（`.desktop` 圆角裁切与 1 CSS px 一律留边、`.app-window` 2px 中灰实线描边 `--window-ring`——壳层机制原样保留，描边强度与留边契约 2026-09-08 两次返修）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 36px；内部圆角按面点名不共用——复制项 `--radius-card` 12px、搜索井 `--radius-pill`（36px 高钳成 18px 的胶囊）、空态图标与覆盖层卡片仍 `--radius-md` 10px | — |
-| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge 与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
+| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge（含主题偏好与事件）与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
+| `tests/theme-toggle.spec.js` | 回归主题按钮三态循环不进入搜索、已存偏好与外部同步、生效主题仍认媒体查询、搜索焦点保留与失败重试（真实 WebView2 与重启存档仍需人工验证） | 3 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 | `tests/window-ring-width.spec.js` | 截图解码后纯像素扫描量窗口描边四边的表观宽度（预乘红积分，`getBoundingClientRect` 给不出来的信息） | 3 例 Playwright |
 | `tests/note-input-ring.spec.js` | 回归备注内联编辑：按 B 前后卡片几何逐条相等（输入框与 meta 行等高，2026-09-11 返修「按 B 复制项大小会改变」）、焦点环只有一圈（全局 `:focus-visible` outline 让位）、环完整不被 meta 行裁断且不出卡片边框（meta 行 2026-09-11 搬到内容下方，裁切契约不变） | 3 例 Playwright |
@@ -92,17 +94,19 @@
 | `note_set` / `note_end_edit` | 写备注 / 退出备注编辑态 | `bool` |
 | `shortcut_try` / `shortcut_cancel` | 试设呼出键 / 取消捕获 | `{ ok, formatted }` / `bool` |
 | `search_activate` / `search_set_composing` | 进入搜索态 / 同步 IME 组合状态 | `bool` |
+| `theme_get` / `theme_set` | 读取 / 设置主题偏好；设置参数 `{ theme }` 只认 `light` / `dark` / `system`，与托盘共用落地入口 | 三态字符串 / — |
 | `window_hide` / `window_set_ignore_mouse` | 隐藏面板 / 切换鼠标穿透 | `bool` |
 
 > 「清空历史」与「进入备注编辑态」**没有命令**，各自只有一个入口：前者由托盘菜单回调直调 `store.clear()` + `commit()`，后者由面板 `B` 键在 `panel_modes.rs` 状态机内消化、转投 `note-edit-enter` 事件。两条都曾有过同名命令（`clipboard_clear` / `note_begin_edit`），因零调用方在 2026-09-10 的冗余清理中删除——别照旧文档再把命令加回来。
 >
-> 「主题」同样**没有命令也没有事件**：托盘子菜单直调 `webview_theme::apply`，改的是网页自己的 `prefers-color-scheme`，渲染层跟着媒体查询换肤即可、不需要知道有偏好这回事。给它加 `theme_get` / `theme` 事件是把同一事实记到第二处（决策与否决项见 [ADR-0012](adr/0012-theme-preference-in-main-process.md)）。
+> 主题按钮展示主进程偏好，`theme_get` 取初值、`theme:changed` 同步托盘变更；渲染层先等监听就绪再读取，用递增读序号丢弃迟到的旧读取。生效主题仍只认媒体查询，见 [ADR-0012 的面板入口补充](adr/0012-theme-preference-in-main-process.md)。
 
 事件（Rust → 渲染层，全部经 `emit_panel` 这一个出口，窗口不存在时静默丢弃）：
 
 | 事件 | 载荷 | 作用 |
 |---|---|---|
 | `clipboard:updated` | `RendererEntry[]` | 历史变更广播 |
+| `theme:changed` | `light` / `dark` / `system` | 两个入口共用 `set_theme`，WebView2 就地应用后广播；刷新按钮偏好并按媒体查询重刷生效主题 |
 | `panel:key` | `{ action, noteEntryId }` | 面板显示期间被全局拦截的按键动作 |
 | `panel:shown` | — | 呼出完成，渲染层重置搜索与选中态 |
 | `panel:focus-error` | `{ stage, reason, message }` | 焦点恢复或注入失败；`message` 与 `CopyResult.message` 同源 |

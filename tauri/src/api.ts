@@ -2,7 +2,7 @@
 // invoke 参数名用 camelCase，与 Rust 命令的 serde rename 对齐。
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ClipboardEntry } from './types';
+import type { ClipboardEntry, ThemePreference } from './types';
 
 type AnyCb = (...args: any[]) => void;
 
@@ -10,30 +10,31 @@ type AnyCb = (...args: any[]) => void;
 const unlisteners = new Map<string, UnlistenFn[]>();
 const channelGen = new Map<string, number>();
 
-function onEvent(channel: string, cb: AnyCb, map?: (payload: any) => any[]): void {
+async function onEvent(channel: string, cb: AnyCb, map?: (payload: any) => any[]): Promise<void> {
   const gen = (channelGen.get(channel) ?? 0) + 1;
   channelGen.set(channel, gen);
-  void (async () => {
-    for (const un of unlisteners.get(channel) ?? []) un();
-    unlisteners.set(channel, []);
-    const un = await listen<any>(channel, (event) => {
-      cb(...(map ? map(event.payload) : [event.payload]));
-    });
-    // 若期间已有更新的注册，此次监听作废
-    if (channelGen.get(channel) !== gen) {
-      un();
-      return;
-    }
-    if (!unlisteners.has(channel)) {
-      un();
-      return;
-    }
-    unlisteners.get(channel)!.push(un);
-  })();
+  for (const un of unlisteners.get(channel) ?? []) un();
+  unlisteners.set(channel, []);
+  const un = await listen<any>(channel, (event) => {
+    cb(...(map ? map(event.payload) : [event.payload]));
+  });
+  // 若期间已有更新的注册，此次监听作废
+  if (channelGen.get(channel) !== gen) {
+    un();
+    return;
+  }
+  if (!unlisteners.has(channel)) {
+    un();
+    return;
+  }
+  unlisteners.get(channel)!.push(un);
 }
 
 window.clipboardAPI = {
   getHistory: () => invoke<ClipboardEntry[]>('clipboard_get'),
+  getTheme: () => invoke<ThemePreference>('theme_get'),
+  setTheme: (theme) => invoke<void>('theme_set', { theme }),
+  onThemeChanged: (cb) => onEvent('theme:changed', cb),
   onUpdated: (cb) => onEvent('clipboard:updated', cb),
   // 面板显示期间由主进程全局拦截的按键动作：up / down / enter / escape / delete / pin /
   // search-enter / search-exit / note-edit-enter / note-edit-exit

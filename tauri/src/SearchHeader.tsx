@@ -5,17 +5,26 @@
 import type { RefObject } from 'react';
 import { Icon } from './icons';
 import { NAV_KEYS, chipLabel } from './keyboard';
+import { themeControl } from './panelView';
+import type { ThemePreference } from './types';
 
 interface SearchHeaderProps {
   searchActive: boolean;
   query: string;
   inputRef: RefObject<HTMLInputElement | null>;
+  themePreference: ThemePreference | null;
+  themePending: boolean;
+  onThemeToggle(): void;
   onQueryChange(value: string): void;
   onActivate(): void;
   onComposition(active: boolean): void;
 }
 
-export function SearchHeader({ searchActive, query, inputRef, onQueryChange, onActivate, onComposition }: SearchHeaderProps) {
+export function SearchHeader({ searchActive, query, inputRef, themePreference, themePending, onThemeToggle, onQueryChange, onActivate, onComposition }: SearchHeaderProps) {
+  const control = themePreference ? themeControl(themePreference) : null;
+  const themeHint = control
+    ? `主题：${control.label}，点击切换为${themeControl(control.next).label}`
+    : '正在读取主题偏好';
   return (
     <header className="hud-search">
       <div className="hud-search__well" onClick={() => { if (!searchActive) onActivate(); }}>
@@ -46,6 +55,18 @@ export function SearchHeader({ searchActive, query, inputRef, onQueryChange, onA
             <Icon id="i-x" size={12} />
           </button>
         )}
+        <button
+          id="theme-toggle"
+          type="button"
+          className="hud-search__theme"
+          title={themeHint}
+          aria-label={themeHint}
+          disabled={!control || themePending}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); onThemeToggle(); }}
+        >
+          <Icon id={control?.icon ?? 'i-monitor'} size={15} />
+        </button>
         {!searchActive && <kbd className="kbd hud-search__kbd" aria-hidden="true">{chipLabel(NAV_KEYS.search)}</kbd>}
       </div>
     </header>

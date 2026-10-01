@@ -165,6 +165,14 @@ p { font-weight: inherit; font-size: inherit; }
 }
 .hud-search__clear:hover { background: var(--bg-active); color: var(--text-primary); }
 .hud-search__kbd { flex: none; }
+.hud-search__theme {
+  display: grid; place-items: center; flex: none;
+  width: calc(var(--space-3) * 2); height: calc(var(--space-3) * 2);
+  color: var(--text-secondary); border-radius: var(--radius-pill);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.hud-search__theme:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary); }
+.hud-search__theme:disabled { color: var(--text-disabled); cursor: default; }
 
 /* ------------------------------------------------------------
    3. Card list（源 §4）

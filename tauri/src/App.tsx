@@ -10,8 +10,8 @@
 //   - 置顶（Z）是原应用既有键，ClipFlow 无此概念 → 保留行为，meta 行加图标态。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClipboardEntry, PanelKeyAction } from './types';
-import { clampIndex, entryAt, formatTime, moveIndex, scrollbarThumb, shouldIgnoreMouse, accelKeyFromCode, MIN_THUMB_HEIGHT, type ScrollbarThumb } from './panelView';
+import type { ClipboardEntry, PanelKeyAction, ThemePreference } from './types';
+import { clampIndex, entryAt, formatTime, moveIndex, scrollbarThumb, shouldIgnoreMouse, accelKeyFromCode, themeControl, MIN_THUMB_HEIGHT, type ScrollbarThumb } from './panelView';
 import { createClipStore, type ClipItem } from './clipStore';
 import { useKeyboard } from './useKeyboard';
 import { NAV_KEYS, chipLabel, footerChips } from './keyboard';
@@ -26,7 +26,7 @@ const COPY_FLASH_MS = 520;
 const SEARCH_DEBOUNCE_MS = 120;
 const darkModeMedia = window.matchMedia('(prefers-color-scheme: dark)');
 
-// 生效皮肤只由媒体查询决定：主进程改的是网页的 prefers-color-scheme（托盘「主题」子菜单，
+// 生效皮肤只由媒体查询决定：主进程改的是网页的 prefers-color-scheme（主题按钮 / 托盘子菜单，
 // 见 ADR-0012），渲染层自己不存偏好。定色这一处只此一份，呼出时的保险也复用它。
 function applyTheme() {
   document.documentElement.dataset.theme = darkModeMedia.matches ? 'dark' : 'light';
@@ -50,6 +50,10 @@ function App() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [searchActive, setSearchActive] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [themePreference, setThemePreference] = useState<ThemePreference | null>(null);
+  const [themePending, setThemePending] = useState(false);
+  const themePendingRef = useRef(false);
+  const themeReadSeqRef = useRef(0);
 
   const [noteEdit, setNoteEdit] = useState<{ id: string; draft: string } | null>(null);
   const noteEditRef = useRef(noteEdit);
@@ -98,6 +102,42 @@ function App() {
     toastActionsRef.current.delete(id);
     dismissToast(id);
   }, [dismissToast]);
+
+  // 偏好只作按钮展示；事件比早先发出的读取更新，迟到的读取不能盖掉它。
+  const refreshThemePreference = useCallback(async () => {
+    const seq = ++themeReadSeqRef.current;
+    const theme = await window.clipboardAPI.getTheme();
+    if (seq === themeReadSeqRef.current) setThemePreference(theme);
+  }, []);
+  const toggleTheme = useCallback(async () => {
+    if (!themePreference || themePendingRef.current) return;
+    themePendingRef.current = true;
+    setThemePending(true);
+    try {
+      await window.clipboardAPI.setTheme(themeControl(themePreference).next);
+      applyTheme();
+      await refreshThemePreference();
+    } catch {
+      pushToast('切换主题失败，请重试', { kind: 'error' });
+    } finally {
+      themePendingRef.current = false;
+      setThemePending(false);
+    }
+  }, [themePreference, refreshThemePreference, pushToast]);
+
+  useEffect(() => {
+    let active = true;
+    // 先等监听就绪再取初值，避免读取与托盘切换之间漏掉变更。
+    void window.clipboardAPI.onThemeChanged((theme) => {
+      if (!active) return;
+      ++themeReadSeqRef.current;
+      setThemePreference(theme);
+      applyTheme();
+    }).then(() => { if (active) return refreshThemePreference(); }).catch(() => {
+      if (active) pushToast('读取主题偏好失败，请重新呼出面板', { kind: 'error' });
+    });
+    return () => { active = false; ++themeReadSeqRef.current; };
+  }, [refreshThemePreference, pushToast]);
 
   // —— 复制（原应用粘贴链契约 { ok, message }） ——
   const copyItem = useCallback((item: ClipItem) => {
@@ -251,6 +291,7 @@ function App() {
       // 保险：主进程改网页配色走的是 WebView2 的 SetPreferredColorScheme，万一那一下没触发
       // change 事件，呼出时按媒体查询重刷一次（面板显示前是离屏的，这里不闪给用户看）
       applyTheme();
+      void refreshThemePreference().catch(() => pushToast('读取主题偏好失败', { kind: 'error' }));
     });
     window.clipboardAPI.onShortcutCaptureStart((info) => setShortcutCapture({ current: info.current, status: null }));
     window.clipboardAPI.onShortcutCaptureEnd(() => setShortcutCapture(null));
@@ -258,7 +299,7 @@ function App() {
       for (const timer of deleteTimersRef.current.values()) window.clearTimeout(timer);
       deleteTimersRef.current.clear();
     };
-  }, []);
+  }, [refreshThemePreference, pushToast]);
 
   // —— 搜索防抖（源 app.js 120ms） ——
   useEffect(() => {
@@ -267,8 +308,8 @@ function App() {
   }, [query]);
 
   // —— 主题：跟着网页的 prefers-color-scheme 走（head 内联脚本已防 FOUC，这里做运行期同步）。
-  // 这个媒体查询默认就是系统色，但也可被主进程的托盘「主题」子菜单覆盖成手动亮/暗 ——
-  // 覆盖发生在 WebView2 的 profile 上，渲染层不需要知道有偏好这回事（ADR-0012）。
+  // 这个媒体查询默认就是系统色，但也可被主进程覆盖成手动亮/暗 ——
+  // 覆盖发生在 WebView2 的 profile 上，按钮展示的偏好不参与定色（ADR-0012）。
   useEffect(() => {
     const sync = () => applyTheme();
     sync();
@@ -389,6 +430,9 @@ function App() {
           searchActive={searchActive}
           query={query}
           inputRef={searchInputRef}
+          themePreference={themePreference}
+          themePending={themePending}
+          onThemeToggle={() => void toggleTheme()}
           onQueryChange={setQuery}
           onActivate={() => void window.clipboardAPI.activateSearch()}
           onComposition={(active) => void window.clipboardAPI.setSearchComposing(active)}

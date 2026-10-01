@@ -99,7 +99,7 @@ _Avoid_: 快捷键说明（丢掉「由键位表生成」这层来源约束）
 ### 主题
 
 **主题偏好（theme preference）**：
-用户在托盘「主题」子菜单里做的三态选择：亮色 / 暗色 / 跟随系统，默认跟随系统；存 `settings.json` 的 `theme` 键，落地经 WebView2 的 preferred color scheme（[ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)）。
+用户通过搜索井主题按钮或托盘「主题」子菜单做的三态选择：亮色 / 暗色 / 跟随系统，默认跟随系统；存 `settings.json` 的 `theme` 键，落地经 WebView2 的 preferred color scheme（[ADR-0012](docs/adr/0012-theme-preference-in-main-process.md)）。
 _Avoid_: 深色模式、夜间模式、外观（三者都装不下「跟随系统」这一态）
 
 **生效主题（effective theme）**：

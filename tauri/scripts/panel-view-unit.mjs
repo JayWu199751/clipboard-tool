@@ -15,6 +15,7 @@ import {
   scrollbarThumb,
   shouldIgnoreMouse,
   spansToText,
+  themeControl,
 } from '../src/panelView.ts';
 import { NAV_KEYS, accelToKeyId, buildBindings, chipLabel, combo, footerChips } from '../src/keyboard.ts';
 
@@ -372,6 +373,12 @@ test('滚动条_top随滚动进度线性到最大位', () => {
   eq(scrollbarThumb(300, 600, 1200).top, 150);
   eq(scrollbarThumb(600, 600, 1200).top, 300);
   eq(scrollbarThumb(0, 600, 60000).visible, true);
+});
+
+test('主题按钮_亮暗系统循环_文案与图标展示偏好', () => {
+  eq(themeControl('light'), { label: '亮色', icon: 'i-sun', next: 'dark' });
+  eq(themeControl('dark'), { label: '暗色', icon: 'i-moon', next: 'system' });
+  eq(themeControl('system'), { label: '跟随系统', icon: 'i-monitor', next: 'light' });
 });
 
 console.log(`\npanelView+keyboard: ${passed} passed, ${failures.length} failed`);

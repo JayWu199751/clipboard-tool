@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { ClipboardEntry, PanelKeyAction } from './types';
+import type { ClipboardEntry, PanelKeyAction, ThemePreference } from './types';
 
 interface ShortcutTryResult {
   ok: boolean;
@@ -22,6 +22,9 @@ interface FocusErrorInfo {
 
 interface ClipboardAPI {
   getHistory(): Promise<ClipboardEntry[]>;
+  getTheme(): Promise<ThemePreference>;
+  setTheme(theme: ThemePreference): Promise<void>;
+  onThemeChanged(callback: (theme: ThemePreference) => void): Promise<void>;
   onUpdated(callback: (entries: ClipboardEntry[]) => void): void;
   onPanelKey(callback: (action: PanelKeyAction, noteEntryId?: string | null) => void): void;
   onPanelShown(callback: () => void): void;

@@ -483,7 +483,7 @@ fn set_auto_start(app: &AppHandle, want: bool) {
     diag_log(&format!("set_auto_start want={want} applied={applied:?}"));
 }
 
-// 主题开关：落盘 → 交给 WebView2 → 重建菜单。不碰模式状态、不碰热键，
+// 主题开关：落盘 → 交给 WebView2 → 重建菜单 → 通知按钮。不碰模式状态、不碰热键，
 // 也不碰 tauri 的窗口主题（那只会改标题栏 DWM 属性，见 webview_theme.rs 文件头）。
 fn set_theme(app: &AppHandle, theme: Theme) {
     let state = app.state::<AppState>();
@@ -495,9 +495,22 @@ fn set_theme(app: &AppHandle, theme: Theme) {
     webview_theme::apply(app, theme);
     Tray::new(app).rebuild_menu();
     diag_log(&format!("set_theme {}", theme.label()));
+    // 两个入口都在主线程执行：with_webview 就地应用之后，渲染层再按媒体查询重刷。
+    emit_panel(app, "theme:changed", theme);
 }
 
 // ---------- IPC 命令 ----------
+
+#[tauri::command]
+fn theme_get(state: State<AppState>) -> Theme {
+    state.settings.lock().unwrap().theme
+}
+
+#[tauri::command]
+fn theme_set(app: AppHandle, theme: Theme) {
+    // 同步命令在主线程执行，与托盘共用落地顺序；不等待模式执行线程。
+    set_theme(&app, theme);
+}
 
 // 复制并粘贴链路的生产 adapter：paste_chain 只管顺序与文案，五个效果在这里落地。
 // 焦点快照与隐藏面板要经模式执行线程，故这两个方法是 async 的（链路整体 await）。
@@ -957,6 +970,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            theme_get,
+            theme_set,
             clipboard_get,
             clipboard_copy,
             clipboard_remove,

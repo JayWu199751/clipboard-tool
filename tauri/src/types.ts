@@ -1,3 +1,6 @@
+// 与主进程 settings::Theme 的小写序列化契约对齐。
+export type ThemePreference = 'light' | 'dark' | 'system';
+
 // 主进程 panel:key 转发的动作名（协议唯一出处：Rust panel_modes::Mode/NavAction 的 as_str）。
 // up/down/enter/delete/pin/escape 是导航键直投；search-enter/exit 与
 // note-edit-enter/exit 是输入态进出事件（B / 空格在 Rust 状态机内消化后转名投出）。
