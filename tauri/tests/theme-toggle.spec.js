@@ -55,3 +55,29 @@ test('搜索中切换保留文字与焦点，失败保持原偏好并允许重�
   await button.click();
   await expect(button).toHaveAttribute('title', '主题：暗色，点击切换为跟随系统');
 });
+
+test('主题事件到达后，迟到的初始读取不能覆盖按钮偏好', async ({ page }) => {
+  await installPanelHarness(page, makeEntries(5), 'system', true);
+  await page.goto('/');
+  await page.waitForFunction(() => window.__themeReadCount === 1);
+  await page.evaluate(() => window.__setThemePreference('dark'));
+  const button = page.locator('#theme-toggle');
+  await expect(button).toHaveAttribute('title', '主题：暗色，点击切换为跟随系统');
+  await page.evaluate(() => window.__resolveThemeRead(0, 'light'));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(button).toHaveAttribute('title', '主题：暗色，点击切换为跟随系统');
+});
+
+test('呼出补读先返回后，迟到的旧读取不能覆盖按钮偏好', async ({ page }) => {
+  await installPanelHarness(page, makeEntries(5), 'system', true);
+  await page.goto('/');
+  await page.waitForFunction(() => window.__themeReadCount === 1 && window.__panelShownReady);
+  await page.evaluate(() => window.__emitPanelShown());
+  await page.waitForFunction(() => window.__themeReadCount === 2);
+  await page.evaluate(() => window.__resolveThemeRead(1, 'dark'));
+  const button = page.locator('#theme-toggle');
+  await expect(button).toHaveAttribute('title', '主题：暗色，点击切换为跟随系统');
+  await page.evaluate(() => window.__resolveThemeRead(0, 'light'));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(button).toHaveAttribute('title', '主题：暗色，点击切换为跟随系统');
+});

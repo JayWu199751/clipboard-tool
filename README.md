@@ -24,7 +24,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 - 列表滚动条是自绘 4px 细条，住在右侧 16px 留白内、滚动后约 1 秒自动隐藏——原生条在真机占布局宽度，会把卡片右缘到边框的距离垫得比左缘宽，隐藏后左右对称。
 - 卡片自上而下 = 内容 → meta 行。内容：文字卡正文 3 行 clamp；图片卡 150px 真实缩略图（棋盘格底）+ mono 文件名（磁盘真名 `<id>.png`）。meta 行 = 来源应用 · 时间 ·（可选）图钉 ·（可选）备注，单行省略号；文字/图片不设类型标识，由内容形态本身区分。右上角没有复制按钮（2026-09-11 随用户要求删除），鼠标复制走双击卡片。
 - 页脚快捷键提示与搜索井右侧的键名 chip 由真实键位表在启动时生成（`keyboard.ts` 注册表，一组一枚 chip）；页脚只列面板可见时用上的键——搜索键住搜索井，呼出键的展示归托盘菜单与捕获覆盖层。「提示 = 行为」不漂移；渲染层镜像与 Rust `NAV_SHORTCUTS` 的一致性由单测跨语言对表钉住。
-- 删除是延迟落盘的：Del 先把条目从可见列表摘除并起 6 秒撤销窗口，到点才调 `clipboard_remove` 持久化；撤销 = 摘除隐藏。6 秒内强退应用则该条不会被删（已确认的取舍）。
+- 删除是延迟落盘的：Del 先把条目从可见列表摘除并起 6 秒撤销窗口，到点才调 `clipboard_remove` 持久化；撤销 = 摘除隐藏。面板停靠再呼出时计时继续；同一条目的重复请求沿用原窗口。命令返回失败或异常时恢复条目，并提示「删除失败，请重试」。6 秒内强退应用则该条不会被删（已确认的取舍）。
 - 搜索匹配正文、备注与来源应用（应用名 / 窗口标题 / 可执行文件路径），空格分词多词 AND、大小写不敏感、命中片段高亮；结果保持原顺序，不做匹配度排序。
 - 图片复制与文字一样进历史（含 PixPin、`Win+Shift+S` 这类截图工具产出的位图），条目身份按图片内容判定，见 [ADR-0009](docs/adr/0009-clipboard-image-decoded-in-house.md)。卡片外观见上一条。
 - 点击面板外任意处即隐藏；置顶条目固定在最前的置顶块里，新复制插在置顶块之后；HUD 里置顶只以 meta 行的图钉图标呈现。
@@ -105,14 +105,14 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 ```bash
 cd tauri
 npm run test        # = test:view + test:rust
-npm run test:view   # node scripts/panel-view-unit.mjs —— 39 例
-npm run test:rust   # cargo test —— 102 例（另有 2 例真机探针 #[ignore]）
-npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwright install chromium）
+npm run test:view   # node scripts/panel-view-unit.mjs —— 49 例
+npm run test:rust   # cargo test —— 107 例（另有 2 例真机探针 #[ignore]）
+npm run test:browser # Playwright UI 回归 —— 18 例（首次需 npx playwright install chromium）
 ```
 
-141 例全部是纯模块的 interface 直测，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 10 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 39（panelView 32：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3 / 主题按钮 1；keyboard 7：注册表 6 + 跨语言键位对表 1）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+156 例通过 module 的 interface 测判定与协议，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 15 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 49（panelView 32：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3 / 主题按钮 1；keyboard 7：注册表 6 + 跨语言键位对表 1；pendingDeletion 5；themeSync 5）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，12 例覆盖导航与滚动、窗口描边、备注编辑，以及主题按钮的三态循环、启动与外部同步、搜索焦点保留和失败重试；它不并入纯模块测试的 141 例统计。主题测试验证按钮与 IPC 接线，真实 WebView2 换色与存档重启仍需真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，18 例覆盖导航与滚动、窗口描边、备注编辑、延迟删除的撤销与跨呼出计时及两种失败恢复，以及主题按钮的三态循环、启动与外部同步、迟到读取、搜索焦点保留和失败重试；它不并入上述 156 例统计。真实 Win32 窗口落地、WebView2 换色与存档重启仍需真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -148,6 +148,7 @@ npm run test:browser # Playwright UI 回归 —— 9 例（首次需 npx playwri
 
 ## 待真机验证
 
+- 延迟删除（2026-10-02）：按「操作」节执行删除与撤销，并在撤销窗口内停靠再呼出，确认条目可见性与实际存档结果一致；浏览器回归已验证 IPC 接线与时序，真实 WebView2 到存储层仍需点验。
 - 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**同日另一条独立问题（开机启动后两路呼不出界面）已在下一轮动手改，见下一条与「故障排查」那三行。**
 - 开机那一次不再「三路呼不出」（2026-09-20 首改、2026-09-27 加回读与无条件读数，**必须重启一次才有结论**）：登录后先别手动重开应用，直接按 `Ctrl+Shift+V` → 点托盘图标 → 托盘菜单「显示剪贴板面板」，三条都要能把面板叫出来。这次不管中不中，`diag.log` 都会有读数（vital 行无条件写、带 `pid=`，不需要设任何环境变量）：任一条不中就跑 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1) 两次（呼出前 / 后）并把输出贴回来，脚本头写着逐段分流（先按 `pid=` 分组）——`summon-req` 有而 `summon-run` 没有 = 执行线程没接手；`summon-no-*` = 到主线程了但缺前提（不等于主线程没跑）；`summon-run` 有而 `summon-landed` 没有 = 那一次被判给更新的几何效果（也不是主线程没跑）；`summon-landed final=` 不是 `Landed` = 窗口没落地（那行末尾有 `repair=`）；`summon-run renderer=never` = 网页没起来；`emit-failed` = 落地了但事件送不出去。呼出键注册成没成看 `vital hotkey_register ... Registered`；进程怎么没的看 `vital exit-requested` / `vital exit`；登录后 120ms 内的那次热身停靠若撞上呼出，会留 `vital warmup-park: summon already requested, park skipped`（有它说明让位逻辑生效，面板不该在屏外）。**热键不灵时先别急着下结论**：再启动一次应用（第二实例）走的是同一条 `show_on`——若这样能呼出、日志里出现 `summon-req src=instance`，说明卡的是热键注册那一段，而不是呼出链路（反过来也成立：`src=instance` 也不出来，才是链路本身的问题）。
 - 托盘图标跟的是任务栏而不是面板皮肤（2026-09-20 改判）：把「个性化 → 颜色 → 选择默认模式」设成**自定义**、让「Windows 模式」与「应用模式」相反（例如 Windows 暗、应用亮），托盘图标该是**白色**那套（跟任务栏），面板皮肤该是**亮色**那套（跟主题偏好＝跟随系统时看应用模式）。再在运行中翻一次系统主题：图标应跟着换；若不动，把鼠标移到图标上悬停一下（那次 `Enter` 是广播收不到时的兜底），看 `diag.log` 有没有新的 `tray-icon` 行。

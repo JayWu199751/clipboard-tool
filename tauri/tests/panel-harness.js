@@ -19,13 +19,18 @@ export function makeEntries(count) {
   }));
 }
 
-export async function installPanelHarness(page, entries, theme = 'system') {
-  await page.addInitScript(({ history, initialTheme }) => {
+export async function installPanelHarness(page, entries, theme = 'system', deferThemeReads = false) {
+  await page.addInitScript(({ history, initialTheme, deferReads }) => {
     const callbacks = new Map();
     const listeners = new Map();
     let nextId = 1;
     let themePreference = initialTheme;
+    let currentHistory = history;
+    const themeReadResolvers = [];
     window.__themeWrites = [];
+    window.__themeReadCount = 0;
+    window.__removeCalls = [];
+    window.__removeResult = true;
     window.__searchActivations = 0;
     const emit = (event, payload) => {
       for (const id of [...(listeners.get(event) ?? [])]) {
@@ -36,6 +41,8 @@ export async function installPanelHarness(page, entries, theme = 'system') {
       themePreference = theme;
       emit('theme:changed', theme);
     };
+    window.__resolveThemeRead = (index, theme) => themeReadResolvers[index](theme);
+    window.__emitPanelShown = () => emit('panel:shown');
 
     const removeListener = (event, id) => {
       const registered = listeners.get(event) ?? [];
@@ -58,8 +65,20 @@ export async function installPanelHarness(page, entries, theme = 'system') {
         callbacks.delete(id);
       },
       invoke(command, args) {
-        if (command === 'clipboard_get') return Promise.resolve(history);
-        if (command === 'theme_get') return Promise.resolve(themePreference);
+        if (command === 'clipboard_get') return Promise.resolve(currentHistory);
+        if (command === 'clipboard_remove') {
+          window.__removeCalls.push(args.id);
+          if (window.__rejectRemove) return Promise.reject(new Error('删除命令失败'));
+          if (!window.__removeResult) return Promise.resolve(false);
+          currentHistory = currentHistory.filter((entry) => entry.id !== args.id);
+          emit('clipboard:updated', currentHistory);
+          return Promise.resolve(true);
+        }
+        if (command === 'theme_get') {
+          const index = window.__themeReadCount++;
+          if (deferReads) return new Promise((resolve) => { themeReadResolvers[index] = resolve; });
+          return Promise.resolve(themePreference);
+        }
         if (command === 'theme_set') {
           if (window.__rejectThemeSet) return Promise.reject(new Error('主题切换失败'));
           window.__themeWrites.push(args.theme);
@@ -76,6 +95,7 @@ export async function installPanelHarness(page, entries, theme = 'system') {
           registered.push(args.handler);
           listeners.set(args.event, registered);
           if (args.event === 'panel:key') window.__panelKeyReady = true;
+          if (args.event === 'panel:shown') window.__panelShownReady = true;
           return Promise.resolve(args.handler);
         }
         if (command === 'plugin:event|unlisten') {
@@ -90,5 +110,5 @@ export async function installPanelHarness(page, entries, theme = 'system') {
     window.__emitPanelKey = (action) => {
       emit('panel:key', { action, noteEntryId: null });
     };
-  }, { history: entries, initialTheme: theme });
+  }, { history: entries, initialTheme: theme, deferReads: deferThemeReads });
 }

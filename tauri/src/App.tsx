@@ -10,9 +10,11 @@
 //   - 置顶（Z）是原应用既有键，ClipFlow 无此概念 → 保留行为，meta 行加图标态。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClipboardEntry, PanelKeyAction, ThemePreference } from './types';
-import { clampIndex, entryAt, formatTime, moveIndex, scrollbarThumb, shouldIgnoreMouse, accelKeyFromCode, themeControl, MIN_THUMB_HEIGHT, type ScrollbarThumb } from './panelView';
+import type { ClipboardEntry, PanelKeyAction } from './types';
+import { clampIndex, entryAt, formatTime, moveIndex, scrollbarThumb, shouldIgnoreMouse, accelKeyFromCode, MIN_THUMB_HEIGHT, type ScrollbarThumb } from './panelView';
 import { createClipStore, type ClipItem } from './clipStore';
+import { ThemeSynchronizer } from './themeSync';
+import { transitionDeletion, type DeletionEvent, type DeletionState } from './pendingDeletion';
 import { useKeyboard } from './useKeyboard';
 import { NAV_KEYS, chipLabel, footerChips } from './keyboard';
 import { Icon, IconSprite } from './icons';
@@ -41,6 +43,8 @@ function App() {
   // 延迟删除的可见性遮罩：条目仍在主进程 store 里，到点才真删（见文件头）
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
   const deleteTimersRef = useRef(new Map<string, number>());
+  const deletionStateRef = useRef<DeletionState>(new Map());
+  const deletionEventRef = useRef<(event: DeletionEvent, item?: ClipItem) => void>(() => {});
 
   const [selected, setSelected] = useState(0);
   const selectedRef = useRef(selected);
@@ -50,10 +54,9 @@ function App() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [searchActive, setSearchActive] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [themePreference, setThemePreference] = useState<ThemePreference | null>(null);
-  const [themePending, setThemePending] = useState(false);
-  const themePendingRef = useRef(false);
-  const themeReadSeqRef = useRef(0);
+  const themeSyncRef = useRef(new ThemeSynchronizer());
+  const [themeSync, setThemeSync] = useState(() => themeSyncRef.current.snapshot());
+  const { preference: themePreference, pending: themePending } = themeSync;
 
   const [noteEdit, setNoteEdit] = useState<{ id: string; draft: string } | null>(null);
   const noteEditRef = useRef(noteEdit);
@@ -105,38 +108,40 @@ function App() {
 
   // 偏好只作按钮展示；事件比早先发出的读取更新，迟到的读取不能盖掉它。
   const refreshThemePreference = useCallback(async () => {
-    const seq = ++themeReadSeqRef.current;
+    const generation = themeSyncRef.current.beginRead();
     const theme = await window.clipboardAPI.getTheme();
-    if (seq === themeReadSeqRef.current) setThemePreference(theme);
+    if (themeSyncRef.current.acceptRead(generation, theme)) {
+      setThemeSync(themeSyncRef.current.snapshot());
+    }
   }, []);
   const toggleTheme = useCallback(async () => {
-    if (!themePreference || themePendingRef.current) return;
-    themePendingRef.current = true;
-    setThemePending(true);
+    const next = themeSyncRef.current.beginToggle();
+    if (!next) return;
+    setThemeSync(themeSyncRef.current.snapshot());
     try {
-      await window.clipboardAPI.setTheme(themeControl(themePreference).next);
+      await window.clipboardAPI.setTheme(next);
       applyTheme();
       await refreshThemePreference();
     } catch {
       pushToast('切换主题失败，请重试', { kind: 'error' });
     } finally {
-      themePendingRef.current = false;
-      setThemePending(false);
+      themeSyncRef.current.finishToggle();
+      setThemeSync(themeSyncRef.current.snapshot());
     }
-  }, [themePreference, refreshThemePreference, pushToast]);
+  }, [refreshThemePreference, pushToast]);
 
   useEffect(() => {
     let active = true;
     // 先等监听就绪再取初值，避免读取与托盘切换之间漏掉变更。
     void window.clipboardAPI.onThemeChanged((theme) => {
       if (!active) return;
-      ++themeReadSeqRef.current;
-      setThemePreference(theme);
+      themeSyncRef.current.receiveChange(theme);
+      setThemeSync(themeSyncRef.current.snapshot());
       applyTheme();
     }).then(() => { if (active) return refreshThemePreference(); }).catch(() => {
       if (active) pushToast('读取主题偏好失败，请重新呼出面板', { kind: 'error' });
     });
-    return () => { active = false; ++themeReadSeqRef.current; };
+    return () => { active = false; themeSyncRef.current.invalidateReads(); };
   }, [refreshThemePreference, pushToast]);
 
   // —— 复制（原应用粘贴链契约 { ok, message }） ——
@@ -159,33 +164,58 @@ function App() {
       return next;
     });
   }, []);
-  const deleteItem = useCallback((item: ClipItem) => {
-    const id = item.id;
-    if (noteEditRef.current?.id === id) {
-      noteEditRef.current = null;
-      setNoteEdit(null);
-      void window.clipboardAPI.endNoteEdit();
+  const dispatchDeletion = useCallback((event: DeletionEvent, item?: ClipItem) => {
+    const transition = transitionDeletion(deletionStateRef.current, event);
+    deletionStateRef.current = transition.state;
+    for (const effect of transition.effects) {
+      const { id } = effect;
+      switch (effect.type) {
+        case 'hide':
+          if (noteEditRef.current?.id === id) {
+            noteEditRef.current = null;
+            setNoteEdit(null);
+            void window.clipboardAPI.endNoteEdit();
+          }
+          setHiddenIds((set) => (set.has(id) ? set : new Set(set).add(id)));
+          break;
+        case 'start-timer':
+          deleteTimersRef.current.set(id, window.setTimeout(() => {
+            deleteTimersRef.current.delete(id);
+            deletionEventRef.current({ type: 'deadline', id });
+          }, DELETE_UNDO_MS));
+          break;
+        case 'show-undo':
+          pushToast('已删除', {
+            dim: item?.type === 'image' ? item.content : item?.content.replace(/\s+/g, ' ').slice(0, 18),
+            kind: 'error',
+            actionLabel: '撤销',
+            onAction: () => deletionEventRef.current({ type: 'undo', id }),
+          });
+          break;
+        case 'cancel-timer': {
+          const timer = deleteTimersRef.current.get(id);
+          if (timer) window.clearTimeout(timer);
+          deleteTimersRef.current.delete(id);
+          break;
+        }
+        case 'restore':
+          unhide(id);
+          break;
+        case 'remove':
+          void window.clipboardAPI.remove(id)
+            .then((ok) => deletionEventRef.current({ type: ok ? 'remove-succeeded' : 'remove-failed', id }))
+            .catch(() => deletionEventRef.current({ type: 'remove-failed', id }));
+          break;
+        case 'show-error':
+          pushToast('删除失败，请重试', { kind: 'error' });
+          break;
+      }
     }
-    setHiddenIds((set) => (set.has(id) ? set : new Set(set).add(id)));
-    pushToast('已删除', {
-      dim: item.type === 'image' ? item.content : item.content.replace(/\s+/g, ' ').slice(0, 18),
-      kind: 'error',
-      actionLabel: '撤销',
-      onAction: () => {
-        const timer = deleteTimersRef.current.get(id);
-        if (timer) window.clearTimeout(timer);
-        deleteTimersRef.current.delete(id);
-        unhide(id);
-      },
-    });
-    deleteTimersRef.current.set(id, window.setTimeout(() => {
-      deleteTimersRef.current.delete(id);
-      void window.clipboardAPI.remove(id).then((ok) => {
-        // 删除失败（条目已不在等）→ 撤销隐藏，条目回到列表，不留幽灵
-        if (!ok) unhide(id);
-      });
-    }, DELETE_UNDO_MS));
   }, [pushToast, unhide]);
+  deletionEventRef.current = dispatchDeletion;
+  const deleteItem = useCallback((item: ClipItem) => {
+    dispatchDeletion({ type: 'request', id: item.id }, item);
+  }, [dispatchDeletion]);
 
   // —— 备注编辑（B → note-edit-enter；Enter 保存 / Esc 取消 / 失焦保存） ——
   const openNoteEditor = useCallback((targetId: string | null) => {

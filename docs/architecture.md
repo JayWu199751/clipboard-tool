@@ -39,7 +39,7 @@
 | `hotkeys.rs` | 「现在哪些全局键生效」的唯一真源：accel ↔ Shortcut 双向表 + 动作，两个方向都是 O(1)；注册三步（查重 / 调插件 / 记账）原子，插件拒绝一分不记；accel → 展示文案 | `register` `unregister` `action_of` `accel_of` `bindings`；纯函数 `format_shortcut`；插件调用经端口传入 | 9 |
 | `modes.rs` | 状态机的唯一入口：独占执行线程 + 具名操作 + 效果宿主（持有 `Hotkeys`、方向键连发登记与**最近一次呼出的时刻**——这个时刻有三处用途：与点击时刻比出「把面板开出来那一下」、给 `summon-run latency_ms=` 当基准、以及让热身停靠给已经发生的呼出让位） | `spawn` + 17 个具名操作（见下） | — |
 | `diag.rs` | 诊断日志的轮转判定：`diag.log` 超过上限就把旧文件挪成 `diag.log.1`（vital 行是常驻写入，不封顶即无界增长） | 纯判定 `should_rotate` | 1 |
-| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；主线程投递、DIP 换算与**几何效果代数**（`GEOM_SEQ`：迟到的旧效果自己作废）。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸）。**改窗口之前先过 `dispatch`**：投递主线程失败不再静默（记 vital 读数 + 重投），从前八处 `let _ = run_on_main_thread(..)` 是「按了没反应」的无声出口；取不到窗口一律经 `window_or_log` 留痕 | `show_at_cursor`（按「光标所在 → 窗口所在 → 主屏」三级取显示器，重算 `set_size` + `set_position`，**再回读 OS 真值判落位**：不可见由 `make_visible` 自己兜底、没生效就重设、意图本身在屏外就按**主屏自己的工作区与缩放**重算并据新值重判，结论写 vital 行 `summon-landed first= final= repair= scale= intent= actual=`；三级都取不到时留 `summon-no-monitor` / `summon-no-primary`）、`park_offscreen` `log_geometry` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `set_icon` `set_position` `show`（热身用，与 `show_at_cursor` 共用 module 内的 `make_visible`：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，幂等，手顺理由见 pitfalls 第 3 节；**自己读回 `IsWindowVisible` 确认**，没生效就退回 Win32 `ShowWindow(SW_SHOWNOACTIVATE)`，两层都不成留 `make-visible failed`）；纯判定 `sized` `centered` `parked` `contains_point` `landing_verdict` `superseded` | 10 |
+| `panel_window.rs` | 面板几何、焦点、鼠标穿透与「上不上任务栏」；呼出修复协议经私有 `LandingPort` 执行（说明见下）；主线程投递、DIP 换算与**几何效果代数**（`GEOM_SEQ`：迟到的旧效果自己作废）。尺寸非常量：每次呼出按光标所在显示器算（`sized`：高 = 屏幕 DIP 高的 7/8、宽 = 高的一半——DPI 无关性由 DIP 空间公式保证，4K@2x 与 1080p@1x 同尺寸）。**改窗口之前先过 `dispatch`**：投递主线程失败不再静默（记 vital 读数 + 重投），从前八处 `let _ = run_on_main_thread(..)` 是「按了没反应」的无声出口；取不到窗口一律经 `window_or_log` 留痕 | `show_at_cursor`（按「光标所在 → 窗口所在 → 主屏」三级取显示器，重算 `set_size` + `set_position`，**再回读 OS 真值判落位**：不可见由 `make_visible` 自己兜底、没生效就重设、意图本身在屏外就按**主屏自己的工作区与缩放**重算并据新值重判，结论写 vital 行 `summon-landed first= final= repair= scale= intent= actual=`；三级都取不到时留 `summon-no-monitor` / `summon-no-primary`）、`park_offscreen` `log_geometry` `focus` `release_focus` `set_mouse_passthrough` `hit_test` `exists` `set_icon` `set_position` `show`（热身用，与 `show_at_cursor` 共用 module 内的 `make_visible`：`win.show()` **之后**清掉 tao 强加的 `WS_EX_APPWINDOW`、挂 `WS_EX_TOOLWINDOW` 并补一次 `set_skip_taskbar`，幂等，手顺理由见 pitfalls 第 3 节；**自己读回 `IsWindowVisible` 确认**，没生效就退回 Win32 `ShowWindow(SW_SHOWNOACTIVATE)`，两层都不成留 `make-visible failed`）；纯判定 `sized` `centered` `parked` `contains_point` `landing_verdict` `superseded` | 15 |
 | `poll_baseline.rs` | 「这次剪贴板内容算不算一次新复制」+ 欠着的一轮（读不可信 / 写盘失败）的标记 | `observe` `confirm` `skip_unchanged` `note_seq` `note_untrusted` `retry_pending` `sync_now` | 9 |
 | `dib.rs` | 剪贴板 DIB 字节 → PNG 的解码判定：32/24bpp、位域掩码、行序、`BI_PNG` 透传 | `to_png` | 7 |
 | `clipboard.rs` | 剪贴板独占窗口的唯一归属：`OpenClipboard` 小步重试、`CF_DIBV5`→`CF_DIB` 退让、`Drop` 必关、取字节即释放守卫（解码在剪贴板之外）、arboard 文字读写、序列号；「读不到」与「剪贴板里就是没内容」在这里分开 | `read()` → `ReadOutcome{Known(Snapshot), Occupied}`、`write_text`、`write_image_file`、`sequence`；纯判定 `occupied`（`ClipboardGuard`、`DibBytes` / `ImageRead` 与格式常量在 module 内部） | 1 |
@@ -58,6 +58,8 @@
 
 `history.rs` 的写图 / 哈希 / 删图 / 判存在（`Ports`，四条全部必供，缺一个编译不过）与时间 / 生成 id（`Clock`，有默认值）、`panel_modes.rs` 的全部效果、`paste_chain.rs` 的全部效果、`startup.rs` 的任务注册、`hotkeys.rs` 的插件调用都是注入端口，所以生产实现与测试假实现各一份，seam 才成立。端口一律不做成 `Option`：可选端口等于把「漏配」变成一条静默降级的路径，而不是编译错误。
 
+`panel_window` 的 `land_panel` 与私有 `LandingPort` 构成内部 seam：生产 adapter 只在 `dispatch` 的主线程闭包里构造，执行几何写入、显形、OS 真值回读、主屏查询与 vital 读数；测试 adapter 回放整条修复协议。首次与最终各回读一次，最终判定和日志的 `actual` 共用同一份快照；公开动作 interface 保持由 `PanelWindow` 提供。
+
 **模式操作**（`modes.rs` 的 17 个具名方法）：`show` `hide` `park_after_warmup` `hide_after_paste` `on_hotkey_pressed` `on_hotkey_repeated` `on_hotkey_released` `hide_if_clicked_outside` `set_toggle_shortcut` `begin_search` `set_composing` `end_note_edit` `begin_shortcut_capture` `cancel_shortcut_capture` `try_set_toggle_shortcut` `restore_original_focus` `focus_target`。新增模式操作在这里加方法，不要在调用方拼闭包。热键回调交出的是插件的 `Shortcut`，不是 accel 字符串——「这是哪个动作」由执行线程查 `Hotkeys` 判，主线程不再持有那份表。备注编辑态没有自己的具名操作：它是 `NavAction::Note` 落进 `PanelModes::on_nav_action` 后调 `enter_input(NoteEdit)`，调用方仍是 `on_hotkey_pressed` 那一条。
 
 ## 渲染层地图
@@ -66,18 +68,21 @@
 
 | 文件 | 职责 | 测试 |
 |---|---|---|
-| `panelView.ts` | 渲染层判定的唯一归属：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何、主题按钮的三态循环与展示。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb` `themeControl`；32 例 plain node |
-| `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 5 例 + 对表 1 例 |
+| `panelView.ts` | 渲染层视图判定：搜索过滤、命中高亮片段、选中项落位、圆角外穿透几何、相对时间五档（刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前）、按键码映射、滚动条 thumb 几何、主题按钮的三态循环与展示。来源配色档位随旧界面退役；滚动条几何因「原生条在真机占布局宽度、破坏卡片左右对称」回归 | `filterEntries` `highlight` `spansToText` `clampIndex` `moveIndex` `entryAt` `shouldIgnoreMouse` `formatTime` `accelKeyFromCode` `scrollbarThumb` `themeControl`；32 例 plain node |
+| `keyboard.ts` | 键盘注册表的判定侧：`NAV_KEYS`（Rust `NAV_SHORTCUTS` 的渲染层镜像）、accel ↔ keyId 归一、`combo()` 平台化显示、`buildBindings` / `footerChips`（页脚 chip 的唯一数据源）。分发住在 `useKeyboard`，键值一致性由跨语言对表钉住 | accel 归一 / combo / chipLabel / 注册表 / 页脚 6 例 + 对表 1 例 |
+| `pendingDeletion.ts` | 延迟删除的生命周期判定：条目各自处于可撤销或提交中；输入删除、撤销、截止与提交回执，输出新状态与效果指令。timer、toast 与 IPC 仍由 App 执行，行为契约见 [README「操作」](../README.md#操作) | `transitionDeletion`；5 例 plain node |
+| `themeSync.ts` | 主题偏好的同步状态：当前偏好、读取代次与切换互斥；较新的读取、变更事件或退出使旧读取失效。生效主题由 App 按媒体查询落地，监听注册竞态仍归 `api.ts` | `ThemeSynchronizer` 的快照、读取接收、变更接收与切换操作；5 例 plain node |
 | `useKeyboard.ts` | 渲染层唯一按键入口：`panel:key` 动作名 → 注册表处理函数的单点分发（ref 转发，不重订阅）。面板导航键由 Rust 全局拦截（浏览态窗口不持焦点），渲染层没有 keydown 监听——快捷键捕获覆盖层是唯一的例外，那是录入键值的编辑器行为 | — |
 | `clipStore.ts` | ClipStore 契约适配层：`RendererEntry` → `ClipItem` 投影 + `createClipStore`（query / total / getNote 只读视图）。组件不碰 invoke；copy / remove 等效果留在 App 接线（ADR-0008） | — |
 | `api.ts` | `window.clipboardAPI` 的 invoke / listen 适配层；同一 channel 重复注册时先解绑旧的（generation 计数防 useEffect 竞态） | — |
-| `App.tsx` | 视图状态机与效果接线：主题按钮偏好的读取 / 订阅 / 切换（生效主题仍只认媒体查询）；读事件 → 调 `panelView` / `keyboard` 判定 → 画出来或 `invoke`。延迟删除（6s 撤销窗口）住在这里；穿透半径不写数字，由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由 `first-item-top-clip.spec.js` 守 |
+| `App.tsx` | 视图状态与效果接线：主题读取 / 订阅 / 切换交给 `themeSync` 判定，延迟删除按 `pendingDeletion` 的效果指令接 timer / toast / IPC；读事件 → 调规则 module → 画出来或 `invoke`。生效主题仍只认媒体查询；穿透半径由 `getComputedStyle` 从 `.desktop` 读出后作参数传入 | 由导航、主题与删除的 Playwright 回归守 |
 | `SearchHeader.tsx` / `ClipCard.tsx` / `ToastStack.tsx` / `icons.tsx` | HUD 组件：60px 搜索头（焦点环在井上）、text/image 两态卡片（内容在上、meta 行在下，2026-09-11 改版；类型标识已删）+ meta 行内联备注、aria-live toast 栈（含撤销动作）、SVG 图标精灵（outline 系、24-grid、stroke 1.75，主题按钮补太阳 / 月亮 / 显示器同族图标，其余源 UI 搬运；i-text/i-image 随类型标识退役，i-copy 随卡片右上角的「复制」胶囊退役） | — |
 | `theme.css` | ClipFlow 设计 token 的唯一落地（`:root` 暗色 + `html[data-theme="light"]` 覆盖块，源样式的 token 块原样搬运），见 [design-system.md](design-system.md) | — |
 | `styles.css` | HUD 组件样式（选择器语义与数值照搬源 UI；例外是卡片内部次序——meta 行由内容上方移到下方，2026-09-11）+ 透明窗口壳层（`.desktop` 圆角裁切与 1 CSS px 一律留边、`.app-window` 2px 中灰实线描边 `--window-ring`——壳层机制原样保留，描边强度与留边契约 2026-09-08 两次返修）。列表顶部 `scroll-padding` 与内边距同源；渐隐遮罩退役，滚动条为自绘 4px 细条（原生条隐藏——它在真机占布局宽度，会把卡片右缘到边框垫得比左缘宽）。窗口圆角单一真源 `--radius-window` = 36px；内部圆角按面点名不共用——复制项 `--radius-card` 12px、搜索井 `--radius-pill`（36px 高钳成 18px 的胶囊）、空态图标与覆盖层卡片仍 `--radius-md` 10px | — |
-| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge（含主题偏好与事件）与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
+| `tests/panel-harness.js` | 浏览器用例共用的 mock Tauri bridge（可控主题读取回执、变更事件与删除命令结果）与 `FADE_INSET` 常量（现值 12 = 列表 scroll-padding） | — |
 | `tests/navigation-visual-regression.spec.js` | 驱动真实渲染层，回归高频方向键导航的选中框跟随（几何类动画计数口径） | 1 例 Playwright |
-| `tests/theme-toggle.spec.js` | 回归主题按钮三态循环不进入搜索、已存偏好与外部同步、生效主题仍认媒体查询、搜索焦点保留与失败重试（真实 WebView2 与重启存档仍需人工验证） | 3 例 Playwright |
+| `tests/theme-toggle.spec.js` | 回归主题按钮三态循环不进入搜索、已存偏好与外部同步、迟到初读与逆序呼出补读、生效主题仍认媒体查询、搜索焦点保留与失败重试（真实 WebView2 与重启存档仍需人工验证） | 5 例 Playwright |
+| `tests/deletion-undo.spec.js` | 驱动真实渲染层与可控时钟，回归撤销阻止提交、跨呼出继续计时、命令返回失败与异常时的恢复和错误提示 | 4 例 Playwright |
 | `tests/first-item-top-clip.spec.js` | 回归滚到列表首尾时选中项不被裁掉（顶部 scroll-padding 留白、底部对齐滚动口为设计内） | 2 例 Playwright |
 | `tests/window-ring-width.spec.js` | 截图解码后纯像素扫描量窗口描边四边的表观宽度（预乘红积分，`getBoundingClientRect` 给不出来的信息） | 3 例 Playwright |
 | `tests/note-input-ring.spec.js` | 回归备注内联编辑：按 B 前后卡片几何逐条相等（输入框与 meta 行等高，2026-09-11 返修「按 B 复制项大小会改变」）、焦点环只有一圈（全局 `:focus-visible` outline 让位）、环完整不被 meta 行裁断且不出卡片边框（meta 行 2026-09-11 搬到内容下方，裁切契约不变） | 3 例 Playwright |

@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, Wry};
 
 pub const PANEL_LABEL: &str = "panel";
-// 面板尺寸不再是常量：每次呼出按显示器算（sized：高=屏幕 2/3、宽=高一半，DIP 空间）。
+// 面板尺寸不再是常量：每次呼出按显示器算（sized：高=屏幕 7/8、宽=高一半，DIP 空间）。
 /// 离屏停靠时超出当前显示器工作区右缘的距离（留在同屏内，避免跨屏 DPI 漂移改尺寸）
 pub const OFFSCREEN_GAP: f64 = 20.0;
 /// 取不到显示器时的兜底停靠点
@@ -234,52 +234,10 @@ impl PanelWindow {
             };
             // 每次呼出按当前显示器重算尺寸与位置：换屏 / 改缩放后第一下就跟上。
             // set_size 在 resizable:false 下依然可编程调用（resizable 只管用户拖拽）。
-            let mut scale = monitor.scale_factor();
-            let mut work = work_area(&monitor);
-            let (w, h) = sized(monitor.size().height as f64, scale);
-            let (x, y) = centered(work, scale, w, h);
-            let mut intent = RectDip { x, y, width: w, height: h };
-            apply_rect(&win, intent);
-            make_visible(&win);
-
-            let first = verdict_of(&win, intent, work, scale);
-            let mut repair = "-";
-            match first {
-                Landing::Landed => {}
-                // 不可见这一档不做二次显形：`make_visible` 刚刚已经把「框架 show + Win32 兜底」
-                // 两层都试过并自己留了痕（`make-visible via ShowWindow` / `make-visible failed`），
-                // 再调一次只是同一个调用，却会打出误导的 `repair=show`。
-                Landing::Hidden => {}
-                Landing::Moved => {
-                    apply_rect(&win, intent);
-                    repair = "reposition";
-                }
-                // 意图本身落在工作区外：工作区读歪了。改按主屏自己的工作区与缩放重算，
-                // 判 final 也用新的这一份——否则会把已经修好的落位读成 Offscreen。
-                Landing::Offscreen => match app.primary_monitor().ok().flatten() {
-                    Some(primary) => {
-                        work = work_area(&primary);
-                        scale = primary.scale_factor();
-                        let (pw, ph) = sized(primary.size().height as f64, scale);
-                        let (px, py) = centered(work, scale, pw, ph);
-                        intent = RectDip { x: px, y: py, width: pw, height: ph };
-                        apply_rect(&win, intent);
-                        make_visible(&win);
-                        repair = "refit";
-                    }
-                    None => {
-                        // 兜底也要留痕：这里静默等于「修了但没修」两件事都看不出来
-                        diag_vital("summon-no-primary");
-                    }
-                },
-            }
-            let truth = read_truth(&win);
-            let final_verdict = verdict_of(&win, intent, work, scale);
-            diag_vital(&format!(
-                "summon-landed first={first:?} final={final_verdict:?} repair={repair} scale={scale} intent={} actual={}",
-                fmt_rect(intent),
-                truth.map(|t| fmt_rect(t.rect)).unwrap_or_else(|| "unreadable".to_string()),
-            ));
+            land_panel(
+                &mut WindowLandingPort { app, win: &win },
+                display_geometry(&monitor),
+            );
         });
     }
 
@@ -466,11 +424,93 @@ fn window_or_log(app: &AppHandle, action: &'static str) -> Option<tauri::Webview
     win
 }
 
-/// 判一次落位（读不到窗口现状时按「不可见」记：正常不可达，真出问题会在 panic.log 里）。
-fn verdict_of(win: &tauri::WebviewWindow<Wry>, intent: RectDip, work: WorkArea, scale: f64) -> Landing {
-    read_truth(win)
-        .map(|t| landing_verdict(intent, t, work, scale))
-        .unwrap_or(Landing::Hidden)
+/// 呼出协议只需要这份显示器几何，不让测试依赖 tauri 的 Monitor。
+#[derive(Clone, Copy)]
+struct DisplayGeometry {
+    work: WorkArea,
+    scale: f64,
+    screen_height: f64,
+}
+
+fn display_geometry(monitor: &tauri::Monitor) -> DisplayGeometry {
+    DisplayGeometry {
+        work: work_area(monitor),
+        scale: monitor.scale_factor(),
+        screen_height: monitor.size().height as f64,
+    }
+}
+
+fn intended_rect(display: DisplayGeometry) -> RectDip {
+    let (width, height) = sized(display.screen_height, display.scale);
+    let (x, y) = centered(display.work, display.scale, width, height);
+    RectDip { x, y, width, height }
+}
+
+/// 内部 seam：生产 adapter 只在主线程投递内构造，测试 adapter 回放 OS 真值与效果顺序。
+trait LandingPort {
+    fn apply_rect(&mut self, rect: RectDip);
+    fn make_visible(&mut self);
+    fn read_truth(&mut self) -> Option<WindowTruth>;
+    fn primary_monitor(&mut self) -> Option<DisplayGeometry>;
+    fn vital(&mut self, message: &str);
+}
+
+struct WindowLandingPort<'a> {
+    app: &'a AppHandle,
+    win: &'a tauri::WebviewWindow<Wry>,
+}
+
+impl LandingPort for WindowLandingPort<'_> {
+    fn apply_rect(&mut self, rect: RectDip) { apply_rect(self.win, rect); }
+    fn make_visible(&mut self) { make_visible(self.win); }
+    fn read_truth(&mut self) -> Option<WindowTruth> { read_truth(self.win) }
+    fn primary_monitor(&mut self) -> Option<DisplayGeometry> {
+        self.app.primary_monitor().ok().flatten().map(|m| display_geometry(&m))
+    }
+    fn vital(&mut self, message: &str) { diag_vital(message); }
+}
+
+/// 读不到窗口现状时按「不可见」记，日志里的 actual 保留 unreadable。
+fn verdict_from(intent: RectDip, truth: Option<WindowTruth>, display: DisplayGeometry) -> Landing {
+    truth.map(|t| landing_verdict(intent, t, display.work, display.scale)).unwrap_or(Landing::Hidden)
+}
+
+/// 呼出落地协议：首次设置与回读 → 按失败种类修复 → 最终回读与读数。
+fn land_panel(port: &mut impl LandingPort, mut display: DisplayGeometry) {
+    let mut intent = intended_rect(display);
+    port.apply_rect(intent);
+    port.make_visible();
+    let first = verdict_from(intent, port.read_truth(), display);
+    let mut repair = "-";
+    match first {
+        Landing::Landed => {}
+        // make_visible 已试过框架 show 与 Win32 兜底；再显形一次会留下误导的 repair=show。
+        Landing::Hidden => {}
+        Landing::Moved => {
+            port.apply_rect(intent);
+            repair = "reposition";
+        }
+        Landing::Offscreen => match port.primary_monitor() {
+            Some(primary) => {
+                // 主屏的工作区、缩放与意图必须一起换，最终判定也用这份上下文。
+                display = primary;
+                intent = intended_rect(display);
+                port.apply_rect(intent);
+                port.make_visible();
+                repair = "refit";
+            }
+            None => port.vital("summon-no-primary"),
+        },
+    }
+    // 判定与 actual 共用一次最终回读，避免两次回读之间的变化把日志拼成矛盾读数。
+    let truth = port.read_truth();
+    let final_verdict = verdict_from(intent, truth, display);
+    port.vital(&format!(
+        "summon-landed first={first:?} final={final_verdict:?} repair={repair} scale={} intent={} actual={}",
+        display.scale,
+        fmt_rect(intent),
+        truth.map(|t| fmt_rect(t.rect)).unwrap_or_else(|| "unreadable".to_string()),
+    ));
 }
 
 /// 窗口现状（OS 真值）。读不到返回 None（窗口没了 / 句柄不可读）。
@@ -563,6 +603,57 @@ mod tests {
     use super::*;
 
     const FULL_HD: WorkArea = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
+
+    #[derive(Debug, PartialEq)]
+    enum LandingCall {
+        Apply(RectDip),
+        Visible,
+        Read,
+        Primary,
+        Vital(String),
+    }
+
+    struct FakeLandingPort {
+        truths: std::collections::VecDeque<Option<WindowTruth>>,
+        primary: Option<DisplayGeometry>,
+        calls: Vec<LandingCall>,
+    }
+
+    impl FakeLandingPort {
+        fn new(truths: Vec<Option<WindowTruth>>, primary: Option<DisplayGeometry>) -> Self {
+            Self { truths: truths.into(), primary, calls: Vec::new() }
+        }
+    }
+
+    impl LandingPort for FakeLandingPort {
+        fn apply_rect(&mut self, rect: RectDip) { self.calls.push(LandingCall::Apply(rect)); }
+        fn make_visible(&mut self) { self.calls.push(LandingCall::Visible); }
+        fn read_truth(&mut self) -> Option<WindowTruth> {
+            self.calls.push(LandingCall::Read);
+            self.truths.pop_front().expect("协议回读次数超出脚本")
+        }
+        fn primary_monitor(&mut self) -> Option<DisplayGeometry> {
+            self.calls.push(LandingCall::Primary);
+            self.primary
+        }
+        fn vital(&mut self, message: &str) { self.calls.push(LandingCall::Vital(message.to_string())); }
+    }
+
+    fn full_hd_display() -> DisplayGeometry {
+        DisplayGeometry { work: FULL_HD, scale: 1.0, screen_height: 1080.0 }
+    }
+
+    fn broken_display() -> DisplayGeometry {
+        // 回放工作区读数损坏；负宽会让算出的意图与工作区不相交，触发 Offscreen 修复。
+        DisplayGeometry {
+            work: WorkArea { width: -4000, ..FULL_HD },
+            ..full_hd_display()
+        }
+    }
+
+    const INTENDED: RectDip = RectDip { x: 724.0, y: 68.0, width: 473.0, height: 945.0 };
+    const PARKED: RectDip = RectDip { x: 1940.0, y: 0.0, ..INTENDED };
+    const OFFSCREEN_INTENT: RectDip = RectDip { x: -2237.0, ..INTENDED };
 
     #[test]
     fn 面板尺寸高八分之七宽为高之半() {
@@ -683,6 +774,79 @@ mod tests {
             landing_verdict(tall, truth(271.0, -142.0, 418.0, 823.0, true), FULL_HD, 2.0),
             Landing::Landed
         );
+    }
+
+    #[test]
+    fn 呼出协议_最终判定与日志矩形共用一次回读() {
+        let mut port = FakeLandingPort::new(vec![
+            Some(WindowTruth { visible: true, rect: INTENDED }),
+            Some(WindowTruth { visible: true, rect: PARKED }),
+        ], None);
+        land_panel(&mut port, full_hd_display());
+        assert_eq!(port.calls, vec![
+            LandingCall::Apply(INTENDED), LandingCall::Visible, LandingCall::Read, LandingCall::Read,
+            LandingCall::Vital("summon-landed first=Landed final=Moved repair=- scale=1 intent=724,68 473x945 actual=1940,0 473x945".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn 呼出协议_不可见不重复显形_读不到也保留最终读数() {
+        let mut port = FakeLandingPort::new(vec![
+            Some(WindowTruth { visible: false, rect: INTENDED }), None,
+        ], None);
+        land_panel(&mut port, full_hd_display());
+        assert_eq!(port.calls, vec![
+            LandingCall::Apply(INTENDED), LandingCall::Visible, LandingCall::Read, LandingCall::Read,
+            LandingCall::Vital("summon-landed first=Hidden final=Hidden repair=- scale=1 intent=724,68 473x945 actual=unreadable".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn 呼出协议_位置未生效只重设几何后回读() {
+        let mut port = FakeLandingPort::new(vec![
+            Some(WindowTruth { visible: true, rect: PARKED }),
+            Some(WindowTruth { visible: true, rect: INTENDED }),
+        ], None);
+        land_panel(&mut port, full_hd_display());
+        assert_eq!(port.calls, vec![
+            LandingCall::Apply(INTENDED), LandingCall::Visible, LandingCall::Read,
+            LandingCall::Apply(INTENDED), LandingCall::Read,
+            LandingCall::Vital("summon-landed first=Moved final=Landed repair=reposition scale=1 intent=724,68 473x945 actual=724,68 473x945".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn 呼出协议_意图屏外时按主屏自己的工作区与缩放重算() {
+        let primary = DisplayGeometry {
+            work: WorkArea { x: 1920, y: 0, width: 3840, height: 2160 },
+            scale: 2.0,
+            screen_height: 2160.0,
+        };
+        let primary_intent = RectDip { x: 1684.0, ..INTENDED };
+        let mut port = FakeLandingPort::new(vec![
+            Some(WindowTruth { visible: true, rect: OFFSCREEN_INTENT }),
+            Some(WindowTruth { visible: true, rect: primary_intent }),
+        ], Some(primary));
+        land_panel(&mut port, broken_display());
+        assert_eq!(port.calls, vec![
+            LandingCall::Apply(OFFSCREEN_INTENT), LandingCall::Visible, LandingCall::Read,
+            LandingCall::Primary, LandingCall::Apply(primary_intent), LandingCall::Visible,
+            LandingCall::Read,
+            LandingCall::Vital("summon-landed first=Offscreen final=Landed repair=refit scale=2 intent=1684,68 473x945 actual=1684,68 473x945".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn 呼出协议_缺主屏留分流读数并继续回读最终状态() {
+        let snapshot = Some(WindowTruth { visible: true, rect: OFFSCREEN_INTENT });
+        let mut port = FakeLandingPort::new(vec![snapshot, snapshot], None);
+        land_panel(&mut port, broken_display());
+        assert_eq!(port.calls, vec![
+            LandingCall::Apply(OFFSCREEN_INTENT), LandingCall::Visible, LandingCall::Read,
+            LandingCall::Primary, LandingCall::Vital("summon-no-primary".to_string()),
+            LandingCall::Read,
+            LandingCall::Vital("summon-landed first=Offscreen final=Offscreen repair=- scale=1 intent=-2237,68 473x945 actual=-2237,68 473x945".to_string()),
+        ]);
     }
 
     #[test]

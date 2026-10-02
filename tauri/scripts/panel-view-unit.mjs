@@ -1,4 +1,4 @@
-// 面板视图规则单测：直测 src/panelView.ts 与 src/keyboard.ts 的 interface，零框架、零 mock。
+// 渲染层规则单测：直测视图、键盘、延迟删除与主题同步的 module interface，零框架、零 mock。
 // 运行：npm run test:view（Node >= 22.18 原生剥离 TS 类型）
 // 末尾的跨语言对表把 keyboard.ts 的 NAV_KEYS 钉在 Rust panel_modes.rs 的 NAV_SHORTCUTS 上——
 // HUD 迁移后页脚 chip「由真实键位表生成」的约束靠这条测试在 CI 里成立，不靠自觉。
@@ -18,6 +18,8 @@ import {
   themeControl,
 } from '../src/panelView.ts';
 import { NAV_KEYS, accelToKeyId, buildBindings, chipLabel, combo, footerChips } from '../src/keyboard.ts';
+import { transitionDeletion } from '../src/pendingDeletion.ts';
+import { ThemeSynchronizer } from '../src/themeSync.ts';
 
 let passed = 0;
 const failures = [];
@@ -381,7 +383,108 @@ test('主题按钮_亮暗系统循环_文案与图标展示偏好', () => {
   eq(themeControl('system'), { label: '跟随系统', icon: 'i-monitor', next: 'light' });
 });
 
-console.log(`\npanelView+keyboard: ${passed} passed, ${failures.length} failed`);
+// ---------- 撤销窗口与主题同步 ----------
+
+test('延迟删除_首次请求隐藏并启动计时_重复请求保持原窗口', () => {
+  const first = transitionDeletion(new Map(), { type: 'request', id: 'a' });
+  eq(first.state.get('a'), 'undoable');
+  eq(first.effects.map(({ type }) => type), ['hide', 'start-timer', 'show-undo']);
+  const duplicate = transitionDeletion(first.state, { type: 'request', id: 'a' });
+  assert(duplicate.state === first.state, '重复请求不改状态');
+  eq(duplicate.effects, []);
+});
+
+test('延迟删除_撤销取消计时并恢复_迟到截止事件无效', () => {
+  const pending = transitionDeletion(new Map(), { type: 'request', id: 'a' });
+  const undone = transitionDeletion(pending.state, { type: 'undo', id: 'a' });
+  eq(undone.state.has('a'), false);
+  eq(undone.effects.map(({ type }) => type), ['cancel-timer', 'restore']);
+  const late = transitionDeletion(undone.state, { type: 'deadline', id: 'a' });
+  eq(late.effects, []);
+});
+
+test('延迟删除_截止后只提交一次且不再接受撤销', () => {
+  const pending = transitionDeletion(new Map(), { type: 'request', id: 'a' });
+  const due = transitionDeletion(pending.state, { type: 'deadline', id: 'a' });
+  eq(due.state.get('a'), 'removing');
+  eq(due.effects, [{ type: 'remove', id: 'a' }]);
+  eq(transitionDeletion(due.state, { type: 'deadline', id: 'a' }).effects, []);
+  eq(transitionDeletion(due.state, { type: 'undo', id: 'a' }).effects, []);
+});
+
+test('延迟删除_提交失败恢复条目并提示_成功只清理判定状态', () => {
+  const pending = transitionDeletion(new Map(), { type: 'request', id: 'a' });
+  const due = transitionDeletion(pending.state, { type: 'deadline', id: 'a' });
+  const failed = transitionDeletion(due.state, { type: 'remove-failed', id: 'a' });
+  eq(failed.state.has('a'), false);
+  eq(failed.effects.map(({ type }) => type), ['restore', 'show-error']);
+  const retry = transitionDeletion(failed.state, { type: 'request', id: 'a' });
+  const retryDue = transitionDeletion(retry.state, { type: 'deadline', id: 'a' });
+  const succeeded = transitionDeletion(retryDue.state, { type: 'remove-succeeded', id: 'a' });
+  eq(succeeded.state.has('a'), false);
+  eq(succeeded.effects, []);
+});
+
+test('主题同步_外部变更使未完成的读取失效', () => {
+  const sync = new ThemeSynchronizer();
+  const initialRead = sync.beginRead();
+  sync.receiveChange('dark');
+  eq(sync.acceptRead(initialRead, 'light'), false);
+  eq(sync.snapshot(), { preference: 'dark', pending: false });
+});
+
+test('主题同步_较新的读取先返回后迟到旧读不能覆盖', () => {
+  const sync = new ThemeSynchronizer();
+  const oldRead = sync.beginRead();
+  const newRead = sync.beginRead();
+  eq(sync.acceptRead(newRead, 'system'), true);
+  eq(sync.acceptRead(oldRead, 'light'), false);
+  eq(sync.snapshot(), { preference: 'system', pending: false });
+});
+
+test('主题同步_切换互斥_失败后保留偏好并允许重试', () => {
+  const sync = new ThemeSynchronizer();
+  const read = sync.beginRead();
+  sync.acceptRead(read, 'light');
+  eq(sync.beginToggle(), 'dark');
+  eq(sync.beginToggle(), null);
+  sync.finishToggle();
+  eq(sync.snapshot(), { preference: 'light', pending: false });
+  eq(sync.beginToggle(), 'dark');
+  sync.finishToggle();
+});
+
+test('延迟删除_条目各自计时_撤销一条不影响另一条提交', () => {
+  const a = transitionDeletion(new Map(), { type: 'request', id: 'a' });
+  const b = transitionDeletion(a.state, { type: 'request', id: 'b' });
+  const undone = transitionDeletion(b.state, { type: 'undo', id: 'a' });
+  const due = transitionDeletion(undone.state, { type: 'deadline', id: 'b' });
+  eq([...due.state], [['b', 'removing']]);
+  eq(due.effects, [{ type: 'remove', id: 'b' }]);
+});
+
+test('主题同步_退出使读取失效_重新读取仍可接收', () => {
+  const sync = new ThemeSynchronizer();
+  eq(sync.beginToggle(), null);
+  const oldRead = sync.beginRead();
+  sync.invalidateReads();
+  eq(sync.acceptRead(oldRead, 'light'), false);
+  const newRead = sync.beginRead();
+  eq(sync.acceptRead(newRead, 'dark'), true);
+  eq(sync.snapshot(), { preference: 'dark', pending: false });
+});
+
+test('主题同步_切换中外部变更保留互斥_结束后不回退偏好', () => {
+  const sync = new ThemeSynchronizer();
+  sync.receiveChange('light');
+  eq(sync.beginToggle(), 'dark');
+  sync.receiveChange('system');
+  eq(sync.snapshot(), { preference: 'system', pending: true });
+  sync.finishToggle();
+  eq(sync.snapshot(), { preference: 'system', pending: false });
+});
+
+console.log(`\n渲染层规则：${passed} 例通过，${failures.length} 例失败`);
 if (failures.length > 0) {
   for (const f of failures) console.error(`  - ${f.name}: ${f.message}`);
   process.exit(1);
