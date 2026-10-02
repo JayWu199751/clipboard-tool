@@ -4,8 +4,6 @@
 >
 > 早期条目里的「本文档」指迁移前承载这份日志的 [CONTEXT.md](../CONTEXT.md)；条目提到的 `electron/`、`scripts/`、`resources/` 已随 2026-08-31 删除 Electron 实现一并移除，按历史读。同日删除的 `docs/reimplementation-prompt.md` 同理——它是导出快照，文件已删，条目里的链接不再维护。
 
-- **面板收起时竖直居中（2026-10-02）**：用户要求小窗在收起驻留时竖直居中、不贴靠上下边缘。`parked` 新增面板实际高度 DIP 参数，主线程从 OS 回读窗口高度，再按当前显示器工作区及缩放计算；几何取不到时沿用兜底停靠点。行为权威说明见 [README「操作」](../README.md#操作)。更新原停靠回归并新增缩放 / 副屏原点 / 高度变化一例，node 49 + cargo 108 = **157 例通过**，另有 2 例真机探针忽略；`tsc --noEmit` 零输出、`cargo check --all-targets` 零警告。真实窗口位置未实测，已列入 README「待真机验证」。行数：`panel_window.rs` 860 → 871；同步 README 与 architecture，无新增 ADR。
-
 - **延迟删除、主题同步与呼出落地协议深化（2026-10-02）**：架构审视发现撤销与主题回执的判定散在 App 多处，呼出落地的单测只覆盖几何函数；用户选择三项全部实施，并确认生命周期和 seam 的安排。
   - 延迟删除的判定收进 `pendingDeletion.ts`，App 执行 timer / toast / IPC；同条目重复请求沿用原窗口，撤销后不会提交，条目各自计时。命令返回失败或异常都恢复条目并提示错误，修掉原来 Promise 拒绝会留下隐藏条目的路径。行为与退出取舍以 [README「操作」](../README.md#操作) 为准。
   - 主题同步收进 `themeSync.ts` 的 `ThemeSynchronizer`：当前偏好、读取代次与切换互斥由一个 module 持有；事件、较新的补读与退出使旧读失效。App 只执行 IPC 与媒体查询效果，`api.ts` 的监听注册 generation 继续独立。
