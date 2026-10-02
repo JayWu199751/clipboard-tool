@@ -28,6 +28,7 @@ Windows 剪贴板历史工具：后台记录复制过的文字与图片，`Ctrl+
 - 搜索匹配正文、备注与来源应用（应用名 / 窗口标题 / 可执行文件路径），空格分词多词 AND、大小写不敏感、命中片段高亮；结果保持原顺序，不做匹配度排序。
 - 图片复制与文字一样进历史（含 PixPin、`Win+Shift+S` 这类截图工具产出的位图），条目身份按图片内容判定，见 [ADR-0009](docs/adr/0009-clipboard-image-decoded-in-house.md)。卡片外观见上一条。
 - 点击面板外任意处即隐藏；置顶条目固定在最前的置顶块里，新复制插在置顶块之后；HUD 里置顶只以 meta 行的图钉图标呈现。
+- 面板收起时停到当前显示器工作区右侧之外，并按实际高度竖直居中，不贴顶部或底部；居中范围扣除任务栏占用。
 - 点击卡片 = 仅选中；复制并粘贴走 Enter / 双击（用户拍板保留原应用鼠标语义，未采用源 UI 的「点击即复制」）。
 
 托盘菜单：显示剪贴板面板 / 更换快捷键 / 开机启动 / **主题 ▸（亮色、暗色、跟随系统）** / 清空历史 / 退出。「清空历史」由菜单回调直调存储层（标题栏随 HUD 退役，不走 IPC）。
@@ -106,13 +107,13 @@ release 是 GUI 子系统，panic 默认看不见，因此统一落到数据目�
 cd tauri
 npm run test        # = test:view + test:rust
 npm run test:view   # node scripts/panel-view-unit.mjs —— 49 例
-npm run test:rust   # cargo test —— 107 例（另有 2 例真机探针 #[ignore]）
+npm run test:rust   # cargo test —— 108 例（另有 2 例真机探针 #[ignore]）
 npm run test:browser # Playwright UI 回归 —— 18 例（首次需 npx playwright install chromium）
 ```
 
-156 例通过 module 的 interface 测判定与协议，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 15 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 49（panelView 32：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3 / 主题按钮 1；keyboard 7：注册表 6 + 跨语言键位对表 1；pendingDeletion 5；themeSync 5）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
+157 例通过 module 的 interface 测判定与协议，零框架 mock：规则住在 module，效果经注入端口进来（[ADR-0008](docs/adr/0008-rules-in-modules-effects-in-main.md)）。分布为 history 15 / panel_modes 16 / paste_chain 9 / hotkeys 9 / poll_baseline 9 / dib 7 / settings 9 / startup 6 / panel_window 16 / tray 9 / clipboard 1 / webview_theme 1 / diag 1，加渲染层 49（panelView 32：过滤 7 / 高亮 4 / 选中项 3 / 圆角外穿透 6 / 相对时间 4 / 按键码 4 / 滚动条 3 / 主题按钮 1；keyboard 7：注册表 6 + 跨语言键位对表 1；pendingDeletion 5；themeSync 5）。另有 2 例 `#[ignore]` 的真机探针：`clipboard.rs` 的剪贴板图片探针（那一类要真机才有答案），与 `clipboard_probe.rs` 的剪贴板通知探针（量「轮询要不要换成系统监听」这个决策的三个未知项）。跑法都见「待真机验证」。
 
-`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，18 例覆盖导航与滚动、窗口描边、备注编辑、延迟删除的撤销与跨呼出计时及两种失败恢复，以及主题按钮的三态循环、启动与外部同步、迟到读取、搜索焦点保留和失败重试；它不并入上述 156 例统计。真实 Win32 窗口落地、WebView2 换色与存档重启仍需真机验（见下）。
+`test:browser` 使用 mock Tauri bridge（`tests/panel-harness.js`）驱动真实渲染层，18 例覆盖导航与滚动、窗口描边、备注编辑、延迟删除的撤销与跨呼出计时及两种失败恢复，以及主题按钮的三态循环、启动与外部同步、迟到读取、搜索焦点保留和失败重试；它不并入上述 157 例统计。真实 Win32 窗口落地、WebView2 换色与存档重启仍需真机验（见下）。
 
 `cargo check --all-targets` 与 `tsc --noEmit` 必须零警告零报错；中文测试名所需的 `#![allow(non_snake_case)]` 已在各测试模块声明。
 
@@ -147,6 +148,8 @@ npm run test:browser # Playwright UI 回归 —— 18 例（首次需 npx playwr
 | [AGENTS.md](AGENTS.md) | 给 agent 的仓库约定：语言、行尾、验证命令、红线 |
 
 ## 待真机验证
+
+- 收起时竖直居中（2026-10-02）：在不同 DPI 与任务栏位置下呼出再收起，确认停靠位置按面板实际高度在工作区内竖直居中，重新呼出位置正常；纯几何回归已覆盖顶部任务栏、2 倍缩放及副屏原点，真实窗口移动仍需点验。
 
 - 延迟删除（2026-10-02）：按「操作」节执行删除与撤销，并在撤销窗口内停靠再呼出，确认条目可见性与实际存档结果一致；浏览器回归已验证 IPC 接线与时序，真实 WebView2 到存储层仍需点验。
 - 开机启动不再挂任务栏图标（2026-09-19 第二轮，第一轮已被实测证伪）：注销再登录（或直接重启）后，任务栏上**不该**有 ClipboardTool 图标，图标只剩托盘那一个；`Alt+Tab` 里也不该出现一个看不见的面板。读数用 [`tauri/scripts/panel-state.ps1`](tauri/scripts/panel-state.ps1)：`panel` 那行的 `ex` 应含 `TOOLWINDOW`、不含 `APPWINDOW`（改前实测是 `0x00040118(TOPMOST|APPWINDOW)`）。顺带确认这次改样式位没碰坏取焦点：呼出键与托盘「显示剪贴板面板」照常把面板居中唤出、进搜索态后键盘确实打进搜索框（工具窗口照样可前台、可 `SetFocus`，但只有真机能证明）。**同日另一条独立问题（开机启动后两路呼不出界面）已在下一轮动手改，见下一条与「故障排查」那三行。**

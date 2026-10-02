@@ -72,11 +72,11 @@ pub fn centered(work: WorkArea, scale: f64, width: f64, height: f64) -> (f64, f6
     )
 }
 
-/// 纯几何：停靠到工作区右缘之外（y 仍贴工作区顶部，保持同屏 DPI）
-pub fn parked(work: WorkArea, scale: f64, gap: f64) -> (f64, f64) {
+/// 纯几何：停靠到工作区右缘之外，按面板实际高度在工作区内竖直居中。
+pub fn parked(work: WorkArea, scale: f64, gap: f64, height: f64) -> (f64, f64) {
     (
         (work.x as f64 + work.width as f64) / scale + gap,
-        work.y as f64 / scale,
+        (work.y as f64 / scale + (work.height as f64 / scale - height) / 2.0).round(),
     )
 }
 
@@ -241,7 +241,7 @@ impl PanelWindow {
         });
     }
 
-    /// 隐藏：停到当前显示器工作区右侧之外。投递主线程执行。
+    /// 隐藏：停到当前显示器工作区右侧之外，竖直居中。投递主线程执行。
     pub fn park_offscreen(&self) {
         let seq = next_geom_seq();
         dispatch(&self.app, "park-offscreen", move |app| {
@@ -250,9 +250,12 @@ impl PanelWindow {
                 return;
             }
             let Some(win) = window_or_log(app, "park-offscreen") else { return };
-            let (x, y) = match win.current_monitor().ok().flatten() {
-                Some(m) => parked(work_area(&m), m.scale_factor(), OFFSCREEN_GAP),
-                None => FALLBACK_PARK,
+            let (x, y) = match (win.current_monitor().ok().flatten(), win.outer_size().ok()) {
+                (Some(m), Some(size)) => {
+                    let scale = m.scale_factor();
+                    parked(work_area(&m), scale, OFFSCREEN_GAP, size.height as f64 / scale)
+                }
+                _ => FALLBACK_PARK,
             };
             diag_log(&format!("park-offscreen: x={x}"));
             let _ = win.set_position(Position::Logical(LogicalPosition::new(x, y)));
@@ -689,12 +692,20 @@ mod tests {
     }
 
     #[test]
-    fn 停靠点在工作区右缘之外且贴顶() {
-        let (x, y) = parked(FULL_HD, 1.0, OFFSCREEN_GAP);
-        assert_eq!((x, y), (1940.0, 0.0));
-        // 有任务栏时 y 跟随工作区原点，而不是屏幕原点
+    fn 停靠点在工作区右缘之外且竖直居中() {
+        let (x, y) = parked(FULL_HD, 1.0, OFFSCREEN_GAP, 800.0);
+        assert_eq!((x, y), (1940.0, 140.0));
+        // 顶部任务栏占 40px 时，居中用扣除任务栏后的工作区。
         let work = WorkArea { x: 0, y: 40, width: 1920, height: 1040 };
-        assert_eq!(parked(work, 1.0, OFFSCREEN_GAP), (1940.0, 40.0));
+        assert_eq!(parked(work, 1.0, OFFSCREEN_GAP, 800.0), (1940.0, 160.0));
+    }
+
+    #[test]
+    fn 停靠竖直居中按实际高度换算缩放与副屏原点() {
+        let work = WorkArea { x: 1920, y: -1080, width: 3840, height: 2080 };
+        assert_eq!(parked(work, 2.0, OFFSCREEN_GAP, 800.0), (2900.0, -420.0));
+        // 同一工作区下，较矮的面板仍居中，不沿用上一尺寸的偏移。
+        assert_eq!(parked(work, 2.0, OFFSCREEN_GAP, 600.0), (2900.0, -320.0));
     }
 
     #[test]
